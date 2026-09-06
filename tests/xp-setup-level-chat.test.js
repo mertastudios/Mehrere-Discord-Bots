@@ -8,12 +8,16 @@
  * Ausführen mit: npm test
  */
 
-const { test } = require('node:test');
+const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { buildLevelDownEmbed } = require('../bots/xp-level-bot/src/embed-builder');
 const { sendLevelAnnouncement } = require('../bots/xp-level-bot/src/level-announcements');
-const { repinLeaderboard } = require('../bots/xp-level-bot/src/scheduler');
+const { repinLeaderboard, resetRepinState } = require('../bots/xp-level-bot/src/scheduler');
+
+// Gedrosselte Repins planen einen Nachhol-Timer (10 Min, unref) – nach jedem
+// Test verwerfen, damit kein Test den nächsten beeinflusst.
+afterEach(() => resetRepinState());
 
 test('buildLevelDownEmbed: nutzt "## "-Heading (gleiche Schriftgröße wie Level-Up)', () => {
   const container = buildLevelDownEmbed({ lang: 'de', userId: '123', level: 4, xp: 70 });
@@ -133,7 +137,7 @@ test('repinLeaderboard: sendet das Board neu und löscht die alte Nachricht (kom
   assert.equal(h.oldMessage.deleted, true, 'alte Nachricht wird entfernt');
 });
 
-test('repinLeaderboard: Throttle verhindert zu häufiges Neu-Senden', async () => {
+test('repinLeaderboard: Throttle (10 Min) verhindert zu häufiges Neu-Senden', async () => {
   const entry = {
     guildId: 'repin-throttle',
     leaderboardChannelId: 'lb',
