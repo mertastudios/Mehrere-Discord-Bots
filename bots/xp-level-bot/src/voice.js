@@ -15,7 +15,7 @@
 
 const { shouldGrantVoiceXp } = require('./logic');
 const { refreshRankNicknames, maybeRefreshRankNicknames } = require('./nicknames');
-const { maybeRefreshLeaderboard } = require('./scheduler');
+const { refreshLeaderboardAfterActivity, isLeaderboardChannel } = require('./scheduler');
 const { syncLevelRolesForUser } = require('./level-roles');
 const { sendLevelAnnouncement } = require('./level-announcements');
 
@@ -237,17 +237,13 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
       const lang = cfg.lang || 'de';
       const miniCtx = { client, store, logger };
 
-      // Helper: bei kombiniertem Kanal muss das Board neu gesendet (repin) werden,
-      // bei getrennten Kanälen reicht ein throttled edit. Für XP-only nutzen wir
-      // denselben Pfad, damit Invite/Bonus/Voice das Ranking auch dort aktuell halten.
+      // Helper für reine Voice-XP (kein Levelwechsel): immer nur ein stiller,
+      // auf 10 Minuten gedrosselter Edit – auch im kombinierten Kanal. Früher
+      // wurde das Board hier bei JEDER Voice-Minute neu gesendet (5-s-Throttle)
+      // und pingte dabei jedes Mal die komplette Top 15.
       async function refreshBoardForVoice() {
         if (!cfg.leaderboardChannelId) return;
-        if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
-          const { repinLeaderboard } = require('./scheduler');
-          await repinLeaderboard(miniCtx, cfg, guild, { throttle: true }).catch(() => {});
-        } else {
-          await maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(() => {});
-        }
+        await refreshLeaderboardAfterActivity(miniCtx, cfg, guild).catch(() => {});
       }
 
       if (levelResult) {
@@ -257,7 +253,7 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
           .flush()
           .catch((err) => logger?.warn?.('[xp-voice] Level-Flush fehlgeschlagen:', err.message));
 
-        await sendLevelAnnouncement({
+        const announcement = await sendLevelAnnouncement({
           ctx: miniCtx,
           guild,
           cfg,
@@ -265,13 +261,12 @@ function createVoiceTracker({ client, store, logger, getGuildConfig, onXpGain = 
           res: announcementResult,
           source: 'voice',
         });
-        // Level-Wechsel ist wichtig genug für sofortigen Repin (ohne Throttle), sonst throttled.
-        const boardJob = String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)
-          ? (async () => {
-              const { repinLeaderboard } = require('./scheduler');
-              return repinLeaderboard(miniCtx, cfg, guild, { throttle: false }).catch(() => {});
-            })()
-          : maybeRefreshLeaderboard(miniCtx, cfg, guild).catch(() => {});
+        // Nur wenn die Ankündigung wirklich im Leaderboard-Kanal gelandet ist,
+        // darf das Board (gedrosselt, ohne Pings) nachrücken – sonst stiller Edit.
+        const boardJob = refreshLeaderboardAfterActivity(miniCtx, cfg, guild, {
+          announcedInBoardChannel:
+            Boolean(announcement?.sent) && isLeaderboardChannel(cfg, announcement?.channelId),
+        }).catch(() => {});
         await Promise.allSettled([
           refreshRankNicknames(miniCtx, guild, userId, lang),
           syncLevelRolesForUser({ ctx: miniCtx, guild, userId, level: user.level }),

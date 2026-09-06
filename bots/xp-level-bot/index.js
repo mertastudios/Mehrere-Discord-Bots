@@ -25,7 +25,10 @@
  *    Rejoin-Schutz: Wer innerhalb von 7 Tagen nach dem Verlassen zurückkehrt,
  *    bringt NIEMANDEM XP und löst keine Nachricht aus.
  *  - Leaderboard stündlich + bei Level-Up/Down (max alle 10 Min), Container V2,
- *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker
+ *    Top15, kurzer Decay-Hinweis, Zeit+TZ, Self-Healing über Marker.
+ *    Pingt NIE (allowedMentions parse: []). Kombinierter Kanal (Level-Chat ==
+ *    Leaderboard): Neu-Senden nur nach eigener Bot-Ankündigung dort, max. alle
+ *    10 Min – fremde Chat-Nachrichten/XP-Gewinne lösen kein Neu-Senden aus
  *  - /rank für alle, /help, /admin_set_bot_profile, /adminpanel (Owner DM)
  *  - /toggle_nicknames (Admin, nach /setup): Level-Tags in Nicknames an/aus (Standard: an)
  *  - /sync_nicknames (Admin, nach /setup): alle Mitglieder-Nicknames mit Ladeanzeige abgleichen
@@ -227,19 +230,13 @@ module.exports = {
           if (rankInfo && rankInfo.rank <= 3) {
             await maybeRefreshRankNicknames(ctx, guild, userId, cfg.lang || 'de');
           }
-          // Wenn Level-Chat == Leaderboard-Kanal, muss das Board trotz XP-only neu
-          // ans Ende (repin), sonst könnte der Bonus das Ranking ändern ohne
-          // dass das Board neu erscheint. Bei getrennten Kanälen: throttled edit.
-          // Für Bonus/Invite sind Events selten – daher ohne Throttle sofort neu.
-          if (cfg.leaderboardChannelId) {
-            if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
-              const { repinLeaderboard } = require('./src/scheduler');
-              await repinLeaderboard(ctx, cfg, guild, { throttle: false }).catch(() => {});
-            } else {
-              const { maybeRefreshLeaderboard } = require('./src/scheduler');
-              await maybeRefreshLeaderboard(ctx, cfg, guild).catch(() => {});
-            }
-          }
+          // Der Bonus-Drop selbst steht bereits im Level-Chat; im kombinierten
+          // Kanal liegt das Board damit nicht mehr ganz unten. Ein Repin ist
+          // erlaubt – aber nur gedrosselt (10 Min) und ohne Pings.
+          const { refreshLeaderboardAfterActivity, isCombinedLeaderboardChannel } = require('./src/scheduler');
+          await refreshLeaderboardAfterActivity(ctx, cfg, guild, {
+            announcedInBoardChannel: isCombinedLeaderboardChannel(cfg),
+          }).catch(() => {});
         } catch {}
       },
     });
@@ -270,15 +267,12 @@ module.exports = {
           if (rankInfo && rankInfo.rank <= 3) {
             await maybeRefreshRankNicknames(ctx, guild, userId, cfg.lang || 'de');
           }
-          if (cfg.leaderboardChannelId) {
-            if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
-              const { repinLeaderboard } = require('./src/scheduler');
-              await repinLeaderboard(ctx, cfg, guild, { throttle: false }).catch(() => {});
-            } else {
-              const { maybeRefreshLeaderboard } = require('./src/scheduler');
-              await maybeRefreshLeaderboard(ctx, cfg, guild).catch(() => {});
-            }
-          }
+          // Die Invite-Nachricht steht bereits im Level-Chat; im kombinierten
+          // Kanal darf das Board (gedrosselt, ohne Pings) nachrücken.
+          const { refreshLeaderboardAfterActivity, isCombinedLeaderboardChannel } = require('./src/scheduler');
+          await refreshLeaderboardAfterActivity(ctx, cfg, guild, {
+            announcedInBoardChannel: isCombinedLeaderboardChannel(cfg),
+          }).catch(() => {});
         } catch {}
       },
     });
@@ -300,25 +294,14 @@ module.exports = {
       try {
         if (!msg.guild) return;
 
-        // Kombiniert: Der Level-Chat ist gleichzeitig der Leaderboard-Kanal.
-        // Jede FREMD-Nachricht (andere Nutzer, andere Bots, Webhooks) in diesem
-        // Kanal schiebt das Leaderboard ans Ende, damit es die neueste Nachricht
-        // bleibt. Die EIGENEN Bot-Nachrichten (Level/Board/Bonus) werden
-        // bewusst ignoriert, sonst entstünde eine Endlosschleife.
-        const isOwnBotMessage = msg.author?.id === ctx.client.user?.id;
-        if (!isOwnBotMessage && !msg.system) {
-          const cfg = store.getGuild(msg.guild.id);
-          if (
-            cfg &&
-            cfg.mainChannelId &&
-            cfg.leaderboardChannelId &&
-            String(cfg.mainChannelId) === String(cfg.leaderboardChannelId) &&
-            String(msg.channel.id) === String(cfg.leaderboardChannelId)
-          ) {
-            const { repinLeaderboard } = require('./src/scheduler');
-            void repinLeaderboard(ctx, cfg, msg.guild, { throttle: true }).catch(() => {});
-          }
-        }
+        // HINWEIS (Fix „Leaderboard wird ständig neu gesendet + pingt alle“):
+        // Früher wurde hier bei JEDER fremden Nachricht im kombinierten Kanal
+        // (Level-Chat == Leaderboard-Kanal) das Board neu gesendet – mit nur
+        // 5 Sekunden Throttle und mit Benachrichtigung an alle 15 Nutzer der
+        // Top-Liste. Das war die Hauptquelle der Ping-Flut. Chat-Nachrichten
+        // anderer Nutzer lösen KEIN Neu-Senden mehr aus. Das Board rückt nur
+        // noch nach eigenen Ankündigungen des Bots (Level-Up/-Down, Bonus,
+        // Invite, /give_xp) gedrosselt (10 Min) und immer ohne Pings nach.
 
         // Bots UND Webhooks bekommen nichts: kein XP, kein Level, kein Nickname, keine Boni
         if (msg.author?.bot) return;
@@ -395,48 +378,25 @@ module.exports = {
           } catch (e) {
             logger.warn('[xp-level-bot] first-xp nick fail', e.message);
           }
-          // Erster Eintrag ändert das Leaderboard sofort (repin bei kombiniertem Kanal).
-          try {
-            if (cfg.leaderboardChannelId) {
-              if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
-                const sameChannel = String(msg.channel.id) === String(cfg.leaderboardChannelId);
-                // Nur wenn die XP nicht bereits durch die Fremdmeldungs-Regel oben
-                // (repin bei Nachricht im kombinierten Kanal) abgedeckt ist, neu senden.
-                if (!sameChannel) {
-                  const { repinLeaderboard } = require('./src/scheduler');
-                  await repinLeaderboard(ctx, cfg, msg.guild, { throttle: true }).catch(() => {});
-                }
-              } else {
-                const { maybeRefreshLeaderboard } = require('./src/scheduler');
-                await maybeRefreshLeaderboard(ctx, cfg, msg.guild).catch(() => {});
-              }
-            }
-          } catch {}
+          // Erster Eintrag ändert das Ranking – stiller Edit (max. alle 10 Min),
+          // niemals ein Neu-Senden: Der Bot hat hier nichts angekündigt, das
+          // Board liegt also weiterhin dort, wo es war.
+          const { refreshLeaderboardAfterActivity } = require('./src/scheduler');
+          await refreshLeaderboardAfterActivity(ctx, cfg, msg.guild).catch(() => {});
         } else {
           // XP-only-Gewinn: Bei gleichem Level können sich die Ränge trotzdem
           // verschieben (mehr XP überholt weniger XP). Wenn der Nutzer damit
           // in die Top 3 rutscht, ändert sich die Medaille im Nickname.
-          // Zusätzlich auch das Leaderboard aktuell halten – bei kombiniertem
-          // Kanal muss es neu gesendet werden, sonst reicht ein throttled edit.
-          // Nur wenn die Nachricht NICHT selbst schon im kombinierten Kanal lag
-          // (dann hat der obere repin-Block bereits – throttled – nachgeschoben),
-          // triggern wir hier einen expliziten refresh für Rankings aus anderen Kanälen.
+          // Das Leaderboard wird dabei nur still editiert (10-Min-Throttle) –
+          // auch im kombinierten Kanal. Früher wurde es hier alle 5 Sekunden
+          // neu gesendet und pingte dabei jedes Mal die komplette Top 15.
           try {
             const rankInfo = store.getRank(msg.guild.id, msg.author.id);
             if (rankInfo && rankInfo.rank <= 3) {
               await maybeRefreshRankNicknames(ctx, msg.guild, msg.author.id, cfg.lang);
             }
-            const isCombinedChannel = String(cfg.mainChannelId) === String(cfg.leaderboardChannelId);
-            const msgWasInCombined = isCombinedChannel && String(msg.channel.id) === String(cfg.leaderboardChannelId);
-            if (!msgWasInCombined && cfg.leaderboardChannelId) {
-              if (isCombinedChannel) {
-                const { repinLeaderboard } = require('./src/scheduler');
-                await repinLeaderboard(ctx, cfg, msg.guild, { throttle: true }).catch(() => {});
-              } else {
-                const { maybeRefreshLeaderboard } = require('./src/scheduler');
-                await maybeRefreshLeaderboard(ctx, cfg, msg.guild).catch(() => {});
-              }
-            }
+            const { refreshLeaderboardAfterActivity } = require('./src/scheduler');
+            await refreshLeaderboardAfterActivity(ctx, cfg, msg.guild).catch(() => {});
           } catch (e) {
             logger.warn('[xp-level-bot] medal/board refresh fail', e.message);
           }
@@ -487,17 +447,19 @@ module.exports = {
         syncLevelRolesForUser({ ctx, guild, userId: user.userId, level: res.level }),
       ];
       if (cfg.leaderboardChannelId) {
-        // Kombiniert: Level-Chat == Leaderboard-Kanal. Nach jeder Level-
-        // Veränderung wird das Board NEU gesendet (nicht editiert), damit es
-        // die neueste Nachricht im Kanal bleibt. Ansonsten der bekannte
-        // 10-Minuten-Edit-Refresh.
-        if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
-          const { repinLeaderboard } = require('./src/scheduler');
-          jobs.push(repinLeaderboard(ctx, cfg, guild, { throttle: false }));
-        } else {
-          const { maybeRefreshLeaderboard } = require('./src/scheduler');
-          jobs.push(maybeRefreshLeaderboard(ctx, cfg, guild));
-        }
+        // Kombiniert (Level-Chat == Leaderboard-Kanal): Nur wenn die
+        // Ankündigung wirklich IM Leaderboard-Kanal gelandet ist, liegt das
+        // Board nicht mehr ganz unten und darf – gedrosselt auf 10 Minuten
+        // und ohne Pings – neu ans Ende rücken. Ein Level-Up-Reply in einem
+        // anderen Kanal berührt den Leaderboard-Kanal nicht: dann reicht der
+        // normale stille Edit.
+        const { refreshLeaderboardAfterActivity, isLeaderboardChannel } = require('./src/scheduler');
+        jobs.push(
+          refreshLeaderboardAfterActivity(ctx, cfg, guild, {
+            announcedInBoardChannel:
+              announcement.sent && isLeaderboardChannel(cfg, announcement.channelId),
+          })
+        );
       }
 
       const settled = await Promise.allSettled(jobs);

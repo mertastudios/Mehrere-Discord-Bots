@@ -620,7 +620,9 @@ async function setupCmd(ctx, interaction) {
   const now = new Date();
   const entries = ctx.store.getLeaderboard(interaction.guild.id, 15);
   const container = buildLeaderboardEmbed({ lang, entries, now, guildName: interaction.guild.name });
-  const msg = await leader.send(componentsV2Payload([container])).catch((e) => {
+  // Leaderboard-Nachrichten pingen NIE (Top-15-Mentions bleiben nur Namen).
+  const { LEADERBOARD_ALLOWED_MENTIONS } = require('./scheduler');
+  const msg = await leader.send(componentsV2Payload([container], { allowedMentions: LEADERBOARD_ALLOWED_MENTIONS })).catch((e) => {
     ctx.logger?.error?.('[xp-level-bot] Leaderboard send failed', e.message);
     return null;
   });
@@ -1092,8 +1094,9 @@ async function giveXpCmd(ctx, interaction) {
   await ctx.store.flush();
 
   // Ankündigung zuerst – wie bei Level-Up/-Down, danach Nickname/Rollen/Board.
+  let announcement = null;
   if (guild) {
-    await sendOwnerXpAnnouncement({
+    announcement = await sendOwnerXpAnnouncement({
       ctx,
       guild,
       cfg,
@@ -1113,13 +1116,15 @@ async function giveXpCmd(ctx, interaction) {
     jobs.push(refreshRankNicknames(ctx, guild, target.id, lang).catch(() => {}));
     jobs.push(syncLevelRolesForUser({ ctx, guild, userId: target.id, level: user.level }).catch(() => {}));
     if (cfg.leaderboardChannelId) {
-      if (String(cfg.mainChannelId) === String(cfg.leaderboardChannelId)) {
-        const { repinLeaderboard } = require('./scheduler');
-        jobs.push(repinLeaderboard(ctx, cfg, guild, { throttle: false }).catch(() => {}));
-      } else {
-        const { maybeRefreshLeaderboard } = require('./scheduler');
-        jobs.push(maybeRefreshLeaderboard(ctx, cfg, guild).catch(() => {}));
-      }
+      // Board nur dann neu ans Ende rücken (gedrosselt, ohne Pings), wenn die
+      // /give_xp-Nachricht tatsächlich im Leaderboard-Kanal gelandet ist.
+      const { refreshLeaderboardAfterActivity, isLeaderboardChannel } = require('./scheduler');
+      jobs.push(
+        refreshLeaderboardAfterActivity(ctx, cfg, guild, {
+          announcedInBoardChannel:
+            Boolean(announcement?.sent) && isLeaderboardChannel(cfg, announcement?.channelId),
+        }).catch(() => {})
+      );
     }
   }
   await Promise.allSettled(jobs);

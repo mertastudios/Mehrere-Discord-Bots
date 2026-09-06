@@ -228,7 +228,7 @@ sind bewusst nur auf Deutsch.
 
 Kurzfassung – Details siehe [`bots/xp-level-bot/README.md`](bots/xp-level-bot/README.md):
 
-- **`/setup <leaderboard> <mainchat> <language>`** (nur Admins) – richtet Kanäle + Sprache ein, erstellt sofort das **Leaderboard** (Top15, Components V2, kurzer Decay-Hinweis & Zeit+TZ). Es aktualisiert sich **stündlich** und zusätzlich **bei jedem Level-Up/Down** (frühestens alle 10 Minuten).
+- **`/setup <leaderboard> <mainchat> <language>`** (nur Admins) – richtet Kanäle + Sprache ein, erstellt sofort das **Leaderboard** (Top15, Components V2, kurzer Decay-Hinweis & Zeit+TZ). Es aktualisiert sich **stündlich** und zusätzlich **bei jedem Level-Up/Down** (frühestens alle 10 Minuten) – **immer ohne Pings** (die Top-15-Mentions benachrichtigen niemanden). Liegen Level-Chat und Leaderboard im selben Kanal, rückt das Board nach eigenen Bot-Ankündigungen höchstens alle 10 Minuten ans Kanalende; fremde Chat-Nachrichten lösen kein Neu-Senden aus.
 - **XP pro Nachricht**: Worte zählen (Leerzeichen/Zeilen, doppelte Leerzeichen ignoriert, **krasse Spam-Erkennung** mit Buchstaben-Check & Muster-Erkennung), `1 Wort=3XP … 10+ Worte=30XP max`, **30s Cooldown**. **Bilder, Videos, Sprachnachrichten & Sticker** geben ausgeglichen **15 XP** (Text+Medien zusammen max. 30 XP).
 - **Level-Up-Nachricht**: Die Level-Up-Zeile wird als **`## `-Heading** dargestellt – größerer Text, fällt sofort ins Auge. 🎉
 - **Level-Kurve**: `lvl1→2 80 XP`, `lvl99→100 ~1999 XP` (fast linear, kaum spürbar schwerer, reset auf 0 bei Aufstieg).

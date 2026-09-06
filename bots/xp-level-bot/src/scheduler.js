@@ -26,6 +26,13 @@ const { sendLevelAnnouncement } = require('./level-announcements');
 
 const MINUTE_MS = 60_000;
 const LEADERBOARD_MIN_REFRESH_MS = 10 * 60 * 1000;
+// Leaderboard-Nachrichten dürfen NIEMALS benachrichtigen. Die Top-15-Zeilen
+// enthalten <@id>-Mentions (anklickbare Namen); Discord pingt bei Components V2
+// jede Mention in einem TextDisplay, sobald eine Nachricht NEU gesendet wird.
+// Genau das hat im kombinierten Kanal bei jedem Neu-Senden alle 15 Nutzer
+// gepingt („200 Erwähnungen nach einer Stunde offline“). parse: [] rendert die
+// Namen weiterhin, löst aber keine Benachrichtigung aus – bei send UND edit.
+const LEADERBOARD_ALLOWED_MENTIONS = Object.freeze({ parse: [] });
 // Prüfung erfolgt minütlich. 55 Minuten geben ausreichend Toleranz für einen
 // verzögerten Event-Loop und halten den sichtbaren Zeitstempel sicher frisch.
 const LEADERBOARD_HOURLY_MS = 55 * 60 * 1000;
@@ -306,6 +313,9 @@ function startScheduler({ ctx }) {
       clearInterval(timer);
     }
     timers.clear();
+    // Offene Nachhol-Repins (kombinierter Kanal) dürfen nach dem Shutdown
+    // nicht mehr feuern.
+    resetRepinState();
   };
 }
 
@@ -318,6 +328,47 @@ async function maybeRefreshLeaderboard(ctx, entry, guild) {
   syncMapsFromEntry(entry);
   if (!isLeaderboardRefreshDue(entry.guildId)) return false;
   return refreshLeaderboard(ctx, entry, guild, new Date(), { isHourly: false });
+}
+
+/** Kombinierter Modus: Level-Chat und Leaderboard sind derselbe Kanal. */
+function isCombinedLeaderboardChannel(entry) {
+  if (!entry?.leaderboardChannelId || !entry?.mainChannelId) return false;
+  return String(entry.mainChannelId) === String(entry.leaderboardChannelId);
+}
+
+/**
+ * EINZIGER Einstieg für alle XP-/Level-Ereignisse (Chat, Voice, Bonus, Invite,
+ * /give_xp). Entscheidet, ob das Board still editiert oder – nur im
+ * kombinierten Modus – neu ans Kanalende gesendet wird.
+ *
+ * Regeln (Fix „Leaderboard wird ständig neu gesendet + pingt alle“):
+ *  - Reine XP-Gewinne ohne Levelwechsel sind IMMER ein stiller In-Place-Edit,
+ *    max. alle 10 Minuten – auch im kombinierten Modus. Früher lösten sie dort
+ *    alle 5 Sekunden ein Neu-Senden aus (jede Chat-Nachricht aus JEDEM Kanal,
+ *    jede Voice-Minute), und jedes Neu-Senden pingte die komplette Top 15.
+ *  - Neu gesendet („repin“) wird ausschließlich, wenn der Bot soeben selbst
+ *    eine Nachricht in den Leaderboard-Kanal geschrieben hat
+ *    (`announcedInBoardChannel`, z. B. Level-Up/-Down-Ankündigung) – denn nur
+ *    dann liegt das Board nicht mehr am Kanalende. Auch das höchstens alle
+ *    10 Minuten; weitere Auslöser innerhalb des Fensters werden zu genau
+ *    EINEM nachgeholten Repin am Fensterende zusammengefasst.
+ *  - Im getrennten Modus gibt es weiterhin nur den 10-Minuten-Edit.
+ */
+async function refreshLeaderboardAfterActivity(ctx, entry, guild, { announcedInBoardChannel = false } = {}) {
+  if (!entry?.leaderboardChannelId || !guild) return false;
+  if (announcedInBoardChannel && isCombinedLeaderboardChannel(entry)) {
+    return repinLeaderboard(ctx, entry, guild, { reason: 'announcement' });
+  }
+  return maybeRefreshLeaderboard(ctx, entry, guild);
+}
+
+/**
+ * Ist `channelId` der Leaderboard-Kanal dieser Gilde? Hilft Aufrufern, aus dem
+ * Ziel einer Ankündigung `announcedInBoardChannel` abzuleiten.
+ */
+function isLeaderboardChannel(entry, channelId) {
+  if (!entry?.leaderboardChannelId || !channelId) return false;
+  return String(channelId) === String(entry.leaderboardChannelId);
 }
 
 async function applyDailyDecayForGuild(ctx, entry, guild, opts = {}) {
@@ -453,7 +504,7 @@ async function refreshLeaderboard(ctx, entry, guild, now = new Date(), opts = {}
 
     const entries = ctx.store.getLeaderboard(entry.guildId, 15);
     const container = buildLeaderboardEmbed({ lang: entry.lang, entries, now, guildName: guild.name });
-    const payload = componentsV2Payload([container]);
+    const payload = componentsV2Payload([container], { allowedMentions: LEADERBOARD_ALLOWED_MENTIONS });
 
     let message = null;
     if (entry.leaderboardMessageId) {
@@ -521,45 +572,93 @@ async function refreshLeaderboard(ctx, entry, guild, now = new Date(), opts = {}
 
 // ---------------------------------------------------------------------------
 // Repin: Leaderboard als NEUE Nachricht senden (nicht editieren) und die alte
-// entfernen. Wird im kombinierten Modus (Level-Chat == Leaderboard-Kanal)
-// genutzt: Jede Level-Veränderung und jede fremde Nachricht im Kanal schiebt
-// das Board ans Ende, damit es die neueste Nachricht bleibt.
+// entfernen. Nur im kombinierten Modus (Level-Chat == Leaderboard-Kanal) und
+// NUR, nachdem der Bot selbst eine Ankündigung (Level-Up/-Down, Bonus, Invite,
+// /give_xp) in diesen Kanal geschrieben hat – erst dann liegt das Board nicht
+// mehr am Kanalende.
+//
+// Gemeldeter Bug („alle 10 Sekunden Leaderboard-Pings“, „200 Erwähnungen nach
+// einer Stunde offline“): Früher wurde bei JEDER fremden Nachricht im Kanal,
+// bei jedem XP-Gewinn aus JEDEM Kanal und bei jeder Voice-Minute mit nur 5 s
+// Throttle neu gesendet – und jedes Neu-Senden pingte alle 15 Nutzer aus der
+// Top-Liste, weil die Mentions ohne allowedMentions benachrichtigten.
+//
+// Jetzt:
+//  - fester 10-Minuten-Abstand zwischen zwei Neu-Sendungen pro Server,
+//  - Auslöser innerhalb des Fensters werden zu genau EINEM nachgeholten Repin
+//    am Fensterende zusammengefasst (kein Verlust, kein Spam),
+//  - Neu-Senden entfällt, wenn das Board ohnehin schon die neueste Nachricht
+//    ist (dann reicht ein stiller Edit),
+//  - `allowedMentions: { parse: [] }` – niemals Benachrichtigungen.
+//
+// Pro Server genau EIN laufender Repin. Der Zeitstempel wird SOFORT (synchron,
+// vor dem ersten await) gesetzt, damit der Abstand auch unter Last greift.
 // ---------------------------------------------------------------------------
-// Pro Server genau EIN laufender Repin. Der Throttle-Zeitstempel muss
-// zusätzlich SOFORT (synchron, vor dem ersten await) gesetzt werden: Der Send
-// unten ist eine lange Discord-API-Kette; ohne sofortigen Stempel durchläuft
-// sonst JEDE hereinkommende Chat-Nachricht den Check, bevor der erste Repin
-// fertig ist. Folge war: pro Textnachricht ein neues Board im Kanal – und weil
-// alle nebenläufigen Repins nur die EINE alte Nachrichten-ID kannten, blieben
-// die übrigen Duplikate im Kanal stehen ("spielt verrückt"). Das Lock deckt
-// auch throttle:false-Aufrufe (Level-Ups, Bonus/Invite) ab, damit diese nicht
-// mit einem laufenden Fremd-Nachrichten-Repin kollidieren und Duplikate
-// erzeugen.
 const repinInFlight = new Map(); // guildId -> true, solange ein Repin läuft
 const lastRepin = new Map(); // guildId -> Start-Zeitstempel des letzten Repins
-const REPIN_THROTTLE_MS = 5_000;
+const pendingRepin = new Map(); // guildId -> Timer für den zusammengefassten Nachhol-Repin
+const REPIN_MIN_INTERVAL_MS = LEADERBOARD_MIN_REFRESH_MS; // 10 Minuten
 
-async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
+function clearPendingRepin(guildKey) {
+  const timer = pendingRepin.get(guildKey);
+  if (timer) clearTimeout(timer);
+  pendingRepin.delete(guildKey);
+}
+
+/**
+ * Innerhalb des 10-Minuten-Fensters: genau EINEN Nachhol-Repin am Fensterende
+ * planen. Mehrere Auslöser (Level-Up-Serie, Bonus + Level-Up …) teilen sich
+ * denselben Timer.
+ */
+function schedulePendingRepin(ctx, entry, guild, guildKey, delayMs) {
+  if (pendingRepin.has(guildKey)) return;
+  const timer = setTimeout(() => {
+    pendingRepin.delete(guildKey);
+    void repinLeaderboard(ctx, entry, guild, { reason: 'deferred' }).catch(() => {});
+  }, Math.max(0, delayMs));
+  timer.unref?.();
+  pendingRepin.set(guildKey, timer);
+}
+
+/**
+ * Liegt das aktuelle Board bereits ganz unten im Kanal? Dann wäre ein
+ * Neu-Senden reine Unruhe (Löschen + neue Nachricht) – ein Edit reicht.
+ * Bei unbekanntem Zustand (kein Cache) lieber `false` und normal neu senden.
+ */
+function boardIsAlreadyNewest(channel, entry) {
+  const lastId = channel?.lastMessageId;
+  if (!lastId || !entry?.leaderboardMessageId) return false;
+  return String(lastId) === String(entry.leaderboardMessageId);
+}
+
+async function repinLeaderboard(ctx, entry, guild, { throttle = true, reason = 'manual' } = {}) {
   const guildKey = String(entry.guildId || guild?.id || '');
+  const startedAt = Date.now();
 
   // Nebenläufigkeits-Schutz: läuft bereits ein Repin für diesen Server, ist
   // dieser Aufruf überflüssig – der laufende Send rendert ohnehin den
   // aktuellen Stand und landet danach als neueste Nachricht im Kanal.
   if (repinInFlight.get(guildKey)) return false;
 
+  const previousRepinAt = lastRepin.get(guildKey) || 0;
   if (throttle) {
-    const last = lastRepin.get(guildKey) || 0;
-    const ts = Date.now();
-    if (ts - last < REPIN_THROTTLE_MS) return false;
+    const elapsed = startedAt - previousRepinAt;
+    if (elapsed < REPIN_MIN_INTERVAL_MS) {
+      // Nicht verwerfen, sondern zusammenfassen: Am Ende des Fensters wandert
+      // das Board genau EINMAL nach unten – egal wie viele Auslöser kamen.
+      schedulePendingRepin(ctx, entry, guild, guildKey, REPIN_MIN_INTERVAL_MS - elapsed);
+      return false;
+    }
   }
 
-  // Stempel + Lock VOR dem ersten await setzen. Nur so greift der Throttle
-  // auch unter Last (mehrere Nachrichten innerhalb eines Event-Loop-Fensters).
+  // Stempel + Lock VOR dem ersten await setzen. Nur so greift der Abstand
+  // auch unter Last (mehrere Auslöser innerhalb eines Event-Loop-Fensters).
   // Das Lock wird im finally freigegeben, damit ein Fehler den Server nicht
   // dauerhaft sperrt; der Zeitstempel bleibt bewusst auch bei Fehlern stehen
   // (schützt vor Send-Schleifen bei anhaltenden Discord-Problemen).
   repinInFlight.set(guildKey, true);
-  lastRepin.set(guildKey, Date.now());
+  lastRepin.set(guildKey, startedAt);
+  clearPendingRepin(guildKey);
   try {
     const channel = await fetchLeaderboardChannel(ctx, entry, guild);
     if (!channel) {
@@ -569,9 +668,18 @@ async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
       return false;
     }
 
+    // Board ist bereits die letzte Nachricht im Kanal → ein Neu-Senden wäre
+    // reine Unruhe. Stattdessen stiller (10-Min-gedrosselter) Edit. Der
+    // Repin-Zeitstempel wird zurückgesetzt, damit die nächste ECHTE
+    // Ankündigung das Board sofort wieder nach unten holen darf.
+    if (boardIsAlreadyNewest(channel, entry)) {
+      lastRepin.set(guildKey, previousRepinAt);
+      return maybeRefreshLeaderboard(ctx, entry, guild);
+    }
+
     const entries = ctx.store.getLeaderboard(entry.guildId, 15);
     const container = buildLeaderboardEmbed({ lang: entry.lang, entries, now: new Date(), guildName: guild.name });
-    const payload = componentsV2Payload([container]);
+    const payload = componentsV2Payload([container], { allowedMentions: LEADERBOARD_ALLOWED_MENTIONS });
 
     const oldId = entry.leaderboardMessageId;
     const replacement = await channel.send(payload).catch((err) => {
@@ -601,7 +709,7 @@ async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
     entry.lastHourlyLeaderboardRefresh = now;
     ctx.store.setGuild(entry);
     void ctx.store.flush().catch(() => {});
-    ctx.logger.info(`[xp-level-bot] Leaderboard neu angesteckt (${guild.name})`);
+    ctx.logger.info(`[xp-level-bot] Leaderboard neu angesteckt (${guild.name}, Grund: ${reason})`);
     return true;
   } catch (err) {
     ctx.logger.warn(`[xp-level-bot] Leaderboard repin failed ${guild.name}:`, err?.message || err);
@@ -609,6 +717,20 @@ async function repinLeaderboard(ctx, entry, guild, { throttle = true } = {}) {
   } finally {
     repinInFlight.delete(guildKey);
   }
+}
+
+/** Nur für Tests / Shutdown: offene Nachhol-Timer verwerfen. */
+function resetRepinState(guildId = null) {
+  if (guildId != null) {
+    const key = String(guildId);
+    clearPendingRepin(key);
+    lastRepin.delete(key);
+    repinInFlight.delete(key);
+    return;
+  }
+  for (const key of [...pendingRepin.keys()]) clearPendingRepin(key);
+  lastRepin.clear();
+  repinInFlight.clear();
 }
 
 module.exports = {
@@ -620,7 +742,11 @@ module.exports = {
   runLeaderboardTick,
   refreshLeaderboard,
   maybeRefreshLeaderboard,
+  refreshLeaderboardAfterActivity,
+  isCombinedLeaderboardChannel,
+  isLeaderboardChannel,
   repinLeaderboard,
+  resetRepinState,
   isLeaderboardRefreshDue,
   isHourlyRefreshDue,
   noteLeaderboardRefresh,
@@ -631,6 +757,8 @@ module.exports = {
   noteManualRefresh,
   MANUAL_REFRESH_COOLDOWN_MS,
   LEADERBOARD_MIN_REFRESH_MS,
+  LEADERBOARD_ALLOWED_MENTIONS,
+  REPIN_MIN_INTERVAL_MS,
   LEADERBOARD_HOURLY_MS,
   LEADERBOARD_HOURLY_RETRY_MS,
   MAX_DECAY_CATCHUP_DAYS,

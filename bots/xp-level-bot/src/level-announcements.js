@@ -72,8 +72,16 @@ async function resolveMainChannel(guild, mainChannelId) {
   }
 }
 
+function channelIdOf(channel) {
+  const id = channel?.id;
+  return id == null ? null : String(id);
+}
+
 /**
- * @returns {Promise<{sent:boolean,destination:string|null,errors:string[]}>}
+ * @returns {Promise<{sent:boolean,destination:string|null,channelId:string|null,errors:string[]}>}
+ *   `channelId` = Kanal, in dem die Ankündigung tatsächlich gelandet ist. Der
+ *   Aufrufer entscheidet damit, ob das Leaderboard im kombinierten Kanal
+ *   nachrücken muss (nur wenn wirklich DORT gepostet wurde).
  */
 async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg = null, source = 'other' }) {
   const lang = cfg?.lang || 'de';
@@ -86,7 +94,7 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   // Nachricht sonst in jedem Textkanal erscheinen, in dem geschrieben wurde.
   if (textTriggeredLevelUp && !cfg?.levelMessagesMainOnly && sourceMsg && typeof sourceMsg.reply === 'function') {
     if (await sendWithTextFallback((payload) => sourceMsg.reply(payload), payloads, errors, 'source-reply')) {
-      return { sent: true, destination: 'source-reply', errors };
+      return { sent: true, destination: 'source-reply', channelId: channelIdOf(sourceMsg.channel), errors };
     }
   }
 
@@ -95,7 +103,7 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   // die Nachricht nicht auf den Level-Chat beschränkt ist.
   if (textTriggeredLevelUp && !cfg?.levelMessagesMainOnly && isSendableTextChannel(sourceMsg?.channel)) {
     if (await sendWithTextFallback((payload) => sourceMsg.channel.send(payload), payloads, errors, 'source-channel')) {
-      return { sent: true, destination: 'source-channel', errors };
+      return { sent: true, destination: 'source-channel', channelId: channelIdOf(sourceMsg.channel), errors };
     }
   }
 
@@ -104,7 +112,7 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   const main = await resolveMainChannel(guild, cfg?.mainChannelId);
   if (main) {
     if (await sendWithTextFallback((payload) => main.send(payload), payloads, errors, 'main-channel')) {
-      return { sent: true, destination: 'main-channel', errors };
+      return { sent: true, destination: 'main-channel', channelId: channelIdOf(main) || String(cfg?.mainChannelId || ''), errors };
     }
   } else {
     errors.push(`main-channel: ${cfg?.mainChannelId || 'nicht konfiguriert'} nicht erreichbar`);
@@ -113,7 +121,7 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   // 3) Systemkanal als serverweiter Notfall-Fallback.
   if (isSendableTextChannel(guild?.systemChannel)) {
     if (await sendWithTextFallback((payload) => guild.systemChannel.send(payload), payloads, errors, 'system-channel')) {
-      return { sent: true, destination: 'system-channel', errors };
+      return { sent: true, destination: 'system-channel', channelId: channelIdOf(guild.systemChannel), errors };
     }
   }
 
@@ -121,14 +129,14 @@ async function sendLevelAnnouncement({ ctx, guild, cfg, userId, res, sourceMsg =
   // Nur nutzen, wenn sie nicht bereits oben als Chat-Quelle versucht wurde.
   if (!textTriggeredLevelUp && sourceMsg && typeof sourceMsg.reply === 'function') {
     if (await sendWithTextFallback((payload) => sourceMsg.reply(payload), payloads, errors, 'source-fallback')) {
-      return { sent: true, destination: 'source-fallback', errors };
+      return { sent: true, destination: 'source-fallback', channelId: channelIdOf(sourceMsg.channel), errors };
     }
   }
 
   ctx?.logger?.error?.(
     `[xp-level-bot] Level-Ankündigung endgültig fehlgeschlagen (${guild?.name || cfg?.guildId || '?'}, User ${userId}): ${errors.join(' | ')}`
   );
-  return { sent: false, destination: null, errors };
+  return { sent: false, destination: null, channelId: null, errors };
 }
 
 /**
@@ -171,7 +179,7 @@ async function sendOwnerXpAnnouncement({
   const main = await resolveMainChannel(guild, cfg?.mainChannelId);
   if (main) {
     if (await sendWithTextFallback((p) => main.send(p), payloads, errors, 'owner-main')) {
-      return { sent: true, destination: 'owner-main', errors };
+      return { sent: true, destination: 'owner-main', channelId: channelIdOf(main) || String(cfg?.mainChannelId || ''), errors };
     }
   } else {
     errors.push(`owner-main: ${cfg?.mainChannelId || 'nicht konfiguriert'} nicht erreichbar`);
@@ -179,14 +187,14 @@ async function sendOwnerXpAnnouncement({
 
   if (isSendableTextChannel(guild?.systemChannel)) {
     if (await sendWithTextFallback((p) => guild.systemChannel.send(p), payloads, errors, 'owner-system')) {
-      return { sent: true, destination: 'owner-system', errors };
+      return { sent: true, destination: 'owner-system', channelId: channelIdOf(guild.systemChannel), errors };
     }
   }
 
   ctx?.logger?.error?.(
     `[xp-level-bot] /give_xp-Ankündigung endgültig fehlgeschlagen (${guild?.name || cfg?.guildId || '?'}, User ${userId}): ${errors.join(' | ')}`
   );
-  return { sent: false, destination: null, errors };
+  return { sent: false, destination: null, channelId: null, errors };
 }
 
 module.exports = {
