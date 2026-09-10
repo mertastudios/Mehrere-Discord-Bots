@@ -1,20 +1,21 @@
 /**
  * ============================================================================
- *  🛡️ Security Bot – Automatischer KI-Sicherheitsbot mit Mistral Moderation
+ *  🛡️ Security Bot – KI-Sicherheitsbot mit Google Gemini
  *
- *  Funktionen:
- *  - /set_api_key – Mistral API Key für den Server hinterlegen (Modal-Formular, nur Admins)
- *  - /set_language – 10 Sprachen zur Auswahl, dauerhaft für den Server (nur Admins)
- *  - /set_sensitivity – Schutzlevel anpassen (Strikt: 30%, Ausgewogen: 50%, Tolerant: 75%)
- *  - /configure_rules – Interaktives Menü für Kategorien, Schwellenwerte & Auto-Delete
- *  - /set_warnings – Verwarnungsstufen, Timeouts, Verfallszeit & Auto-Delete konfigurieren
- *  - /status – Eigene aktive Verwarnungen und Sicherheitsstatus einsehen (für alle!)
- *  - /manage_user [user] – Status beliebiger Nutzer einsehen und Verwarnungen löschen (nur Admins)
- *  - /test_text [text] – Text mit Mistral Moderation auf Regelverstöße analysieren (nur Admins)
- *  - /admin_set_bot_profile – Server-Profilbild des Bots anpassen (nur Admins)
- *  - /help – Befehlsübersicht mit klickbaren Mentions
- *  - /adminpanel – Owner-Admin-Panel im Bot-DM
- *  - Automatische Überwachung aller Textnachrichten von Nicht-Admins
+ *  Ablauf:
+ *  - Sammelt Textnachrichten echter Nutzer (Admins sind immun), bis das
+ *    Token-Budget für eine Gemini-Anfrage erreicht ist – zusätzlich wird der
+ *    Verlauf täglich um 0 Uhr (Serversprache-Zeitzone) ausgewertet.
+ *  - Sendet System-Prompt + Admin-Prompt (/set_prompt) + sauber formatierten
+ *    Chat-Verlauf (IDs ab 1, mentions aufgelöst) an das günstigste Gemini-
+ *    Modell (gemini-2.5-flash-lite).
+ *  - Gemini entscheidet über Warnungen / Timeouts (1m–1w) mit persönlicher
+ *    Nachricht; der Bot antwortet auf die schwerwiegendste Verstoßnachricht.
+ *  - Fehlgeschlagene Analysen werden NICHT verworfen: Retry-Queue mit Backoff,
+ *    meanwhile läuft das Sammeln weiter. Log-Kanal informiert über alles.
+ *
+ *  Commands (alle nur für Administratoren):
+ *  /set_gemini_api_key · /set_prompt · /set_log_channel · /set_language · /help
  * ============================================================================
  */
 
@@ -29,8 +30,8 @@ const {
   formatDiscordError,
 } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
-const { handleMessageModeration } = require('./src/moderation');
-const { sendJoinNotice } = require('./src/admin-panel');
+const { handleIncoming } = require('./src/collector');
+const { sendJoinNotice } = require('./src/notices');
 const { startScheduler } = require('./src/scheduler');
 
 module.exports = {
@@ -42,7 +43,6 @@ module.exports = {
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages,
   ],
 
   async create({ client, token, logger, env }) {
@@ -88,7 +88,7 @@ module.exports = {
       commandIds: {},
       guildCommandIds: new Map(),
       commandsRegistered: false,
-      panelSessions: new Map(),
+      schedulerState: null,
     };
 
     let schedulerStop = null;
@@ -129,7 +129,7 @@ module.exports = {
       build: () => ({
         activities: [
           {
-            name: `Protecting ${client.guilds.cache.size} server(s) 🛡️ | /help`,
+            name: `Moderating ${client.guilds.cache.size} server(s) 🛡️ | /help`,
             type: ActivityType.Watching,
           },
         ],
@@ -166,9 +166,9 @@ module.exports = {
       void handleInteraction(ctx, interaction);
     });
 
-    // ---------------- Message Moderation ----------------
-    client.on('messageCreate', async (msg) => {
-      void handleMessageModeration({ ctx, msg });
+    // ---------------- Nachrichten-Sammlung ----------------
+    client.on('messageCreate', (msg) => {
+      void handleIncoming({ ctx, msg });
     });
 
     // ---------------- Guild Create / Delete ----------------

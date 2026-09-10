@@ -1,5 +1,12 @@
 /**
- * Slash-Commands Definition & Handlers für den Sicherheitsbot.
+ * Slash-Commands Definition, Registrierung & Handlers für den Sicherheitsbot.
+ *
+ * Befehlssatz (ausschließlich, alles nur für Administratoren):
+ *   /set_gemini_api_key [key]   – Gemini API-Key für den Server hinterlegen
+ *   /set_prompt                 – Formular für KI-Anweisungen (Regeln/Strenge/Maßnahmen)
+ *   /set_log_channel [channel]  – Log-Kanal für Moderations-Hinweise & API-Fehler
+ *   /set_language               – Botsprache dauerhaft ändern (10 Sprachen)
+ *   /help                       – Übersicht
  */
 
 const {
@@ -9,54 +16,44 @@ const {
   PermissionFlagsBits,
   InteractionContextType,
   ApplicationIntegrationType,
-  ContainerBuilder,
-  TextDisplayBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
   ActionRowBuilder,
-  RESTJSONErrorCodes,
+  ChannelType,
 } = require('discord.js');
 
-const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('./languages');
-const {
-  smallContainer,
-  buildStatusContainer,
-  buildManageUserContainer,
-  buildTestReportContainer,
-  buildWarningsConfigContainer,
-  buildRulesConfigContainer,
-  buildSensitivityContainer,
-} = require('./embed-builder');
+const { LANGS, t, langFromDiscord, isValidLang } = require('./languages');
+const { smallContainer, buildHelpContainer } = require('./embed-builder');
 const { componentsV2Payload } = require('./message-payload');
-const { openPanel } = require('./admin-panel');
-const { callMistralModeration, evaluateModerationResult } = require('./moderation');
-const {
-  PRESET_THRESHOLDS,
-  getDefaultThresholdMap,
-  DEFAULT_WARNING_ESCALATION,
-  maskApiKey,
-} = require('./rules');
+const { validateApiKey } = require('./gemini');
+const { maskApiKey } = require('./mask');
 
 const ALL_COMMAND_NAMES = [
-  'set_api_key',
+  'set_gemini_api_key',
+  'set_prompt',
+  'set_log_channel',
   'set_language',
-  'set_sensitivity',
-  'configure_rules',
-  'set_warnings',
-  'status',
-  'manage_user',
-  'test_text',
-  'admin_set_bot_profile',
   'help',
-  'adminpanel',
 ];
 
-const DM_ONLY_COMMAND_NAMES = ['adminpanel'];
-// Every command is global. Discord contexts decide where it is visible; the
-// optional Guild payload only accelerates propagation for one configured Guild.
+// Alle Commands sind global und ausschließlich im Guild-Context sichtbar.
 const GLOBAL_COMMAND_NAMES = [...ALL_COMMAND_NAMES];
-const GUILD_COMMAND_NAMES = ALL_COMMAND_NAMES.filter((n) => !DM_ONLY_COMMAND_NAMES.includes(n));
+const GUILD_COMMAND_NAMES = [...ALL_COMMAND_NAMES];
+const DM_ONLY_COMMAND_NAMES = [];
+
+const DISCORD_LOCALE = {
+  de: 'de',
+  en: 'en-US',
+  fr: 'fr',
+  es: 'es-ES',
+  pt: 'pt-BR',
+  ru: 'ru',
+  ja: 'ja',
+  ko: 'ko',
+  zh: 'zh-CN',
+  it: 'it',
+};
 
 function pick(key) {
   const map = {};
@@ -68,46 +65,49 @@ function pick(key) {
 
 function defineCommands() {
   const languageChoices = Object.entries(LANGS).map(([code, lang]) => ({
-    name: lang.name,
+    name: `${lang.flag} ${lang.name}`,
     value: code,
     name_localizations: Object.fromEntries(
       Object.entries(lang.names).map(([c, n]) => [DISCORD_LOCALE[c], n])
     ),
   }));
 
-  const profileChoices = ['standard', 'server', 'owner'].map((v) => ({
-    name: t(`profileChoice${v[0].toUpperCase()}${v.slice(1)}`, 'de'),
-    value: v,
-    name_localizations: pick(`profileChoice${v[0].toUpperCase()}${v.slice(1)}`),
-  }));
-
-  const sensitivityChoices = [
-    { name: 'Strict (30%)', value: 'strict', name_localizations: pick('preset_strict') },
-    { name: 'Balanced (50%)', value: 'balanced', name_localizations: pick('preset_balanced') },
-    { name: 'Relaxed (75%)', value: 'relaxed', name_localizations: pick('preset_relaxed') },
-  ];
-
-  const actionChoices = [
-    { name: 'Warning only', value: 'warn', name_localizations: pick('action_warn') },
-    { name: '1m Timeout', value: 'timeout_60s', name_localizations: pick('action_timeout_60s') },
-    { name: '5m Timeout', value: 'timeout_300s', name_localizations: pick('action_timeout_300s') },
-    { name: '10m Timeout', value: 'timeout_600s', name_localizations: pick('action_timeout_600s') },
-    { name: '1h Timeout', value: 'timeout_3600s', name_localizations: pick('action_timeout_3600s') },
-    { name: '24h Timeout', value: 'timeout_86400s', name_localizations: pick('action_timeout_86400s') },
-    { name: '7d Timeout', value: 'timeout_604800s', name_localizations: pick('action_timeout_604800s') },
-  ];
-
   return [
     new SlashCommandBuilder()
-      .setName('set_api_key')
-      .setDescription('Mistral Moderation API Key für diesen Server hinterlegen (nur Admins)')
-      .setDescriptionLocalizations(pick('helpSetApiKey'))
+      .setName('set_gemini_api_key')
+      .setDescription('Google Gemini API-Key für diesen Server hinterlegen (nur Admins)')
+      .setDescriptionLocalizations(pick('descApiKey'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addStringOption((o) =>
+        o
+          .setName('key')
+          .setDescription('Gemini API-Key (AIza...) – "remove" löscht den Key wieder')
+          .setRequired(true)
+      ),
+
+    new SlashCommandBuilder()
+      .setName('set_prompt')
+      .setDescription('Formular: Anweisungen der KI (Regeln, Strenge, Maßnahmen) – nur Admins')
+      .setDescriptionLocalizations(pick('descPrompt'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
+      .setName('set_log_channel')
+      .setDescription('Log-Kanal für Moderations-Hinweise & API-Fehler setzen (nur Admins)')
+      .setDescriptionLocalizations(pick('descLogChannel'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addChannelOption((o) =>
+        o
+          .setName('channel')
+          .setDescription('Log-Kanal – leer lassen, um den Log-Kanal zu entfernen')
+          .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+          .setRequired(false)
+      ),
 
     new SlashCommandBuilder()
       .setName('set_language')
       .setDescription('Ändert die Sprache des Sicherheitsbots dauerhaft (nur Admins)')
-      .setDescriptionLocalizations(pick('helpSetLanguage'))
+      .setDescriptionLocalizations(pick('descLanguage'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
       .addStringOption((o) =>
         o
@@ -118,154 +118,32 @@ function defineCommands() {
       ),
 
     new SlashCommandBuilder()
-      .setName('set_sensitivity')
-      .setDescription('Schutzlevel & Strenge der Filter anpassen (nur Admins)')
-      .setDescriptionLocalizations(pick('helpSetSensitivity'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addStringOption((o) =>
-        o
-          .setName('preset')
-          .setDescription('Schutzlevel wählen (Strikt / Ausgewogen / Tolerant)')
-          .setRequired(false)
-          .addChoices(...sensitivityChoices)
-      ),
-
-    new SlashCommandBuilder()
-      .setName('configure_rules')
-      .setDescription('Interaktive Konfiguration für Kategorien & Auto-Löschen (nur Admins)')
-      .setDescriptionLocalizations(pick('helpConfigureRules'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-    new SlashCommandBuilder()
-      .setName('set_warnings')
-      .setDescription('Verwarnungsstufen, Timeouts & Verfallszeit konfigurieren (nur Admins)')
-      .setDescriptionLocalizations(pick('helpSetWarnings'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addIntegerOption((o) =>
-        o
-          .setName('max_warnings')
-          .setDescription('Maximale Verwarnungsanzahl (1-10)')
-          .setMinValue(1)
-          .setMaxValue(10)
-          .setRequired(false)
-      )
-      .addIntegerOption((o) =>
-        o
-          .setName('expiry_days')
-          .setDescription('Verfallszeit in Tagen für Verstöße (1-365)')
-          .setMinValue(1)
-          .setMaxValue(365)
-          .setRequired(false)
-      )
-      .addStringOption((o) =>
-        o
-          .setName('action_1')
-          .setDescription('Maßnahme für 1. Verwarnung')
-          .setRequired(false)
-          .addChoices(...actionChoices)
-      )
-      .addStringOption((o) =>
-        o
-          .setName('action_2')
-          .setDescription('Maßnahme für 2. Verwarnung')
-          .setRequired(false)
-          .addChoices(...actionChoices)
-      )
-      .addStringOption((o) =>
-        o
-          .setName('action_3')
-          .setDescription('Maßnahme für 3. Verwarnung')
-          .setRequired(false)
-          .addChoices(...actionChoices)
-      )
-      .addBooleanOption((o) =>
-        o
-          .setName('auto_delete')
-          .setDescription('Verstoßende Nachrichten automatisch löschen (Ja / Nein)')
-          .setRequired(false)
-      ),
-
-    new SlashCommandBuilder()
-      .setName('status')
-      .setDescription('Zeigt deine aktiven Verwarnungen und deinen Sicherheitsstatus')
-      .setDescriptionLocalizations(pick('helpStatus')),
-
-    new SlashCommandBuilder()
-      .setName('manage_user')
-      .setDescription('Status eines Nutzers einsehen und Verwarnungen löschen (nur Admins)')
-      .setDescriptionLocalizations(pick('helpManageUser'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addUserOption((o) =>
-        o
-          .setName('user')
-          .setDescription('Zu prüfender / verwaltender Benutzer')
-          .setRequired(true)
-      ),
-
-    new SlashCommandBuilder()
-      .setName('test_text')
-      .setDescription('Überprüft Text mit Mistral Moderation auf Regelverstöße (nur Admins)')
-      .setDescriptionLocalizations(pick('helpTestText'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addStringOption((o) =>
-        o
-          .setName('text')
-          .setDescription('Zu überprüfender Text')
-          .setRequired(true)
-      ),
-
-    new SlashCommandBuilder()
-      .setName('admin_set_bot_profile')
-      .setDescription('Ändert das Server-Profilbild des Sicherheitsbots (nur Admins)')
-      .setDescriptionLocalizations(pick('helpSetProfile'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-      .addStringOption((o) =>
-        o
-          .setName('image')
-          .setDescription('Welches Bild verwendet werden soll')
-          .setRequired(true)
-          .addChoices(...profileChoices)
-      ),
-
-    new SlashCommandBuilder()
       .setName('help')
-      .setDescription('Zeigt alle Befehle und Funktionen des Sicherheitsbots')
-      .setDescriptionLocalizations(pick('helpHelp')),
-
-    new SlashCommandBuilder()
-      .setName('adminpanel')
-      .setDescription('Owner-Admin-Panel (nur im Bot-DM)')
-      .setDescriptionLocalizations(pick('helpAdminPanel'))
-      .setContexts(InteractionContextType.BotDM)
-      .setIntegrationTypes(ApplicationIntegrationType.GuildInstall),
-  ].map((cmd) => {
-    if (cmd.name === 'adminpanel') return cmd;
-    return cmd
+      .setDescription('Zeigt alle Befehle und wie die KI-Moderation funktioniert (nur Admins)')
+      .setDescriptionLocalizations(pick('descHelp'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  ].map((cmd) =>
+    cmd
       .setContexts(InteractionContextType.Guild)
-      .setIntegrationTypes(ApplicationIntegrationType.GuildInstall);
-  });
+      .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+  );
 }
 
 function guildCommandJson() {
-  return defineCommands()
-    .filter((c) => !DM_ONLY_COMMAND_NAMES.includes(c.name))
-    .map((c) => {
-      const json = c.toJSON();
-      // `contexts` und `integration_types` sind Felder globaler Commands. Ein
-      // Guild-Command ist durch seine REST-Route bereits eindeutig auf Guild
-      // Install + Guild Context begrenzt. Ohne diese global-only Felder bleibt
-      // der Bulk-Guild-Payload mit Discord-Versionen strikt kompatibel.
-      delete json.contexts;
-      delete json.integration_types;
-      delete json.dm_permission;
-      return json;
-    });
+  return defineCommands().map((c) => {
+    const json = c.toJSON();
+    // `contexts` und `integration_types` sind Felder globaler Commands. Ein
+    // Guild-Command ist durch seine REST-Route bereits eindeutig auf Guild
+    // Install + Guild Context begrenzt. Ohne diese global-only Felder bleibt
+    // der Bulk-Guild-Payload mit Discord-Versionen strikt kompatibel.
+    delete json.contexts;
+    delete json.integration_types;
+    delete json.dm_permission;
+    return json;
+  });
 }
 
-/**
- * The global bulk overwrite is the source of truth. It deliberately contains
- * all server commands plus the DM-only /adminpanel command.
- */
+/** Der globale Bulk-Overwrite ist die Quelle der Wahrheit. */
 function allCommandJson() {
   return defineCommands().map((c) => c.toJSON());
 }
@@ -439,10 +317,6 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
       `Scope=global+applications.commands Guild-ID=${configuredGuild || '(keine, nur global)'} ` +
       `Guild-Cache=${guildIds.join(',') || '(leer)'} Deploy-Commit=${ctx.deployCommit || 'unbekannt'}`
   );
-  ctx.logger?.info?.(
-    '[security-bot] Scope-Hinweis: Ein erfolgreicher globaler PUT beweist API-Zugriff; ob die bestehende ' +
-      'Guild-Installation applications.commands autorisiert hat, ist über den Bot-Endpunkt nicht auslesbar.'
-  );
 
   const delays = Array.isArray(retryDelays) && retryDelays.length
     ? retryDelays
@@ -498,8 +372,8 @@ async function registerCommands(ctx, { restFactory, retryDelays } = {}) {
     }
   }
 
-  // PR #77 created Guild overwrites on every cached Guild. They shadow global
-  // commands, so remove them after (and only after) the complete global set was accepted.
+  // Alte Guild-Overwrites würden die globalen Commands verschatten; erst nach
+  // dem bestätigten globalen PUT aufräumen.
   for (const guildId of guildIds) {
     if (guildId === immediateGuild) continue;
     const route = Routes.applicationGuildCommands(clientId, guildId);
@@ -606,448 +480,225 @@ function commandMention(ctx, name, guildId = null) {
   return id ? `</${name}:${id}>` : `/${name}`;
 }
 
-/**
- * Chat-Input-Router für Slash-Commands.
- */
-async function handleChatInput(ctx, interaction) {
-  switch (interaction.commandName) {
-    case 'set_api_key':
-      return handleSetApiKey(ctx, interaction);
-    case 'set_language':
-      return handleSetLanguage(ctx, interaction);
-    case 'set_sensitivity':
-      return handleSetSensitivity(ctx, interaction);
-    case 'configure_rules':
-      return handleConfigureRules(ctx, interaction);
-    case 'set_warnings':
-      return handleSetWarnings(ctx, interaction);
-    case 'status':
-      return handleStatus(ctx, interaction);
-    case 'manage_user':
-      return handleManageUser(ctx, interaction);
-    case 'test_text':
-      return handleTestText(ctx, interaction);
-    case 'admin_set_bot_profile':
-      return handleSetProfile(ctx, interaction);
-    case 'help':
-      return handleHelp(ctx, interaction);
-    case 'adminpanel':
-      return openPanel(ctx, interaction);
-    default:
-      return interaction.reply(
-        componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: false })
-      );
-  }
+// ----------------- Guards & Helpers -----------------
+
+function isAdminInteraction(interaction) {
+  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
+  return Boolean(perms?.has?.(PermissionFlagsBits.Administrator));
 }
+
+function guildLang(ctx, interaction) {
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
+  return cfg.lang || langFromDiscord(interaction.locale);
+}
+
+function denyMissingPermission(ctx, interaction, lang) {
+  return interaction.reply(
+    componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: true })
+  );
+}
+
+const REMOVE_KEYWORDS = new Set(['remove', 'delete', 'löschen', 'loeschen', 'entfernen', 'reset']);
 
 // ----------------- Command Handlers -----------------
 
-async function handleSetApiKey(ctx, interaction) {
+async function handleSetGeminiApiKey(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
     );
   }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
 
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
+  const rawKey = String(interaction.options.getString('key') || '').trim();
+
+  // Entfernen (Keyword) – der Key selbst ist nie per Modal maskiert, deshalb
+  // reicht das simple Keyword-Protokoll.
+  if (REMOVE_KEYWORDS.has(rawKey.toLowerCase())) {
+    cfg.geminiApiKey = null;
+    ctx.store.setGuild(cfg);
+    await ctx.store.flush();
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, t('apiKeyRemoved', lang))], { ephemeral: true })
     );
   }
+
+  if (!rawKey || rawKey.length < 20) {
+    return interaction.reply(
+      componentsV2Payload(
+        [smallContainer(null, t('apiKeyInvalid', lang, { error: 'Key zu kurz/leer' }))],
+        { ephemeral: true }
+      )
+    );
+  }
+
+  // Wenn maskierter Key unverändert eingereicht wurde -> nichts tun
+  if (cfg.geminiApiKey && rawKey === maskApiKey(cfg.geminiApiKey)) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('apiKeyKept', lang))], { ephemeral: true })
+    );
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  // Live-Verifikation beim Google Models-Endpunkt (tanzt keine Tippfehler durch)
+  const check = await validateApiKey({ apiKey: rawKey, model: undefined, fetchFn: ctx.geminiFetch });
+
+  if (!check.ok && check.fatal) {
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('apiKeyInvalid', lang, { error: check.error }))])
+    );
+  }
+
+  cfg.geminiApiKey = rawKey;
+  ctx.store.setGuild(cfg);
+  await ctx.store.flush();
+
+  const masked = maskApiKey(rawKey);
+  if (!check.ok) {
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('apiKeyUnverified', lang, { key: masked, error: check.error }))])
+    );
+  }
+  return interaction.editReply(
+    componentsV2Payload([smallContainer(null, t('apiKeySet', lang, { key: masked }))])
+  );
+}
+
+async function handleSetPrompt(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
+  }
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
+  // Standardtext oder der letzte eingestellte Prompt ist bereits vorausgefüllt.
+  const current = cfg.prompt || t('defaultPrompt', lang);
 
   const modal = new ModalBuilder()
-    .setCustomId('sec_modal_api_key')
-    .setTitle(t('apiKeyModalTitle', lang).slice(0, 45))
+    .setCustomId('secgem_modal_prompt')
+    .setTitle(t('promptModalTitle', lang).slice(0, 45))
     .addComponents(
       new ActionRowBuilder().addComponents(
         new TextInputBuilder()
-          .setCustomId('sec_input_api_key')
-          .setLabel(t('apiKeyInputLabel', lang).slice(0, 45))
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder(t('apiKeyInputPlaceholder', lang).slice(0, 95))
-          .setValue(cfg.mistralApiKey ? maskApiKey(cfg.mistralApiKey) : '')
-          .setRequired(true)
+          .setCustomId('secgem_input_prompt')
+          .setLabel(t('promptModalLabel', lang).slice(0, 45))
+          .setStyle(TextInputStyle.Paragraph)
+          .setValue(current.slice(0, 4000))
+          .setMaxLength(4000)
+          .setRequired(false)
       )
     );
 
   return interaction.showModal(modal);
 }
 
+async function handleSetLogChannel(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
+  }
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
+  const channel = interaction.options.getChannel('channel');
+
+  if (!channel) {
+    cfg.logChannelId = null;
+    ctx.store.setGuild(cfg);
+    await ctx.store.flush();
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('logChannelRemoved', lang))], { ephemeral: true })
+    );
+  }
+
+  cfg.logChannelId = channel.id;
+  ctx.store.setGuild(cfg);
+  await ctx.store.flush();
+
+  return interaction.reply(
+    componentsV2Payload(
+      [smallContainer(null, t('logChannelSet', lang, { channel: `<#${channel.id}>` }))],
+      { ephemeral: true }
+    )
+  );
+}
+
 async function handleSetLanguage(ctx, interaction) {
   if (!interaction.inGuild()) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
     );
   }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const currentLang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', currentLang))], { ephemeral: false })
-    );
-  }
+  const currentLang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, currentLang);
 
   const newLang = interaction.options.getString('language');
-  if (!LANGS[newLang]) {
+  if (!isValidLang(newLang)) {
     return interaction.reply(
-      componentsV2Payload([smallContainer(null, 'Ungültige Sprache.')], { ephemeral: false })
+      componentsV2Payload([smallContainer(null, 'Ungültige Sprache.')], { ephemeral: true })
     );
   }
 
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
   cfg.lang = newLang;
   ctx.store.setGuild(cfg);
   await ctx.store.flush();
 
-  const msg = t('langChanged', newLang, { name: LANGS[newLang].name });
-  return interaction.reply(componentsV2Payload([smallContainer(null, msg)], { ephemeral: false }));
-}
-
-async function handleSetSensitivity(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
-    );
-  }
-
-  const preset = interaction.options.getString('preset');
-  if (preset && PRESET_THRESHOLDS[preset] !== undefined) {
-    cfg.sensitivity = preset;
-    cfg.categoryThresholds = getDefaultThresholdMap(preset);
-    ctx.store.setGuild(cfg);
-    await ctx.store.flush();
-  }
-
-  const container = buildSensitivityContainer({ lang, guildConfig: cfg });
-  return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
-}
-
-async function handleConfigureRules(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
-    );
-  }
-
-  const container = buildRulesConfigContainer({ lang, guildConfig: cfg });
-  return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
-}
-
-async function handleSetWarnings(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
-    );
-  }
-
-  const maxOpt = interaction.options.getInteger('max_warnings');
-  const expOpt = interaction.options.getInteger('expiry_days');
-  const act1 = interaction.options.getString('action_1');
-  const act2 = interaction.options.getString('action_2');
-  const act3 = interaction.options.getString('action_3');
-  const autoDelOpt = interaction.options.getBoolean('auto_delete');
-
-  let mutated = false;
-  if (maxOpt != null) {
-    cfg.maxWarnings = maxOpt;
-    mutated = true;
-  }
-  if (expOpt != null) {
-    cfg.violationExpiryDays = expOpt;
-    mutated = true;
-  }
-  if (autoDelOpt != null) {
-    cfg.defaultAutoDelete = autoDelOpt;
-    mutated = true;
-  }
-
-  if (act1 || act2 || act3) {
-    const list = [...(cfg.warningActions || DEFAULT_WARNING_ESCALATION)];
-    if (act1) {
-      const idx = list.findIndex((e) => e.warning === 1);
-      if (idx >= 0) list[idx] = { ...list[idx], action: act1 };
-      else list.push({ warning: 1, action: act1, timeoutSeconds: 0 });
-    }
-    if (act2) {
-      const idx = list.findIndex((e) => e.warning === 2);
-      if (idx >= 0) list[idx] = { ...list[idx], action: act2 };
-      else list.push({ warning: 2, action: act2, timeoutSeconds: 600 });
-    }
-    if (act3) {
-      const idx = list.findIndex((e) => e.warning === 3);
-      if (idx >= 0) list[idx] = { ...list[idx], action: act3 };
-      else list.push({ warning: 3, action: act3, timeoutSeconds: 86400 });
-    }
-    cfg.warningActions = list;
-    mutated = true;
-  }
-
-  if (mutated) {
-    ctx.store.setGuild(cfg);
-    await ctx.store.flush();
-  }
-
-  const container = buildWarningsConfigContainer({ lang, guildConfig: cfg });
-  return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
-}
-
-async function handleStatus(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  const activeViolations = ctx.store.getViolations(interaction.guildId, interaction.user.id, { activeOnly: true });
-  const member = interaction.member;
-  const isTimedOut = Boolean(
-    member?.communicationDisabledUntil && new Date(member.communicationDisabledUntil).getTime() > Date.now()
+  const msg = t('langChanged', newLang, { name: `${LANGS[newLang].flag} ${LANGS[newLang].name}` });
+  return interaction.reply(
+    componentsV2Payload([smallContainer(null, msg)], { ephemeral: true })
   );
-  const timeoutUntil = isTimedOut ? new Date(member.communicationDisabledUntil).getTime() : null;
-
-  const container = buildStatusContainer({
-    lang,
-    userId: interaction.user.id,
-    activeViolations,
-    maxWarnings: cfg.maxWarnings || 3,
-    isTimedOut,
-    timeoutUntil,
-  });
-
-  return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
-}
-
-async function handleManageUser(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
-    );
-  }
-
-  const targetUser = interaction.options.getUser('user');
-  if (!targetUser) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, 'Benutzer nicht gefunden.')], { ephemeral: false })
-    );
-  }
-
-  const activeViolations = ctx.store.getViolations(interaction.guildId, targetUser.id, { activeOnly: true });
-  const allViolations = ctx.store.getViolations(interaction.guildId, targetUser.id, { activeOnly: false });
-
-  let member = null;
-  try {
-    member = await interaction.guild.members.fetch(targetUser.id);
-  } catch {}
-
-  const isTimedOut = Boolean(
-    member?.communicationDisabledUntil && new Date(member.communicationDisabledUntil).getTime() > Date.now()
-  );
-  const timeoutUntil = isTimedOut ? new Date(member.communicationDisabledUntil).getTime() : null;
-
-  const container = buildManageUserContainer({
-    lang,
-    targetUser,
-    activeViolations,
-    allViolations,
-    maxWarnings: cfg.maxWarnings || 3,
-    isTimedOut,
-    timeoutUntil,
-  });
-
-  return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
-}
-
-async function handleTestText(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
-    );
-  }
-
-  if (!cfg.mistralApiKey) {
-    await ensureCommandIds(ctx, interaction.guildId);
-    const setKeyMention = commandMention(ctx, 'set_api_key', interaction.guildId);
-    return interaction.reply(
-      componentsV2Payload(
-        [smallContainer(null, `⚠️ Kein Mistral API Key hinterlegt. Bitte nutze ${setKeyMention}.`)],
-        { ephemeral: false }
-      )
-    );
-  }
-
-  const textToTest = interaction.options.getString('text');
-  await interaction.deferReply();
-
-  const modRes = await callMistralModeration({
-    apiKey: cfg.mistralApiKey,
-    text: textToTest,
-  });
-
-  if (!modRes.ok) {
-    return interaction.editReply(
-      componentsV2Payload([
-        smallContainer('❌ Test fehlgeschlagen', `Mistral API Fehler: \`${modRes.error || modRes.message}\``),
-      ])
-    );
-  }
-
-  const evalRes = evaluateModerationResult({ data: modRes.data, guildConfig: cfg });
-  const container = buildTestReportContainer({
-    lang,
-    text: textToTest,
-    evalRes,
-    guildConfig: cfg,
-  });
-
-  return interaction.editReply(componentsV2Payload([container]));
-}
-
-async function handleSetProfile(ctx, interaction) {
-  if (!interaction.inGuild()) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: false })
-    );
-  }
-  const perms = interaction.memberPermissions ?? interaction.member?.permissions;
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
-
-  if (!perms?.has(PermissionFlagsBits.Administrator)) {
-    return interaction.reply(
-      componentsV2Payload([smallContainer(null, t('errNoPermission', lang))], { ephemeral: false })
-    );
-  }
-
-  await interaction.deferReply();
-  const choice = interaction.options.getString('image');
-  const label = t(`profileChoice${choice[0].toUpperCase()}${choice.slice(1)}`, lang);
-
-  try {
-    if (choice === 'standard') {
-      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), { body: { avatar: null } });
-    } else {
-      let url = null;
-      if (choice === 'server') {
-        url = interaction.guild.iconURL({ size: 256, extension: 'png', forceStatic: true });
-        if (!url) {
-          return interaction.editReply(
-            componentsV2Payload([smallContainer(null, t('errServerNoIcon', lang))])
-          );
-        }
-      } else if (choice === 'owner') {
-        const owner = await interaction.guild.fetchOwner();
-        url =
-          owner?.user?.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true }) ||
-          owner?.displayAvatarURL({ size: 256, extension: 'png', forceStatic: true });
-      }
-      if (!url) throw new Error('Bild-URL konnte nicht ermittelt werden.');
-
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Avatar konnte nicht geladen werden (${res.status})`);
-      const buffer = Buffer.from(await res.arrayBuffer());
-      const ct = res.headers.get('content-type')?.split(';')[0] || 'image/png';
-      const dataUri = `data:${ct};base64,${buffer.toString('base64')}`;
-
-      await ctx.rest.patch(Routes.guildMember(interaction.guild.id, '@me'), { body: { avatar: dataUri } });
-    }
-    return interaction.editReply(
-      componentsV2Payload([smallContainer(null, t('profileSet', lang, { choice: label }))])
-    );
-  } catch (err) {
-    const msg =
-      err?.code === RESTJSONErrorCodes.MissingPermissions || err?.status === 403
-        ? t('errAvatarPerms', lang)
-        : t('errAvatar', lang, { error: err.message });
-    return interaction.editReply(componentsV2Payload([smallContainer(null, msg)]));
-  }
 }
 
 async function handleHelp(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
+  }
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+
   await ensureCommandIds(ctx, interaction.guildId);
-  const cfg = ctx.store.ensureGuild(interaction.guildId);
-  const lang = cfg.lang || langFromDiscord(interaction.locale);
+  const commands = {
+    set_gemini_api_key: commandMention(ctx, 'set_gemini_api_key', interaction.guildId),
+    set_prompt: commandMention(ctx, 'set_prompt', interaction.guildId),
+    set_log_channel: commandMention(ctx, 'set_log_channel', interaction.guildId),
+    set_language: commandMention(ctx, 'set_language', interaction.guildId),
+    help: commandMention(ctx, 'help', interaction.guildId),
+  };
+  const container = buildHelpContainer({ lang, commands });
+  return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
+}
 
-  const container = new ContainerBuilder().addTextDisplayComponents(
-    new TextDisplayBuilder().setContent(
-      [
-        `# ${t('helpTitle', lang)}`,
-        t('helpDesc', lang),
-        '',
-        `**${commandMention(ctx, 'set_api_key', interaction.guildId)}**\n${t('helpSetApiKey', lang)}`,
-        '',
-        `**${commandMention(ctx, 'set_language', interaction.guildId)}**\n${t('helpSetLanguage', lang)}`,
-        '',
-        `**${commandMention(ctx, 'set_sensitivity', interaction.guildId)}**\n${t('helpSetSensitivity', lang)}`,
-        '',
-        `**${commandMention(ctx, 'configure_rules', interaction.guildId)}**\n${t('helpConfigureRules', lang)}`,
-        '',
-        `**${commandMention(ctx, 'set_warnings', interaction.guildId)}**\n${t('helpSetWarnings', lang)}`,
-        '',
-        `**${commandMention(ctx, 'status', interaction.guildId)}**\n${t('helpStatus', lang)}`,
-        '',
-        `**${commandMention(ctx, 'manage_user', interaction.guildId)}**\n${t('helpManageUser', lang)}`,
-        '',
-        `**${commandMention(ctx, 'test_text', interaction.guildId)}**\n${t('helpTestText', lang)}`,
-        '',
-        `**${commandMention(ctx, 'admin_set_bot_profile', interaction.guildId)}**\n${t('helpSetProfile', lang)}`,
-        '',
-        `**${commandMention(ctx, 'help', interaction.guildId)}**\n${t('helpHelp', lang)}`,
-      ].join('\n')
-    )
-  );
-
-  return interaction.reply(componentsV2Payload([container]));
+/**
+ * Chat-Input-Router für Slash-Commands.
+ */
+async function handleChatInput(ctx, interaction) {
+  switch (interaction.commandName) {
+    case 'set_gemini_api_key':
+      return handleSetGeminiApiKey(ctx, interaction);
+    case 'set_prompt':
+      return handleSetPrompt(ctx, interaction);
+    case 'set_log_channel':
+      return handleSetLogChannel(ctx, interaction);
+    case 'set_language':
+      return handleSetLanguage(ctx, interaction);
+    case 'help':
+      return handleHelp(ctx, interaction);
+    default:
+      return interaction.reply(
+        componentsV2Payload([smallContainer(null, 'Unbekannter Befehl.')], { ephemeral: true })
+      );
+  }
 }
 
 module.exports = {
@@ -1061,6 +712,7 @@ module.exports = {
   handleChatInput,
   pick,
   commandMention,
+  DISCORD_LOCALE,
   ALL_COMMAND_NAMES,
   GLOBAL_COMMAND_NAMES,
   GUILD_COMMAND_NAMES,
