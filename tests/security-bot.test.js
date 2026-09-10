@@ -1,38 +1,72 @@
 /**
- * Tests für den Security-Bot (Mistral Moderation, Regeln, Persistenz, Commands & UI).
- * Läuft komplett ohne externe Discord- oder Mistral-Verbindung.
+ * Tests für den komplett neu gebauten Security-Bot (Gemini-Pipeline):
+ * Commands, Sprachen, Store (Buffer/Batches/Strafenregister), Collector
+ * (Discord-Formate → Klartext), Gemini-Client, Prompt-Bau, Moderator-Pipeline
+ * (Aktionen, Retries, Immunität), Scheduler (0-Uhr-Flush) & Interactions.
+ * Läuft komplett ohne externe Discord- oder Gemini-Verbindung.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { PermissionFlagsBits, ChannelType, MessageFlags } = require('discord.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { PermissionFlagsBits, ChannelType, MessageFlags, GatewayIntentBits } = require('discord.js');
 
-const { defineCommands, ALL_COMMAND_NAMES, GUILD_COMMAND_NAMES, GLOBAL_COMMAND_NAMES } = require('../bots/security-bot/src/commands');
-const { LANGS, t, langFromDiscord, DISCORD_LOCALE } = require('../bots/security-bot/src/languages');
 const {
-  CATEGORIES,
-  PRESET_THRESHOLDS,
-  DEFAULT_WARNING_ESCALATION,
-  getActionForWarningCount,
-  getActionSeconds,
-  getDefaultGuildConfig,
-  normalizeGuildConfig,
-  normalizeModerationCategory,
-  maskApiKey,
-  progressBar,
-} = require('../bots/security-bot/src/rules');
-const { createSecurityStore } = require('../bots/security-bot/src/store');
-const { evaluateModerationResult, callMistralModeration, handleMessageModeration } = require('../bots/security-bot/src/moderation');
+  defineCommands,
+  allCommandJson,
+  guildCommandJson,
+  handleChatInput,
+  commandMention,
+  ALL_COMMAND_NAMES,
+} = require('../bots/security-bot/src/commands');
+const { handleInteraction } = require('../bots/security-bot/src/interactions');
+const { LANGS, t, langFromDiscord, tzFor, isValidLang } = require('../bots/security-bot/src/languages');
+const { createSecurityStore, MAX_BUFFER_MESSAGES } = require('../bots/security-bot/src/store');
 const {
-  smallContainer,
-  buildStatusContainer,
-  buildManageUserContainer,
-  buildTestReportContainer,
-  buildWarningsConfigContainer,
-  buildRulesConfigContainer,
-  buildSensitivityContainer,
-  buildViolationAlertContainer,
-} = require('../bots/security-bot/src/embed-builder');
+  estimateTokens,
+  callGemini,
+  validateApiKey,
+  parseModerationJson,
+  extractResponseText,
+  modelFromEnv,
+  DEFAULT_GEMINI_MODEL,
+} = require('../bots/security-bot/src/gemini');
+const {
+  buildSystemPrompt,
+  buildUserPrompt,
+  buildChatLog,
+  DURATION_SECONDS,
+} = require('../bots/security-bot/src/prompts');
+const {
+  handleIncoming,
+  shouldCollect,
+  humanizeContent,
+  escapeDiscordMarkdown,
+  maxInputTokens,
+} = require('../bots/security-bot/src/collector');
+const {
+  processGuild,
+  flushBuffer,
+  personalMessageText,
+  nextRetryDelay,
+  BACKOFF_SCHEDULE_MS,
+} = require('../bots/security-bot/src/moderator');
+const { tickOnce, dayKeyInTz } = require('../bots/security-bot/src/scheduler');
+const { maskApiKey } = require('../bots/security-bot/src/mask');
+
+const noopLogger = { info: () => {}, warn: () => {}, error: () => {} };
+
+function makeStore() {
+  const store = createSecurityStore({
+    env: (k) => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : ''),
+  });
+  return store.init().then(() => store);
+}
+
+// ============================================================================
+// 1. Bot-Modul
+// ============================================================================
 
 test('Security Bot: Modul-Export & Intents', () => {
   const bot = require('../bots/security-bot/index.js');
@@ -41,790 +75,1118 @@ test('Security Bot: Modul-Export & Intents', () => {
   assert.equal(bot.tokenEnv, 'SECURITY_BOT_TOKEN');
   assert.equal(typeof bot.create, 'function');
   assert.ok(Array.isArray(bot.intents));
+  assert.ok(bot.intents.includes(GatewayIntentBits.MessageContent));
+  assert.ok(bot.intents.includes(GatewayIntentBits.GuildMembers));
 });
 
-test('Security Bot: Slash-Commands Definition & Permissions', () => {
+// ============================================================================
+// 2. Commands
+// ============================================================================
+
+test('Security Bot: genau 5 Commands, alle nur für Admins', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 11);
+  assert.equal(cmds.length, 5);
 
-  const names = cmds.map((c) => c.name).sort();
-  assert.deepEqual(names, [
-    'admin_set_bot_profile',
-    'adminpanel',
-    'configure_rules',
+  const names = cmds.map((c) => c.name);
+  assert.deepEqual([...names].sort(), [
     'help',
-    'manage_user',
-    'set_api_key',
+    'set_gemini_api_key',
     'set_language',
-    'set_sensitivity',
-    'set_warnings',
-    'status',
-    'test_text',
-  ].sort());
+    'set_log_channel',
+    'set_prompt',
+  ]);
+  assert.deepEqual(ALL_COMMAND_NAMES, names);
 
-  // Admin-Rechte prüfen (Bit 8 = Administrator)
-  const adminCmds = [
-    'set_api_key',
-    'set_language',
-    'set_sensitivity',
-    'configure_rules',
-    'set_warnings',
-    'manage_user',
-    'test_text',
-    'admin_set_bot_profile',
-  ];
-
-  for (const name of adminCmds) {
-    const cmd = cmds.find((c) => c.name === name);
-    assert.ok(cmd, `Command /${name} existiert`);
-    assert.equal(cmd.default_member_permissions, '8', `/${name} erfordert Admin-Rechte (Bit 8)`);
+  for (const cmd of cmds) {
+    assert.equal(cmd.default_member_permissions, '8', `/${cmd.name} ist Admin-only`);
+    assert.deepEqual(cmd.contexts, [0], `/${cmd.name} ist Guild-only`);
+    assert.deepEqual(cmd.integration_types, [0]);
+    // Discord-Limits: Beschreibungen ≤ 100 Zeichen (auch lokalisiert)
+    assert.ok(cmd.description.length <= 100, `/${cmd.name} Beschreibung ≤ 100`);
+    for (const loc of Object.values(cmd.description_localizations || {})) {
+      assert.ok(loc.length <= 100, `/${cmd.name} lokalisierte Beschreibung ≤ 100`);
+    }
   }
 
-  // /status und /help sind für alle verfügbar
-  const statusCmd = cmds.find((c) => c.name === 'status');
-  assert.equal(statusCmd.default_member_permissions, undefined, '/status ist für alle verfügbar');
-  const helpCmd = cmds.find((c) => c.name === 'help');
-  assert.equal(helpCmd.default_member_permissions, undefined, '/help ist für alle verfügbar');
+  // /set_gemini_api_key hat einen Pflicht-String-Parameter "key"
+  const keyCmd = cmds.find((c) => c.name === 'set_gemini_api_key');
+  assert.equal(keyCmd.options[0].name, 'key');
+  assert.equal(keyCmd.options[0].type, 3); // STRING
+  assert.equal(keyCmd.options[0].required, true);
+
+  // /set_prompt hat KEINE Optionen (öffnet ein Formular/Modal)
+  const promptCmd = cmds.find((c) => c.name === 'set_prompt');
+  assert.equal(promptCmd.options.length, 0);
+
+  // /set_log_channel hat einen optionalen Kanal-Parameter
+  const logCmd = cmds.find((c) => c.name === 'set_log_channel');
+  assert.equal(logCmd.options[0].name, 'channel');
+  assert.equal(logCmd.options[0].required, false);
+  assert.deepEqual(logCmd.options[0].channel_types, [ChannelType.GuildText, ChannelType.GuildAnnouncement]);
 
   // /set_language hat 10 Sprach-Auswahlen
   const langCmd = cmds.find((c) => c.name === 'set_language');
   assert.equal(langCmd.options[0].choices.length, 10, '10 Sprachen stehen zur Auswahl');
 
-  // /admin_set_bot_profile hat 3 Bild-Auswahlen
-  const profCmd = cmds.find((c) => c.name === 'admin_set_bot_profile');
-  assert.deepEqual(
-    profCmd.options[0].choices.map((c) => c.value),
-    ['standard', 'server', 'owner']
-  );
-
-  // Erforderliche Optionen dürfen nicht nach optionalen Optionen stehen
-  for (const cmd of cmds) {
-    if (!cmd.options) continue;
-    let seenOptional = false;
-    for (const opt of cmd.options) {
-      if (opt.required) {
-        assert.equal(
-          seenOptional,
-          false,
-          `In /${cmd.name}: erforderliche Option "${opt.name}" steht hinter optionaler Option`
-        );
-      } else {
-        seenOptional = true;
-      }
-    }
-  }
+  // Guild-Payload identisch (kein DM-Command mehr)
+  assert.deepEqual(guildCommandJson().map((c) => c.name), ALL_COMMAND_NAMES);
 });
 
-test('Security Bot: 10 Sprachen & Übersetzungstexte', () => {
+// ============================================================================
+// 3. Sprachen
+// ============================================================================
+
+test('Security Bot: 10 Sprachen, vollständige & limit-konforme Texte', () => {
   const expectedLangs = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
   assert.deepEqual(Object.keys(LANGS), expectedLangs);
 
   for (const lang of expectedLangs) {
-    assert.ok(LANGS[lang].name, `Sprachname für ${lang} vorhanden`);
-    assert.ok(LANGS[lang].tz, `Zeitzone für ${lang} vorhanden`);
-    assert.ok(t('helpTitle', lang).length > 0, `helpTitle für ${lang}`);
-    assert.ok(t('warnTitle', lang).length > 0, `warnTitle für ${lang}`);
-    assert.ok(t('statusTitle', lang, { user: 'Test' }).includes('Test'), `statusTitle für ${lang}`);
+    assert.ok(LANGS[lang].name, `Sprachname für ${lang}`);
+    assert.ok(LANGS[lang].tz, `Zeitzone für ${lang}`);
+    // Alle deutschen Keys müssen in jeder Sprache existieren (keine Lücken)
+    for (const key of Object.keys(LANGS.de)) {
+      assert.ok(LANGS[lang][key] !== undefined, `Key ${key} fehlt in ${lang}`);
+    }
+    // Short-Descriptions (Discord-Limit)
+    for (const key of ['descApiKey', 'descPrompt', 'descLogChannel', 'descLanguage', 'descHelp']) {
+      assert.ok(t(key, lang).length > 0 && t(key, lang).length <= 100, `${key} (${lang}) ≤ 100`);
+    }
+    assert.ok(t('defaultPrompt', lang).length > 200, `defaultPrompt für ${lang} ist substantiell`);
+    assert.ok(t('defaultPrompt', lang).includes('{USER}'.replace('{USER}', 'WARN')) === false);
   }
 
   assert.equal(langFromDiscord('de'), 'de');
   assert.equal(langFromDiscord('en-US'), 'en');
   assert.equal(langFromDiscord('fr'), 'fr');
   assert.equal(langFromDiscord('ja'), 'ja');
+  assert.equal(langFromDiscord('xx'), 'de');
+  assert.equal(isValidLang('it'), true);
+  assert.equal(isValidLang('xx'), false);
+  assert.equal(tzFor('de'), 'Europe/Berlin');
+  assert.equal(tzFor('en'), 'America/New_York');
 });
 
-test('Security Bot: Regeln, Schwellenwerte & Eskalationsstufen', () => {
-  assert.deepEqual(CATEGORIES, [
-    'sexual',
-    'hate_and_discrimination',
-    'violence_and_threats',
-    'dangerous_and_criminal_content',
-    'selfharm',
-  ]);
-  assert.equal(PRESET_THRESHOLDS.strict, 0.30);
-  assert.equal(PRESET_THRESHOLDS.balanced, 0.50);
-  assert.equal(PRESET_THRESHOLDS.relaxed, 0.75);
+// ============================================================================
+// 4. Store: Konfiguration, Buffer, Batches, Strafenregister
+// ============================================================================
 
-  // Eskalation prüfen
-  const a1 = getActionForWarningCount(1);
-  assert.equal(a1.action, 'warn');
-  assert.equal(a1.timeoutSeconds, 0);
+test('Security Bot: Store CRUD (Key, Prompt, Log-Kanal, Sprache)', async () => {
+  const store = await makeStore();
 
-  const a2 = getActionForWarningCount(2);
-  assert.equal(a2.action, 'timeout_600s');
-  assert.equal(a2.timeoutSeconds, 600);
+  const cfg = store.ensureGuild('g1');
+  assert.equal(cfg.lang, 'de');
+  assert.equal(cfg.geminiApiKey, null);
+  assert.equal(cfg.prompt, null);
+  assert.equal(cfg.logChannelId, null);
 
-  const a3 = getActionForWarningCount(3);
-  assert.equal(a3.action, 'timeout_86400s');
-  assert.equal(a3.timeoutSeconds, 86400);
+  store.setApiKey('g1', 'AIza-test-key-1234567890');
+  assert.equal(store.getApiKey('g1'), 'AIza-test-key-1234567890');
+  store.setApiKey('g1', null);
+  assert.equal(store.getApiKey('g1'), null);
+  store.setApiKey('g1', 'AIza-final-key-9876543210');
 
-  const a4 = getActionForWarningCount(4);
-  assert.equal(a4.action, 'timeout_604800s');
-  assert.equal(a4.timeoutSeconds, 604800);
+  store.setPrompt('g1', 'Sei streng bei Beleidigungen');
+  assert.equal(store.getPrompt('g1'), 'Sei streng bei Beleidigungen');
+  store.setPrompt('g1', null);
+  assert.equal(store.getPrompt('g1'), null, 'null = Standardtext');
+  store.setPrompt('g1', 'x'.repeat(5000));
+  assert.ok(store.getPrompt('g1').length <= 4000, 'Prompt wird auf 4000 Zeichen gekürzt');
 
-  // Höhere Warnungen greifen auf die schärfste Stufe zurück
-  const a10 = getActionForWarningCount(10);
-  assert.equal(a10.action, 'timeout_604800s');
+  store.setLogChannelId('g1', 'c-log');
+  assert.equal(store.getLogChannelId('g1'), 'c-log');
+  store.setLanguage('g1', 'en');
+  assert.equal(store.getLanguage('g1'), 'en');
+  store.setLanguage('g1', 'invalid');
+  assert.equal(store.getLanguage('g1'), 'invalid'); // roher Wert wird beim Speichern akzeptiert, Auswahl regelt der Command
 
-  assert.equal(getActionSeconds('warn'), 0);
-  assert.equal(getActionSeconds('timeout_600s'), 600);
-  assert.equal(getActionSeconds('timeout_86400s'), 86400);
-
-  assert.equal(maskApiKey('mistral-1234567890abcdef'), 'mistral...cdef');
-  assert.equal(maskApiKey(''), '—');
-
-  const migrated = normalizeGuildConfig({
-    guildId: 'legacy',
-    openaiApiKey: 'must-not-be-reused',
-    categoryThresholds: { hate: 0.1 },
-  });
-  assert.equal(migrated.mistralApiKey, null);
-  assert.equal(Object.hasOwn(migrated, 'openaiApiKey'), false);
-  assert.deepEqual(Object.keys(migrated.categoryThresholds), CATEGORIES);
-  assert.equal(normalizeModerationCategory('harassment'), 'hate_and_discrimination');
-  assert.equal(normalizeModerationCategory('self-harm/intent'), 'selfharm');
+  assert.equal(maskApiKey('AIzaSyD-1234567890abcdefghijklmnopqrstuv'), 'AIzaSyD...stuv');
 });
 
-test('Security Bot: Store CRUD & RAM-first Verhaltensweisen', async () => {
-  const store = createSecurityStore({
-    env: (k) => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : ''),
-  });
-  await store.init();
+test('Security Bot: Buffer → Batch (IDs ab 1, chronologisch, Limits)', async () => {
+  const store = await makeStore();
+  const base = Date.now() - 60_000;
 
-  // Guild config
-  const g1 = store.ensureGuild('guild_123');
-  assert.equal(g1.guildId, 'guild_123');
-  assert.equal(g1.lang, 'de');
-  assert.equal(g1.sensitivity, 'balanced');
+  for (let i = 1; i <= 3; i++) {
+    const rec = store.addBufferMessage('g1', {
+      channelId: 'c1',
+      channelName: 'allgemein',
+      authorId: `u${i}`,
+      authorName: `Nutzer${i}`,
+      content: `Nachricht ${i}`,
+      discordMessageId: `d${i}`,
+      sentAt: base + i * 1000,
+    });
+    assert.ok(rec, `Nachricht ${i} im Buffer`);
+  }
+  assert.equal(store.getBuffer('g1').length, 3);
+  assert.equal(store.countPendingMessages('g1'), 3);
 
-  store.setApiKey('guild_123', 'mistral-test-key-123');
-  assert.equal(store.getApiKey('guild_123'), 'mistral-test-key-123');
+  const batch = store.buildBatchFromBuffer('g1');
+  assert.ok(batch);
+  assert.equal(batch.size, 3);
+  assert.equal(store.getBuffer('g1').length, 0, 'Buffer danach leer');
 
-  store.setLanguage('guild_123', 'en');
-  assert.equal(store.getLanguage('guild_123'), 'en');
+  const msgs = store.getBatchMessages('g1', batch.id);
+  assert.deepEqual(
+    msgs.map((m) => m.seq),
+    [1, 2, 3],
+    'IDs zählen von 1 an aufwärts'
+  );
+  assert.deepEqual(
+    msgs.map((m) => m.content),
+    ['Nachricht 1', 'Nachricht 2', 'Nachricht 3'],
+    'chronologische Reihenfolge'
+  );
+  assert.ok(msgs.every((m) => m.batchId === batch.id));
 
-  // Violations
-  const v1 = store.addViolation({
-    id: 'v_test_1',
-    guildId: 'guild_123',
-    userId: 'user_456',
-    highestCategory: 'hate_and_discrimination',
-    highestScore: 0.95,
-    contentSnippet: 'Offensive message',
-    actionTaken: 'warn',
-    timeoutSeconds: 0,
-    warningNumber: 1,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 14 * 86400 * 1000,
-  });
-  assert.ok(v1);
-  assert.equal(v1.id, 'v_test_1');
+  // Batch löschen räumt Nachrichten weg
+  store.deleteBatch('g1', batch.id);
+  assert.equal(store.getBatchMessages('g1', batch.id).length, 0);
+  assert.equal(store.countPendingMessages('g1'), 0);
+  assert.equal(store.getBatches('g1').length, 0);
 
-  const active = store.getViolations('guild_123', 'user_456', { activeOnly: true });
-  assert.equal(active.length, 1);
-  assert.equal(active[0].highestCategory, 'hate_and_discrimination');
-
-  // Einzelnen Verstoß löschen (Fehlalarm)
-  const delOk = store.deleteViolation('v_test_1', { deletedBy: 'admin_999' });
-  assert.equal(delOk, true);
-
-  const activeAfterDel = store.getViolations('guild_123', 'user_456', { activeOnly: true });
-  assert.equal(activeAfterDel.length, 0);
-
-  const allAfterDel = store.getViolations('guild_123', 'user_456', { activeOnly: false });
-  assert.equal(allAfterDel.length, 1);
-  assert.equal(allAfterDel[0].deleted, true);
-
-  // Zweiter Verstoß und Clear All
-  store.addViolation({
-    id: 'v_test_2',
-    guildId: 'guild_123',
-    userId: 'user_456',
-    highestCategory: 'hate_and_discrimination',
-    highestScore: 0.85,
-    actionTaken: 'timeout_600s',
-    timeoutSeconds: 600,
-    warningNumber: 1,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 14 * 86400 * 1000,
-  });
-
-  assert.equal(store.getViolations('guild_123', 'user_456', { activeOnly: true }).length, 1);
-  const cleared = store.clearUserViolations('guild_123', 'user_456', { deletedBy: 'admin_999' });
-  assert.equal(cleared, 1);
-  assert.equal(store.getViolations('guild_123', 'user_456', { activeOnly: true }).length, 0);
-
-  // Command IDs API
-  store.setCommandIds({ help: '111', status: '222' });
-  assert.equal(store.getCommandId('help'), '111');
-  assert.equal(store.getCommandId('status'), '222');
-
-  store.setGuildCommandIds('guild_123', { set_api_key: '333' });
-  assert.deepEqual(store.getGuildCommandIds('guild_123'), { set_api_key: '333' });
+  // Buffer-Obergrenze
+  for (let i = 0; i < MAX_BUFFER_MESSAGES; i++) {
+    assert.ok(store.addBufferMessage('g1', { channelId: 'c1', authorId: 'u1', authorName: 'x', content: 'spam' }));
+  }
+  assert.equal(store.addBufferMessage('g1', { channelId: 'c1', authorId: 'u1', authorName: 'x', content: 'überlauf' }), null);
 });
 
-test('Security Bot: Moderations-Auswertung (Mistral Response -> Regelwerk)', () => {
-  const mockCleanResponse = {
-    results: [
-      {
-        flagged: false,
-        categories: {
-          sexual: false,
-          hate_and_discrimination: false,
-          violence_and_threats: false,
-          dangerous_and_criminal_content: false,
-          selfharm: false,
-        },
-        category_scores: {
-          sexual: 0.0001,
-          hate_and_discrimination: 0.02,
-          violence_and_threats: 0.005,
-          dangerous_and_criminal_content: 0.001,
-          selfharm: 0.00001,
-        },
-      },
-    ],
-  };
+test('Security Bot: Strafenregister (20-Tage-Fenster) & Prune & Guild-Delete', async () => {
+  const store = await makeStore();
+  const now = Date.now();
 
-  const cleanEval = evaluateModerationResult({
-    data: mockCleanResponse,
-    guildConfig: getDefaultGuildConfig('g1'),
-  });
-  assert.equal(cleanEval.violated, false);
-  assert.equal(cleanEval.highestCategory, null);
-  assert.equal(cleanEval.shouldAutoDelete, false);
+  store.addPenalty({ guildId: 'g1', userId: 'u1', userName: 'Max', action: 'warn', reason: 'Beleidigung', createdAt: now - 5 * 86400e3 });
+  store.addPenalty({ guildId: 'g1', userId: 'u1', userName: 'Max', action: 'timeout', duration: '1h', durationSeconds: 3600, reason: 'Spam', isPrimary: true, createdAt: now - 2 * 86400e3 });
+  store.addPenalty({ guildId: 'g1', userId: 'u1', userName: 'Max', action: 'warn', reason: 'alt', createdAt: now - 25 * 86400e3 }); // außerhalb 20 Tage
+  store.addPenalty({ guildId: 'g2', userId: 'u1', userName: 'Max', action: 'warn', reason: 'anderer Server', createdAt: now });
 
-  const mockViolationResponse = {
-    results: [
-      {
-        flagged: true,
-        categories: {
-          sexual: false,
-          hate_and_discrimination: true,
-          violence_and_threats: true,
-          dangerous_and_criminal_content: false,
-          selfharm: false,
-        },
-        category_scores: {
-          sexual: 0.001,
-          hate_and_discrimination: 0.88,
-          violence_and_threats: 0.72,
-          dangerous_and_criminal_content: 0.05,
-          selfharm: 0.0001,
-        },
-      },
-    ],
-  };
+  const summary = store.getPenaltySummary('g1', { days: 20, now });
+  assert.equal(summary.get('u1').count, 2);
+  assert.equal(summary.get('u1').lastAction, 'timeout');
+  assert.equal(store.countPenaltiesSince('g1', 'u1', 20, now), 2);
+  assert.equal(store.countPenaltiesSince('g1', 'u2', 20, now), 0);
 
-  const violEval = evaluateModerationResult({
-    data: mockViolationResponse,
-    guildConfig: getDefaultGuildConfig('g1'),
-  });
-  assert.equal(violEval.violated, true);
-  assert.equal(violEval.highestCategory, 'hate_and_discrimination');
-  assert.equal(violEval.highestScore, 0.88);
-  assert.equal(violEval.shouldAutoDelete, true);
-  assert.deepEqual(violEval.violatedCategories, ['hate_and_discrimination', 'violence_and_threats']);
+  // Prune: Strafen > 30 Tage weg; alte Batches werden verworfen & gemeldet
+  store.addPenalty({ guildId: 'g1', userId: 'u9', userName: 'Alt', action: 'warn', createdAt: now - 40 * 86400e3 });
+  const batch = store.buildBatchFromBuffer('g1') || { id: 'b_none', createdAt: now - 40 * 86400e3 };
+  const { prunedPenalties, dropped } = store.prune(now);
+  assert.ok(prunedPenalties >= 1, 'alte Strafen wurden entfernt');
+  assert.ok(Array.isArray(dropped));
 
-  // Schutzlevel Strikt schlägt auch bei Score 0.35 an
-  const mockSubtleHate = {
-    results: [
-      {
-        flagged: false,
-        categories: { hate_and_discrimination: false },
-        category_scores: { hate_and_discrimination: 0.35 },
-      },
-    ],
-  };
-
-  const balancedEval = evaluateModerationResult({
-    data: mockSubtleHate,
-    guildConfig: { ...getDefaultGuildConfig('g1'), sensitivity: 'balanced' },
-  });
-  assert.equal(balancedEval.violated, false, 'Bei Balanced (50%) kein Verstoß bei 35%');
-
-  const strictConfig = {
-    ...getDefaultGuildConfig('g1'),
-    sensitivity: 'strict',
-    categoryThresholds: { hate_and_discrimination: 0.30 },
-  };
-  const strictEval = evaluateModerationResult({
-    data: mockSubtleHate,
-    guildConfig: strictConfig,
-  });
-  assert.equal(strictEval.violated, true, 'Bei Strict (30%) Verstoß bei 35%');
+  // Guild-Delete räumt ALLES der Gilde weg
+  store.setLogChannelId('g2', 'c2');
+  store.deleteGuild('g1');
+  assert.equal(store.getGuild('g1'), null);
+  assert.equal(store.countPendingMessages('g1'), 0);
+  assert.equal(store.getPenaltySummary('g1', { days: 365, now }).size, 0);
+  assert.ok(store.getGuild('g2'), 'andere Gilde unberührt');
 });
 
-test('Security Bot: Mistral API Request & begrenzter 429-Retry', async () => {
-  const calls = [];
-  const sleeps = [];
-  const fetchFn = async (url, options) => {
-    calls.push({ url, options });
-    if (calls.length === 1) {
-      return {
-        ok: false,
-        status: 429,
-        headers: { get: (name) => (name === 'retry-after' ? '0.01' : null) },
-        text: async () => 'rate limited',
-      };
-    }
-    return {
-      ok: true,
-      json: async () => ({ results: [{ categories: {}, category_scores: {} }] }),
-    };
-  };
-
-  const result = await callMistralModeration({
-    apiKey: 'mistral-secret-key',
-    text: '  Test connection  ',
-    fetchFn,
-    sleepFn: async (ms) => sleeps.push(ms),
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(calls.length, 2, '429 wird genau einmal wiederholt, bevor der Mock erfolgreich ist');
-  assert.deepEqual(sleeps, [10]);
-  assert.equal(calls[0].url, 'https://api.mistral.ai/v1/moderations');
-  assert.equal(calls[0].options.headers.Authorization, 'Bearer mistral-secret-key');
-  assert.deepEqual(JSON.parse(calls[0].options.body), {
-    model: 'mistral-moderation-latest',
-    input: 'Test connection',
-  });
-
-  assert.deepEqual(await callMistralModeration({ text: 'x' }), {
-    ok: false,
-    error: 'missing_api_key',
-  });
-  assert.deepEqual(await callMistralModeration({ apiKey: 'key', text: '  ' }), {
-    ok: false,
-    error: 'empty_input',
-  });
-});
-
-test('Security Bot: Nachrichten-Moderation (Admin-Bypass, Silent Failure & Aktion)', async () => {
-  const store = createSecurityStore({
-    env: (k) => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : ''),
-  });
-  await store.init();
-
-  const logger = { info: () => {}, warn: () => {}, error: () => {} };
-  const ctx = { store, logger };
-
-  // 1. Bot-Nachricht -> ignoriert
-  let botMsg = { author: { bot: true }, guild: { id: 'g1' }, content: 'bad' };
-  await handleMessageModeration({ ctx, msg: botMsg });
-  assert.equal(store.getAllViolationsForGuild('g1').length, 0);
-
-  // 2. Admin-Nachricht -> ignoriert (Admin-Bypass)
-  let adminMsg = {
-    author: { id: 'admin1', bot: false },
-    guild: { id: 'g1' },
-    member: {
-      permissions: {
-        has: (p) => p === PermissionFlagsBits.Administrator,
-      },
-    },
-    content: 'bad content from admin',
-  };
-  await handleMessageModeration({ ctx, msg: adminMsg });
-  assert.equal(store.getAllViolationsForGuild('g1').length, 0);
-
-  // 3. Kein API-Key hinterlegt -> still ignoriert
-  let userMsgNoKey = {
-    author: { id: 'user1', bot: false },
-    guild: { id: 'g1' },
-    member: {
-      permissions: {
-        has: () => false,
-      },
-    },
-    content: 'some text',
-  };
-  await handleMessageModeration({ ctx, msg: userMsgNoKey });
-  assert.equal(store.getAllViolationsForGuild('g1').length, 0);
-
-  // 4. Mit API-Key & Mock-Call
-  store.setApiKey('g1', 'mistral-valid-key');
-  let deletedCalled = false;
-  let sentPayload = null;
-  let timeoutCalled = false;
-
-  let memberObj = {
-    id: 'user1',
-    moderatable: true,
-    permissions: { has: () => false },
-    timeout: async (ms, reason) => {
-      timeoutCalled = true;
-    },
-  };
-
-  let channelObj = {
-    send: async (p) => {
-      sentPayload = p;
-      return { id: 'm_alert' };
-    },
-  };
-
-  let violMsg = {
-    id: 'm100',
-    author: { id: 'user1', bot: false },
-    guild: {
-      id: 'g1',
-      members: { fetch: async () => memberObj },
-    },
-    member: memberObj,
-    channel: channelObj,
-    content: 'toxic insult text',
-    attachments: new Map(),
-    delete: async () => {
-      deletedCalled = true;
-    },
-    reply: async (p) => {
-      sentPayload = p;
-    },
-  };
-
-  // Mock globalThis.fetch für Mistral
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    return {
-      ok: true,
-      json: async () => ({
-        results: [
-          {
-            flagged: true,
-            categories: { hate_and_discrimination: true },
-            category_scores: { hate_and_discrimination: 0.92 },
-          },
-        ],
-      }),
-    };
-  };
-
+test('Security Bot: Persistenz über Datei-Fallback (RAM-first Roundtrip)', async () => {
+  const localFile = path.join(__dirname, '..', 'bots', 'security-bot', 'security-gemini-data.json');
+  const sharedFile = path.join(__dirname, '..', 'data', 'security-gemini-store.json');
+  for (const f of [localFile, sharedFile]) {
+    try { fs.rmSync(f, { force: true }); } catch {}
+  }
   try {
-    await handleMessageModeration({ ctx, msg: violMsg });
-    assert.equal(deletedCalled, true, 'Nachricht wurde automatisch gelöscht');
-    assert.ok(sentPayload, 'Verwarnung wurde gesendet');
-    assert.equal(sentPayload.flags & MessageFlags.IsComponentsV2, MessageFlags.IsComponentsV2);
+    const storeA = createSecurityStore({ env: () => '', logger: noopLogger });
+    await storeA.init();
+    storeA.setApiKey('gX', 'AIza-roundtrip-key-123456');
+    storeA.setPrompt('gX', 'Regel: nett sein');
+    storeA.setLogChannelId('gX', 'c-log');
+    storeA.addBufferMessage('gX', { channelId: 'c1', authorId: 'u1', authorName: 'Max', content: 'Hallo Welt' });
+    const batch = storeA.buildBatchFromBuffer('gX');
+    storeA.addPenalty({ guildId: 'gX', userId: 'u1', userName: 'Max', action: 'warn', reason: 'test' });
+    await storeA.flush({ force: true });
 
-    const recorded = store.getViolations('g1', 'user1', { activeOnly: true });
-    assert.equal(recorded.length, 1);
-    assert.equal(recorded[0].highestCategory, 'hate_and_discrimination');
-    assert.equal(recorded[0].warningNumber, 1);
+    const storeB = createSecurityStore({ env: () => '', logger: noopLogger });
+    await storeB.init();
+    assert.equal(storeB.getApiKey('gX'), 'AIza-roundtrip-key-123456');
+    assert.equal(storeB.getPrompt('gX'), 'Regel: nett sein');
+    assert.equal(storeB.getLogChannelId('gX'), 'c-log');
+    assert.equal(storeB.getBuffer('gX').length, 0);
+    assert.equal(storeB.getBatchMessages('gX', batch.id).length, 1);
+    assert.equal(storeB.getBatchMessages('gX', batch.id)[0].seq, 1, 'IDs überleben Neustarts');
+    assert.equal(storeB.getBatches('gX').length, 1);
+    assert.equal(storeB.countPenaltiesSince('gX', 'u1', 20), 1);
   } finally {
-    globalThis.fetch = originalFetch;
+    for (const f of [localFile, sharedFile]) {
+      try { fs.rmSync(f, { force: true }); } catch {}
+    }
   }
 });
 
-test('Security Bot: UI-Container Builder & Components V2', () => {
-  const statusContainer = buildStatusContainer({
-    lang: 'de',
-    userId: '123456',
-    activeViolations: [],
-    maxWarnings: 3,
-  });
-  assert.ok(statusContainer);
+// ============================================================================
+// 5. Collector: Sammel-Regeln & Discord-Formate → Klartext
+// ============================================================================
 
-  const manageContainer = buildManageUserContainer({
-    lang: 'de',
-    targetUser: { id: '123456', tag: 'User#0001' },
-    activeViolations: [
-      {
-        id: 'v_1',
-        highestCategory: 'hate_and_discrimination',
-        actionTaken: 'warn',
-        expiresAt: Date.now() + 100000,
-      },
-    ],
-    allViolations: [],
-    maxWarnings: 3,
-  });
-  assert.ok(manageContainer);
+function makeWorld() {
+  const membersCache = new Map();
+  const channelsCache = new Map();
+  const messageMocks = new Map();
+  const replies = [];
 
-  const testContainer = buildTestReportContainer({
-    lang: 'de',
-    text: 'Test message',
-    evalRes: {
-      violated: true,
-      highestCategory: 'violence_and_threats',
-      highestScore: 0.85,
-      shouldAutoDelete: true,
-      details: [
-        { category: 'violence_and_threats', score: 0.85, threshold: 0.50, enabled: true, violation: true },
-        { category: 'hate_and_discrimination', score: 0.05, threshold: 0.50, enabled: true, violation: false },
-      ],
+  const member = (id, { admin = false, name } = {}) => ({
+    id,
+    displayName: name || `Name${id}`,
+    user: { username: `user${id}` },
+    moderatable: true,
+    timeouts: [],
+    permissions: { has: (p) => admin && p === PermissionFlagsBits.Administrator },
+    timeout: async function (ms, reason) {
+      this.timeouts.push({ ms, reason });
     },
-    guildConfig: getDefaultGuildConfig('g1'),
   });
-  assert.ok(testContainer);
 
-  const warningsContainer = buildWarningsConfigContainer({
-    lang: 'de',
-    guildConfig: getDefaultGuildConfig('g1'),
-  });
-  assert.ok(warningsContainer);
+  const guild = {
+    id: 'g1',
+    name: 'Test Server',
+    members: {
+      cache: membersCache,
+      fetch: async (id) => {
+        const m = membersCache.get(String(id));
+        if (!m) throw new Error('Unbekanntes Mitglied');
+        return m;
+      },
+    },
+    channels: { cache: channelsCache },
+    roles: { cache: new Map([['555555555555555555', { id: '555555555555555555', name: 'Moderator' }]]) },
+  };
 
-  const alertContainer = buildViolationAlertContainer({
-    lang: 'de',
-    userId: '123456',
-    category: 'hate_and_discrimination',
-    warningNumber: 2,
-    maxWarnings: 3,
-    action: 'timeout_600s',
-    expiresAt: Date.now() + 86400000,
-    messageDeleted: true,
+  const channel = {
+    id: 'c1',
+    name: 'allgemein',
+    type: ChannelType.GuildText,
+    guildId: 'g1',
+    sent: [],
+    messages: {
+      fetch: async (id) => {
+        const m = messageMocks.get(String(id));
+        if (!m) throw new Error('Nachricht nicht gefunden');
+        return m;
+      },
+    },
+    send: async (p) => {
+      channel.sent.push(p);
+      return { id: `sent${channel.sent.length}` };
+    },
+  };
+  channelsCache.set('c1', channel);
+  channelsCache.set('444444444444444444', { id: '444444444444444444', name: 'allgemein', type: ChannelType.GuildText });
+
+  const logChannel = {
+    id: 'clog',
+    name: 'sicherheit',
+    type: ChannelType.GuildText,
+    sent: [],
+    send: async (p) => {
+      logChannel.sent.push(p);
+      return { id: `log${logChannel.sent.length}` };
+    },
+  };
+  channelsCache.set('clog', logChannel);
+
+  membersCache.set('111111111111111111', member('111111111111111111', { name: 'Max' }));
+  membersCache.set('222222222222222222', member('222222222222222222', { name: 'Anna' }));
+  membersCache.set('333333333333333333', member('333333333333333333', { admin: true, name: 'Admin' }));
+
+  for (const id of ['m1', 'm2', 'm3', 'm4']) {
+    messageMocks.set(id, {
+      id,
+      reply: async (p) => {
+        replies.push({ target: id, payload: p });
+      },
+    });
+  }
+
+  const msg = (over = {}) => ({
+    id: 'm1',
+    guild,
+    guildId: 'g1',
+    channelId: 'c1',
+    channel,
+    author: { id: '111111111111111111', bot: false, username: 'user111' },
+    member: membersCache.get('111111111111111111'),
+    content: 'Hallo Welt',
+    attachments: new Map(),
+    createdTimestamp: Date.now(),
+    webhookId: null,
+    system: false,
+    ...over,
   });
-  assert.ok(alertContainer);
+
+  return { guild, channel, logChannel, membersCache, messageMocks, replies, msg, member };
+}
+
+test('Security Bot: Sammel-Regeln (echte User, Admin-Immunität, nur Text)', async () => {
+  const w = makeWorld();
+  const ctx = { store: await makeStore(), logger: noopLogger, client: { user: { id: 'bot1' } } };
+
+  assert.equal(await shouldCollect({ ctx, msg: w.msg({ content: 'hi' }) }), true, 'normale Nachricht');
+  assert.equal(await shouldCollect({ ctx, msg: w.msg({ author: { id: 'u9', bot: true } }) }), false, 'Bot-Nachricht');
+  assert.equal(await shouldCollect({ ctx, msg: w.msg({ webhookId: 'wh1' }) }), false, 'Webhook');
+  assert.equal(await shouldCollect({ ctx, msg: w.msg({ content: '   ' }) }), false, 'ohne Text');
+  assert.equal(
+    await shouldCollect({ ctx, msg: w.msg({ member: w.membersCache.get('333333333333333333'), author: { id: '333333333333333333' } }) }),
+    false,
+    'Admin ist immun'
+  );
+  assert.equal(await shouldCollect({ ctx, msg: { ...w.msg(), guild: null } }), false, 'DMs werden ignoriert');
+  assert.equal(await shouldCollect({ ctx, msg: w.msg({ author: { id: 'bot1', bot: false } }) }), false, 'eigene Nachrichten');
 });
 
-test('Security Bot: Interaktions- & Modal-Handling', async () => {
-  const { handleInteraction } = require('../bots/security-bot/src/interactions');
-  const store = createSecurityStore({
-    env: (k) => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : ''),
-  });
-  await store.init();
-  const logger = { info: () => {}, warn: () => {}, error: () => {} };
-  const ctx = { store, logger, ownerId: 'owner_1' };
+test('Security Bot: Discord-Formate werden für die KI aufgelöst', async () => {
+  const w = makeWorld();
+  const text = await humanizeContent(
+    { guild: w.guild, attachments: new Map() },
+    'Hey <@222222222222222222> und <@!111111111111111111>! Rolle: <@&555555555555555555> Kanal: <#444444444444444444> Emoji: <:pog:123456789012345678> Zeit: <t:1700000000:F>'
+  );
 
-  // 1. Modal: sec_modal_api_key mit Key
-  let repliedPayload = null;
-  const mockModalApiKey = {
-    isChatInputCommand: () => false,
-    isModalSubmit: () => true,
-    isButton: () => false,
-    isStringSelectMenu: () => false,
-    guildId: 'g1',
-    customId: 'sec_modal_api_key',
-    user: { id: 'admin1' },
-    memberPermissions: { has: (p) => p === PermissionFlagsBits.Administrator },
-    fields: {
-      getTextInputValue: (id) => (id === 'sec_input_api_key' ? 'mistral-new-test-key' : ''),
-    },
-    deferReply: async () => {},
-    editReply: async (p) => { repliedPayload = p; },
-    reply: async (p) => { repliedPayload = p; },
+  assert.ok(text.includes('Hey Anna und Max'), 'User-Mentions → Anzeigenamen');
+  assert.ok(text.includes('Rolle: @Moderator'), 'Rollen-Mention → Rollenname');
+  assert.ok(text.includes('Kanal: #allgemein'), 'Kanal-Mention → Kanalname');
+  assert.ok(text.includes('Emoji: :pog:'), 'Custom-Emoji → Kurzname');
+  assert.ok(text.includes('Zeit: 2023-11-14 22:13 UTC'), 'Timestamp → lesbares Datum');
+  assert.ok(!text.includes('<@'), 'keine Discord-Mention-Syntax übrig');
+
+  // Markdown wird escaped, damit Gemini Rohtext sieht
+  const escaped = escapeDiscordMarkdown('**fett** _kursiv_ `code` ~~strike~~ | zitat\n> zeile');
+  assert.ok(escaped.includes('\\*\\*fett\\*\\*'));
+  assert.ok(escaped.includes('\\`code\\`'));
+  assert.ok(escaped.includes('\\> zeile'), 'führendes > escaped (kein Schein-Zitat)');
+
+  // Anhänge: Text bleibt, Hinweis wird angehängt
+  const attachments = new Map([['a1', { contentType: 'image/png' }]]);
+  const withAtt = await humanizeContent({ guild: w.guild, attachments }, 'Schau mal');
+  assert.ok(withAtt.includes('Schau mal'));
+  assert.ok(withAtt.includes('[Anhang war beigelegt'), 'Anhang-Hinweis vorhanden');
+});
+
+test('Security Bot: handleIncoming sammelt nur mit Key & stößt Batch bei Token-Limit aus', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  const dispatches = [];
+  const moderatorPath = require.resolve('../bots/security-bot/src/moderator');
+  const realModerator = require(moderatorPath);
+  require.cache[moderatorPath] = {
+    id: moderatorPath,
+    filename: moderatorPath,
+    loaded: true,
+    exports: { ...realModerator, processGuild: async (ctx, gid) => dispatches.push(gid) },
+  };
+
+  try {
+    const ctx = {
+      store,
+      logger: noopLogger,
+      env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+      client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+    };
+
+    // Ohne API-Key: nichts sammeln
+    await handleIncoming({ ctx, msg: w.msg() });
+    assert.equal(store.getBuffer('g1').length, 0, 'ohne Key wird nichts gespeichert');
+
+    // Mit Key: Nachricht landet im Buffer, noch kein Batch
+    store.setApiKey('g1', 'AIza-key-1234567890abcdef');
+    await handleIncoming({ ctx, msg: w.msg({ id: 'm1', content: 'Erste Nachricht' }) });
+    assert.equal(store.getBuffer('g1').length, 1);
+    assert.equal(dispatches.length, 0);
+
+    // Token-Limit klein stellen (min. 2000) -> genug lange Nachrichten sammeln
+    const origEnv = ctx.env;
+    ctx.env = (k, fb = '') => (k === 'SECURITY_GEMINI_MAX_INPUT_TOKENS' ? '2000' : origEnv(k, fb));
+
+    // 4 weitere Nachrichten à ~1500 Zeichen → über 2000 Tokens (3 Zeichen/Token)
+    for (let i = 0; i < 4; i++) {
+      await handleIncoming({
+        ctx,
+        msg: w.msg({ id: `mx${i}`, content: 'x'.repeat(1500), author: { id: '222222222222222222', bot: false } }),
+      });
+    }
+    assert.equal(dispatches.length, 1, 'Token-Limit hat genau einen Batch ausgelöst');
+    assert.equal(store.getBuffer('g1').length, 0, 'Buffer in den Batch umgezogen');
+    assert.equal(store.getBatches('g1').length, 1);
+    const batch = store.getBatches('g1')[0];
+    const msgs = store.getBatchMessages('g1', batch.id);
+    assert.equal(msgs.length, 5);
+    assert.equal(msgs[0].seq, 1, 'Batch-IDs starten bei 1');
+  } finally {
+    require.cache[moderatorPath] = {
+      id: moderatorPath,
+      filename: moderatorPath,
+      loaded: true,
+      exports: realModerator,
+    };
+  }
+});
+
+// ============================================================================
+// 6. Gemini-Client
+// ============================================================================
+
+test('Security Bot: Gemini-Request (Struktur, Header, günstigstes Modell)', async () => {
+  const calls = [];
+  const fetchFn = async (url, options) => {
+    calls.push({ url, options, body: JSON.parse(options.body) });
+    return {
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: '{"moderations":[]}' }] } }] }),
+    };
+  };
+
+  const res = await callGemini({
+    apiKey: 'AIza-test',
+    systemPrompt: 'SYSTEM',
+    userPrompt: 'USER',
+    env: () => '',
+    fetchFn,
+    sleepFn: async () => {},
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.model, DEFAULT_GEMINI_MODEL);
+  assert.match(calls[0].url, /models\/gemini-2\.5-flash-lite:generateContent/);
+  assert.equal(calls[0].options.headers['x-goog-api-key'], 'AIza-test');
+  assert.equal(calls[0].body.systemInstruction.parts[0].text, 'SYSTEM');
+  assert.equal(calls[0].body.contents[0].role, 'user');
+  assert.equal(calls[0].body.contents[0].parts[0].text, 'USER');
+  assert.equal(calls[0].body.generationConfig.responseMimeType, 'application/json');
+  assert.ok(calls[0].body.generationConfig.responseSchema, 'responseSchema erzwingt JSON-Struktur');
+  assert.deepEqual(calls[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+  assert.ok(
+    calls[0].body.safetySettings.every((s) => s.threshold === 'BLOCK_NONE'),
+    'Safety-Filter sind aus – der Moderator muss Toxizität lesen können'
+  );
+  assert.equal(estimateTokens('a'.repeat(30)), 10, 'Grobe Schätzung: 3 Zeichen/Token');
+  assert.equal(modelFromEnv(() => 'gemini-2.0-flash'), 'gemini-2.0-flash');
+  assert.equal(modelFromEnv(() => ''), DEFAULT_GEMINI_MODEL);
+
+  // 429 → kurzer Sofort-Retry
+  let n = 0;
+  const retryFetch = async () => {
+    n++;
+    if (n === 1) return { ok: false, status: 429, text: async () => '{"error":{"message":"rate limited"}}' };
+    return geminiJsonResponse({ moderations: [] });
+  };
+  const retryRes = await callGemini({ apiKey: 'k', systemPrompt: 's', userPrompt: 'u', fetchFn: retryFetch, sleepFn: async () => {} });
+  assert.equal(retryRes.ok, true);
+  assert.equal(n, 2, '429 wird sofort einmal wiederholt');
+
+  // 400 mit optionalen Feldern → Fallback-Kaskade ohne responseSchema/thinking/safety
+  let bodies = [];
+  const fallbackFetch = async (url, options) => {
+    bodies.push(JSON.parse(options.body));
+    if (bodies.length === 1) return { ok: false, status: 400, text: async () => '{"error":{"message":"Unknown name thinkingConfig"}}' };
+    return geminiJsonResponse({ moderations: [] });
+  };
+  const fallbackRes = await callGemini({ apiKey: 'k', systemPrompt: 's', userPrompt: 'u', fetchFn: fallbackFetch, sleepFn: async () => {} });
+  assert.equal(fallbackRes.ok, true);
+  assert.equal(bodies[1].generationConfig.responseSchema, undefined);
+  assert.equal(bodies[1].generationConfig.thinkingConfig, undefined);
+  assert.equal(bodies[1].safetySettings, undefined);
+
+  // Fatale Keys werden klar gemeldet
+  assert.deepEqual(await callGemini({ systemPrompt: 's', userPrompt: 'u' }), { ok: false, error: 'missing_api_key' });
+});
+
+test('Security Bot: validateApiKey & JSON-Parsing der Modell-Antwort', async () => {
+  const okFetch = async () => ({ ok: true, json: async () => ({ models: [] }) });
+  assert.deepEqual(await validateApiKey({ apiKey: 'gut', fetchFn: okFetch }), { ok: true });
+
+  const badFetch = async () => ({ ok: false, status: 400, text: async () => '{"error":{"message":"API key not valid"}}' });
+  const bad = await validateApiKey({ apiKey: 'schlecht', fetchFn: badFetch });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.fatal, true);
+  assert.match(bad.error, /API key not valid/);
+
+  // Parsing: normal, fenced, array, invalide Dauern, chat_reply
+  const parsed = parseModerationJson('{"moderations":[{"message_id":3,"action":"timeout","duration":"7x","primary":true,"reason":"r","personal_message":"m"},{"message_id":"4","action":"warn","duration":"1h","primary":false,"reason":"r2","personal_message":"m2"}],"chat_reply":"Nice chat"}');
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.moderations.length, 2);
+  assert.equal(parsed.moderations[0].duration, '1h', 'ungültige Dauer fällt auf 1h zurück');
+  assert.equal(parsed.moderations[1].action, 'warn');
+  assert.equal(parsed.moderations[1].duration, null, 'warn hat keine Dauer');
+  assert.equal(parsed.chat_reply, 'Nice chat');
+
+  const fenced = parseModerationJson('```json\n{"moderations":[]}\n```');
+  assert.equal(fenced.ok, true);
+  const arr = parseModerationJson('[{"message_id":1,"action":"warn","reason":"r","personal_message":"m"}]');
+  assert.equal(arr.ok, true);
+  assert.equal(arr.moderations.length, 1);
+
+  assert.equal(parseModerationJson('kein json').ok, false);
+  assert.equal(parseModerationJson('{"foo":1}').ok, false);
+  assert.equal(parseModerationJson('').ok, false);
+
+  assert.equal(
+    extractResponseText({ candidates: [{ content: { parts: [{ text: 'a' }, { text: 'b' }] } }] }),
+    'ab'
+  );
+});
+
+// ============================================================================
+// 7. Prompts: System-Prompt, User-Prompt & Chat-Verlauf-Format
+// ============================================================================
+
+test('Security Bot: System-Prompt enthält Register, Format & {USER}-Regel', () => {
+  const penaltyByUser = new Map([['u1', { count: 2, lastAt: Date.now() - 86400e3, lastAction: 'timeout' }]]);
+  const sp = buildSystemPrompt({
+    guildName: 'Kekse Server',
+    lang: 'de',
+    participants: [
+      { authorId: 'u1', authorName: 'Max' },
+      { authorId: 'u2', authorName: 'Anna' },
+    ],
+    penaltyByUser,
+  });
+
+  assert.ok(sp.includes('Kekse Server'));
+  assert.ok(sp.includes('Max (user_id=u1): 2 Moderation(en)'), 'Strafenregister sichtbar');
+  assert.ok(sp.includes('Anna (user_id=u2): sauber'), 'saubere Nutzer sichtbar');
+  assert.ok(sp.includes('{USER}'), 'Platzhalter-Regel erklärt');
+  assert.ok(sp.includes('primary'), 'Primary-Regel erklärt');
+  assert.ok(sp.includes('1m'), 'Timeout-Stufen erklärt');
+  assert.ok(sp.includes('Administratoren'), 'Admin-Immunität erklärt');
+  assert.ok(sp.includes('moderations'), 'JSON-Format erklärt');
+  assert.ok(sp.includes('Deutsch'), 'Antwortsprache vorgegeben');
+});
+
+test('Security Bot: Chat-Verlauf ist nach Kanälen gruppiert mit IDs ab 1', () => {
+  const base = Date.now();
+  const log = buildChatLog([
+    { seq: 2, ord: base + 2, channelId: 'c1', channelName: 'allgemein', sentAt: base + 2, authorName: 'Max', authorId: 'u1', content: 'Zweite' },
+    { seq: 1, ord: base + 1, channelId: 'c2', channelName: 'spam', sentAt: base + 1, authorName: 'Anna', authorId: 'u2', content: 'Erste' },
+    { seq: 3, ord: base + 3, channelId: 'c1', channelName: 'allgemein', sentAt: base + 3, authorName: 'Max', authorId: 'u1', content: 'Zeile 1\nZeile 2' },
+  ]);
+
+  assert.ok(log.includes('KANAL: #allgemein'));
+  assert.ok(log.includes('KANAL: #spam'));
+  const c1Block = log.slice(log.indexOf('#allgemein'));
+  assert.ok(c1Block.indexOf('[2]') < c1Block.indexOf('[3]'), 'innerhalb Kanals chronologisch');
+  assert.ok(/\[1\] .* Anna \(user_id=u2\):\n\| Erste/.test(log), 'Header-Format mit ID, Zeit, Name, user_id');
+  assert.ok(log.includes('| Zeile 1\n| Zeile 2'), 'mehrzeilige Nachrichten mit | -Präfix');
+
+  const up = buildUserPrompt({ adminPrompt: 'SEI STRENG', logText: log });
+  assert.ok(up.includes('SEI STRENG'), 'Admin-Prompt ist enthalten');
+  assert.ok(up.includes('AUFGABE'), 'Arbeitsauftrag am Ende');
+});
+
+// ============================================================================
+// 8. Moderator-Pipeline: Aktionen, Antwort auf Hauptverstoß, Retries
+// ============================================================================
+
+function geminiJsonResponse(json) {
+  return {
+    ok: true,
+    json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(json) }] } }] }),
+  };
+}
+
+test('Security Bot: Pipeline wendet Timeout & Warnung an und antwortet auf den Hauptverstoß', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.setLogChannelId('g1', 'clog');
+  store.setPrompt('g1', 'Keine Beleidigungen. Schwere Verstöße: Timeout.');
+
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '222222222222222222', authorName: 'Anna', content: 'leichte Stichelei', discordMessageId: 'm1', sentAt: Date.now() - 2000 });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'harte Beleidigung', discordMessageId: 'm2', sentAt: Date.now() - 1000 });
+  const batch = store.buildBatchFromBuffer('g1');
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const apiCalls = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    apiCalls.push({ url, body: JSON.parse(options.body) });
+    return geminiJsonResponse({
+      moderations: [
+        { message_id: 1, action: 'warn', primary: false, reason: 'Leichte Stichelei', personal_message: 'Hey {USER}, bittebleib freundlich.' },
+        { message_id: 2, action: 'timeout', duration: '5m', primary: true, reason: 'Schwere Beleidigung', personal_message: '{USER}, das war eine Beleidigung – 5 Minuten Pause.' },
+      ],
+      chat_reply: '',
+    });
+  };
+
+  try {
+    const ok = await processGuild(ctx, 'g1');
+    assert.equal(ok, true);
+    assert.equal(apiCalls.length, 1);
+
+    // Request-Struktur: System-Prompt + Admin-Prompt + Verlauf mit IDs
+    const body = apiCalls[0].body;
+    assert.ok(body.systemInstruction.parts[0].text.includes('Test Server'));
+    assert.ok(body.contents[0].parts[0].text.includes('Keine Beleidigungen'), 'Admin-Prompt gesendet');
+    assert.ok(body.contents[0].parts[0].text.includes('[2]'), 'Verlauf mit IDs gesendet');
+
+    // Timeout angewendet: 5 Minuten auf Max (message_id 2 → Max)
+    const max = w.membersCache.get('111111111111111111');
+    assert.equal(max.timeouts.length, 1, 'Timeout wurde angewendet');
+    assert.equal(max.timeouts[0].ms, 5 * 60 * 1000);
+    assert.match(max.timeouts[0].reason, /Schwere Beleidigung/);
+    assert.equal(w.membersCache.get('222222222222222222').timeouts.length, 0, 'Warnung ohne Timeout');
+
+    // Antworten: Primary zuerst, dann die Warnung – mit echter Erwähnung statt {USER}
+    assert.equal(w.replies.length, 2);
+    assert.equal(w.replies[0].target, 'm2', 'Primary-Antwort zuerst');
+    assert.ok(w.replies[0].payload.content.includes('<@111111111111111111>'), '{USER} → echte Mention');
+    assert.ok(!w.replies[0].payload.content.includes('{USER}'), 'kein Platzhalter übrig');
+    assert.equal(w.replies[1].target, 'm1');
+    assert.deepEqual(w.replies[1].payload.allowedMentions, { users: ['222222222222222222'], repliedUser: true });
+
+    // Strafenregister: beide Verstöße gezählt
+    assert.equal(store.countPenaltiesSince('g1', '111111111111111111', 20), 1);
+    assert.equal(store.countPenaltiesSince('g1', '222222222222222222', 20), 1);
+
+    // Batch komplett abgeräumt
+    assert.equal(store.getBatches('g1').length, 0);
+    assert.equal(store.countPendingMessages('g1'), 0);
+
+    // Log-Kanal: 2 Moderations-Hinweise
+    assert.equal(w.logChannel.sent.length, 2);
+    for (const payload of w.logChannel.sent) {
+      assert.equal(payload.flags & MessageFlags.IsComponentsV2, MessageFlags.IsComponentsV2);
+    }
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: chat_reply wird im Channel gesendet & geloggt', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.setLogChannelId('g1', 'clog');
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'Tschüss Leute!', discordMessageId: 'm1', sentAt: Date.now() });
+  store.buildBatchFromBuffer('g1');
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
   };
 
   const origFetch = globalThis.fetch;
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ results: [] }) });
+  globalThis.fetch = async () => geminiJsonResponse({ moderations: [], chat_reply: 'Mach’s gut Max, bis später!' });
   try {
-    await handleInteraction(ctx, mockModalApiKey);
-    assert.equal(store.getApiKey('g1'), 'mistral-new-test-key');
-    assert.ok(repliedPayload);
+    assert.equal(await processGuild(ctx, 'g1'), true);
+    assert.equal(w.channel.sent.length, 1, 'Chat-Antwort im Kanal');
+    assert.equal(w.channel.sent[0].content, 'Mach’s gut Max, bis später!');
+    assert.equal(w.logChannel.sent.length, 1, 'Chat-Antwort im Log-Kanal vermerkt');
+    assert.equal(store.countPenaltiesSince('g1', '111111111111111111', 20), 0, 'keine Strafe vermerkt');
   } finally {
     globalThis.fetch = origFetch;
   }
-
-  // 2. Modal: sec_modal_api_key mit 'remove'
-  const mockModalRemoveKey = {
-    ...mockModalApiKey,
-    fields: {
-      getTextInputValue: () => 'remove',
-    },
-  };
-  await handleInteraction(ctx, mockModalRemoveKey);
-  assert.equal(store.getApiKey('g1'), null);
-
-  // Ein ungültiger Mistral-Key darf einen bestehenden gültigen Key nicht ersetzen.
-  store.setApiKey('g1', 'existing-valid-key');
-  const mockModalInvalidKey = {
-    ...mockModalApiKey,
-    fields: { getTextInputValue: () => 'invalid-key' },
-  };
-  globalThis.fetch = async () => ({
-    ok: false,
-    status: 401,
-    text: async () => 'unauthorized',
-  });
-  try {
-    await handleInteraction(ctx, mockModalInvalidKey);
-    assert.equal(store.getApiKey('g1'), 'existing-valid-key');
-  } finally {
-    globalThis.fetch = origFetch;
-  }
-
-  // 3. Modal: sec_modal_warnings
-  const mockModalWarnings = {
-    ...mockModalApiKey,
-    customId: 'sec_modal_warnings',
-    fields: {
-      getTextInputValue: (id) => (id === 'sec_input_max_warn' ? '5' : '30'),
-    },
-    reply: async (p) => { repliedPayload = p; },
-  };
-  await handleInteraction(ctx, mockModalWarnings);
-  const updatedCfg = store.getGuild('g1');
-  assert.equal(updatedCfg.maxWarnings, 5);
-  assert.equal(updatedCfg.violationExpiryDays, 30);
-
-  // 4. Button: sec_btn_toggle_autodelete
-  let updatedPayload = null;
-  const mockBtnAutoDel = {
-    isChatInputCommand: () => false,
-    isModalSubmit: () => false,
-    isButton: () => true,
-    isStringSelectMenu: () => false,
-    guildId: 'g1',
-    customId: 'sec_btn_toggle_autodelete',
-    user: { id: 'admin1' },
-    memberPermissions: { has: () => true },
-    update: async (p) => { updatedPayload = p; },
-  };
-  await handleInteraction(ctx, mockBtnAutoDel);
-  assert.equal(store.getGuild('g1').defaultAutoDelete, false);
-
-  // 5. Button: sec_sens_btn_strict
-  const mockBtnStrict = {
-    ...mockBtnAutoDel,
-    customId: 'sec_sens_btn_strict',
-  };
-  await handleInteraction(ctx, mockBtnStrict);
-  assert.equal(store.getGuild('g1').sensitivity, 'strict');
-  assert.equal(store.getGuild('g1').categoryThresholds.hate_and_discrimination, 0.30);
-
-  // 6. SelectMenu: sec_del_viol_<userId>
-  store.addViolation({
-    id: 'v_to_delete',
-    guildId: 'g1',
-    userId: 'u_target',
-    highestCategory: 'violence_and_threats',
-    highestScore: 0.9,
-    actionTaken: 'warn',
-    createdAt: Date.now(),
-    expiresAt: Date.now() + 100000,
-  });
-
-  const mockSelectDelViol = {
-    isChatInputCommand: () => false,
-    isModalSubmit: () => false,
-    isButton: () => false,
-    isStringSelectMenu: () => true,
-    guildId: 'g1',
-    customId: 'sec_del_viol_u_target',
-    values: ['v_to_delete'],
-    user: { id: 'admin1' },
-    memberPermissions: { has: () => true },
-    guild: {
-      members: {
-        fetch: async () => ({ user: { id: 'u_target', tag: 'TargetUser' } }),
-      },
-    },
-    update: async (p) => { updatedPayload = p; },
-  };
-
-  await handleInteraction(ctx, mockSelectDelViol);
-  assert.equal(store.getViolation('v_to_delete').deleted, true);
-  assert.equal(store.getViolations('g1', 'u_target', { activeOnly: true }).length, 0);
 });
 
-test('Security Bot: Chat-Input Commands & Admin Panel', async () => {
-  const { handleChatInput } = require('../bots/security-bot/src/commands');
-  const { openPanel, sendJoinNotice } = require('../bots/security-bot/src/admin-panel');
-  const { startScheduler } = require('../bots/security-bot/src/scheduler');
-
-  const store = createSecurityStore({
-    env: (k) => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : ''),
-  });
-  await store.init();
-  const logger = { info: () => {}, warn: () => {}, error: () => {} };
-
-  let dmMessages = [];
-  const mockClient = {
-    guilds: {
-      cache: new Map([
-        [
-          'g1',
-          {
-            id: 'g1',
-            name: 'Test Server',
-            memberCount: 42,
-            ownerId: 'owner_1',
-            members: {
-              cache: new Map(),
-              fetch: async () => ({ id: 'owner_1' }),
-            },
-          },
-        ],
-      ]),
-    },
-    users: {
-      cache: new Map(),
-      fetch: async (id) => ({
-        id,
-        createDM: async () => ({
-          send: async (p) => {
-            dmMessages.push(p);
-          },
-        }),
-      }),
-    },
-  };
+test('Security Bot: Admin-Immunität greift auch beim Anwenden (Doppelabsicherung)', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.setLogChannelId('g1', 'clog');
+  // Collector würde Admins nie einsammeln – hier wird der Schutz im Moderator geprüft:
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '333333333333333333', authorName: 'Admin', content: 'admin text', discordMessageId: 'm1', sentAt: Date.now() });
+  store.buildBatchFromBuffer('g1');
 
   const ctx = {
-    client: mockClient,
     store,
-    logger,
-    ownerId: 'owner_1',
-    commandIds: { set_api_key: '999', help: '888' },
-    panelSessions: new Map(),
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
   };
 
-  // 1. /help
-  let replyPayload = null;
-  const mockHelpInteraction = {
-    commandName: 'help',
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    geminiJsonResponse({
+      moderations: [{ message_id: 1, action: 'timeout', duration: '1w', primary: true, reason: 'Verstoß', personal_message: '{USER} test' }],
+    });
+  try {
+    assert.equal(await processGuild(ctx, 'g1'), true);
+    assert.equal(w.membersCache.get('333333333333333333').timeouts.length, 0, 'Admin bekommt KEINEN Timeout');
+    assert.equal(w.replies.length, 0, 'Admin wird nicht angesprochen');
+    assert.equal(store.countPenaltiesSince('g1', '333333333333333333', 20), 0);
+    assert.equal(w.logChannel.sent.length, 1, 'Übersprungen-Hinweis im Log');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: API-Fehler verwirft NICHTS – Backoff, Retry, dann Erfolg', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.setLogChannelId('g1', 'clog');
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'Nachricht', discordMessageId: 'm1', sentAt: Date.now() });
+  const batch = store.buildBatchFromBuffer('g1');
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls <= 4) return { ok: false, status: 429, text: async () => '{"error":{"message":"Resource has been exhausted"}}' };
+    return geminiJsonResponse({
+      moderations: [{ message_id: 1, action: 'warn', primary: true, reason: 'Spam', personal_message: '{USER} bitte weniger spammen.' }],
+    });
+  };
+
+  try {
+    // Versuch 1: schlägt fehl
+    assert.equal(await processGuild(ctx, 'g1'), false);
+    let meta = store.getBatches('g1')[0];
+    assert.equal(meta.id, batch.id, 'Batch bleibt erhalten');
+    assert.equal(meta.retryCount, 1);
+    assert.ok(meta.nextRetryAt > Date.now(), 'Backoff gesetzt');
+    assert.equal(store.getBatchMessages('g1', batch.id).length, 1, 'Nachrichten NICHT verworfen');
+    assert.equal(w.logChannel.sent.length, 1, 'Fehler im Log-Kanal gemeldet');
+
+    // Währenddessen sammeln sich neue Nachrichten ganz normal im Buffer
+    store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '222222222222222222', authorName: 'Anna', content: 'neue Nachricht während des Fehlers', discordMessageId: 'm2', sentAt: Date.now() });
+    assert.equal(store.getBuffer('g1').length, 1);
+
+    // Versuch 2 vor Ablauf des Backoffs: wird übersprungen (interne Sofort-Retries haben schon 2 Calls gemacht)
+    assert.equal(await processGuild(ctx, 'g1'), false);
+    assert.equal(calls, 2, 'kein API-Call vor nextRetryAt');
+
+    // Backoff ablaufen lassen → Versuch 2 schlägt wieder fehl → zweiter Log-Eintrag
+    meta.nextRetryAt = Date.now() - 1;
+    store.setBatches('g1', store.getBatches('g1'));
+    assert.equal(await processGuild(ctx, 'g1'), false);
+    assert.equal(calls, 4);
+    assert.equal(store.getBatches('g1')[0].retryCount, 2);
+
+    // Backoff ablaufen lassen → Versuch 3 klappt → Batch abgeschlossen
+    store.getBatches('g1')[0].nextRetryAt = Date.now() - 1;
+    store.setBatches('g1', store.getBatches('g1'));
+    assert.equal(await processGuild(ctx, 'g1'), true);
+    assert.equal(w.replies.length, 1);
+    assert.equal(store.getBatches('g1').length, 0, 'erfolgreicher Batch ist weg');
+    // Der Buffer mit der neuen Nachricht ist unberührt geblieben:
+    assert.equal(store.getBuffer('g1').length, 1);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: Kaputte Modell-Antwort wird wie ein API-Fehler wiederholt', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'hi', discordMessageId: 'm1', sentAt: Date.now() });
+  store.buildBatchFromBuffer('g1');
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return { ok: true, json: async () => ({ candidates: [{ content: { parts: [{ text: 'Ich bin kein JSON' }] } }] }) };
+  };
+  try {
+    assert.equal(await processGuild(ctx, 'g1'), false);
+    assert.equal(store.getBatches('g1')[0].retryCount, 1);
+    assert.match(store.getBatches('g1')[0].lastError, /invalid_model_response/);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: Ohne Key wartet der Batch geduldig (kein Verwerfen)', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'hi', discordMessageId: 'm1', sentAt: Date.now() });
+  store.buildBatchFromBuffer('g1');
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    throw new Error('darf nicht aufgerufen werden');
+  };
+  try {
+    assert.equal(await processGuild(ctx, 'g1'), false);
+    assert.equal(calls, 0, 'kein API-Call ohne Key');
+    assert.equal(store.getBatches('g1').length, 1, 'Batch bleibt liegen');
+    assert.equal(store.getBatches('g1')[0].keyNoticeSent, true);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: Backoff-Plan & personal_message-Platzhalter', () => {
+  assert.equal(BACKOFF_SCHEDULE_MS[0], 2 * 60_000, 'erster Retry nach 2 Minuten');
+  assert.equal(nextRetryDelay(1), 2 * 60_000);
+  assert.equal(nextRetryDelay(2), 5 * 60_000);
+  assert.equal(nextRetryDelay(4), 30 * 60_000);
+  assert.equal(nextRetryDelay(99), 6 * 60 * 60_000, 'maximal 6 Stunden');
+
+  const mod = { personal_message: 'Hey {USER}, [USER] und @user, denk an die Regeln! Grüße, {NAME}' };
+  const text = personalMessageText(mod, 'u42', 'Max');
+  assert.ok(text.includes('<@u42>'));
+  assert.ok(!/\{\s*USER\s*\}/i.test(text));
+  assert.ok(text.includes('Max'));
+
+  const without = personalMessageText({ personal_message: 'Bitte benimm dich.' }, 'u42', 'Max');
+  assert.ok(without.startsWith('<@u42>'), 'fehlende Erwähnung wird ergänzt');
+});
+
+test('Security Bot: flushBuffer baut Batch und startet Analyse', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-flushbuffer-key-123456');
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'hi', discordMessageId: 'm1', sentAt: Date.now() });
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => geminiJsonResponse({ moderations: [] });
+  try {
+    const batch = flushBuffer(ctx, 'g1');
+    assert.ok(batch, 'Batch wurde gebaut');
+    assert.equal(store.getBuffer('g1').length, 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.getBatches('g1').length, 0, 'Batch wurde direkt verarbeitet');
+    assert.equal(flushBuffer(ctx, 'g2'), null, 'leerer Buffer -> kein Batch');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ============================================================================
+// 9. Scheduler: 0-Uhr-Flush & Retry-Tick
+// ============================================================================
+
+test('Security Bot: Mitternachts-Flush wertet auch kleine Verläufe aus', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-scheduler-key-123456');
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'kurz vor Mitternacht', discordMessageId: 'm1', sentAt: Date.now() });
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+    schedulerState: { lastDayByGuild: new Map([['g1', '2000-01-01']]), lastPrune: Date.now() }, // "gestern"
+  };
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => geminiJsonResponse({ moderations: [] });
+  try {
+    const flushed = tickOnce(ctx);
+    assert.equal(flushed, 1, 'genau ein 0-Uhr-Flush');
+    assert.equal(store.getBuffer('g1').length, 0, 'Buffer wurde um 0 Uhr geleert');
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.getBatches('g1').length, 0, 'kleiner Verlauf wurde analysiert');
+
+    // Zweiter Tick am selben Tag: kein erneuter Flush
+    const flushedAgain = tickOnce(ctx);
+    assert.equal(flushedAgain, 0);
+
+    // Zeitzonen-Umschaltung: 23:59 UTC ist in Berlin schon der nächste Tag
+    assert.equal(dayKeyInTz(new Date('2026-09-10T23:59:00Z'), 'Europe/Berlin'), '2026-09-11');
+    assert.equal(dayKeyInTz(new Date('2026-09-10T12:00:00Z'), 'Europe/Berlin'), '2026-09-10');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// ============================================================================
+// 10. Interactions & Command-Handler
+// ============================================================================
+
+function adminInteraction(over = {}) {
+  return {
+    isChatInputCommand: () => false,
+    isModalSubmit: () => false,
     inGuild: () => true,
     guildId: 'g1',
-    user: { id: 'u1' },
     locale: 'de',
-    reply: async (p) => { replyPayload = p; },
-  };
-  await handleChatInput(ctx, mockHelpInteraction);
-  assert.ok(replyPayload);
-
-  // 2. /status
-  const mockStatusInteraction = {
-    commandName: 'status',
-    inGuild: () => true,
-    guildId: 'g1',
-    user: { id: 'u1' },
-    member: { communicationDisabledUntil: null },
-    locale: 'de',
-    reply: async (p) => { replyPayload = p; },
-  };
-  await handleChatInput(ctx, mockStatusInteraction);
-  assert.ok(replyPayload);
-
-  // 3. /set_language
-  const mockSetLangInteraction = {
-    commandName: 'set_language',
-    inGuild: () => true,
-    guildId: 'g1',
     user: { id: 'admin1' },
-    memberPermissions: { has: () => true },
-    options: { getString: () => 'en' },
-    locale: 'en',
-    reply: async (p) => { replyPayload = p; },
+    memberPermissions: { has: (p) => p === PermissionFlagsBits.Administrator },
+    options: { getString: () => null, getChannel: () => null },
+    deferReply: async () => {},
+    editReply: async (p) => p,
+    reply: async (p) => p,
+    showModal: async (m) => m,
+    ...over,
   };
-  await handleChatInput(ctx, mockSetLangInteraction);
+}
+
+test('Security Bot: /set_gemini_api_key (setzen, ungültig, remove, unverändert)', async () => {
+  const store = await makeStore();
+  const ctx = { store, logger: noopLogger, env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb) };
+
+  const origFetch = globalThis.fetch;
+  try {
+    // 1) Gültiger Key wird gespeichert
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ models: [] }) });
+    await handleChatInput(ctx, adminInteraction({
+      commandName: 'set_gemini_api_key',
+      options: { getString: () => 'AIzaSyD-new-valid-key-1234567890' },
+    }));
+    assert.equal(store.getApiKey('g1'), 'AIzaSyD-new-valid-key-1234567890');
+
+    // 2) Ungültiger Key (Google lehnt ab) wird NICHT gespeichert
+    globalThis.fetch = async () => ({ ok: false, status: 400, text: async () => '{"error":{"message":"API key not valid"}}' });
+    await handleChatInput(ctx, adminInteraction({
+      commandName: 'set_gemini_api_key',
+      options: { getString: () => 'AIzaSyD-invalid-key-000000000000000' },
+    }));
+    assert.equal(store.getApiKey('g1'), 'AIzaSyD-new-valid-key-1234567890');
+
+    // 3) Maskierter unveränderter Key -> beibehalten
+    const masked = maskApiKey(store.getApiKey('g1'));
+    await handleChatInput(ctx, adminInteraction({
+      commandName: 'set_gemini_api_key',
+      options: { getString: () => masked },
+    }));
+    assert.equal(store.getApiKey('g1'), 'AIzaSyD-new-valid-key-1234567890');
+
+    // 4) "remove" löscht
+    await handleChatInput(ctx, adminInteraction({
+      commandName: 'set_gemini_api_key',
+      options: { getString: () => 'remove' },
+    }));
+    assert.equal(store.getApiKey('g1'), null);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+
+  // Nicht-Admin wird abgewiesen
+  const denied = await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_gemini_api_key',
+    memberPermissions: { has: () => false },
+    options: { getString: () => 'AIzaSyD-some-key-123456789012345' },
+  }));
+  assert.ok(denied);
+});
+
+test('Security Bot: /set_prompt öffnet Formular mit letztem/Standard-Prompt', async () => {
+  const store = await makeStore();
+  const ctx = { store, logger: noopLogger, env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb) };
+
+  // 1) Ohne gespeicherten Prompt: Standardtext vorbelegt
+  let shownModal = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_prompt',
+    showModal: async (m) => { shownModal = m; },
+  }));
+  assert.ok(shownModal, 'Modal wurde geöffnet');
+  assert.equal(shownModal.data.custom_id, 'secgem_modal_prompt');
+  const presetJson = shownModal.toJSON();
+  assert.equal(presetJson.components[0].components[0].value, t('defaultPrompt', 'de'), 'Standardtext ist eingetragen');
+  assert.equal(presetJson.components[0].components[0].custom_id, 'secgem_input_prompt');
+
+  // 2) Modal absenden: Prompt wird gespeichert
+  await handleInteraction(ctx, adminInteraction({
+    isModalSubmit: () => true,
+    customId: 'secgem_modal_prompt',
+    fields: { getTextInputValue: () => '  Sei gnadenlos streng bei Hate.  ' },
+  }));
+  assert.equal(store.getPrompt('g1'), 'Sei gnadenlos streng bei Hate.');
+
+  // 3) Nochmal öffnen: letzter Prompt ist vorbelegt
+  shownModal = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_prompt',
+    showModal: async (m) => { shownModal = m; },
+  }));
+  assert.equal(shownModal.toJSON().components[0].components[0].value, 'Sei gnadenlos streng bei Hate.');
+
+  // 4) Leeres Formular -> Zurücksetzen auf Standard
+  await handleInteraction(ctx, adminInteraction({
+    isModalSubmit: () => true,
+    customId: 'secgem_modal_prompt',
+    fields: { getTextInputValue: () => '   ' },
+  }));
+  assert.equal(store.getPrompt('g1'), null);
+
+  // Nicht-Admin darf das Formular nicht öffnen
+  let opened = false;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_prompt',
+    memberPermissions: { has: () => false },
+    showModal: async () => { opened = true; },
+  }));
+  assert.equal(opened, false);
+});
+
+test('Security Bot: /set_log_channel & /set_language & /help', async () => {
+  const store = await makeStore();
+  const ctx = { store, logger: noopLogger, env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb), commandIds: {}, guildCommandIds: new Map() };
+
+  // Log-Kanal setzen
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_log_channel',
+    options: { getChannel: () => ({ id: 'c99' }) },
+  }));
+  assert.equal(store.getLogChannelId('g1'), 'c99');
+
+  // Ohne Kanal -> entfernen
+  await handleChatInput(ctx, adminInteraction({ commandName: 'set_log_channel' }));
+  assert.equal(store.getLogChannelId('g1'), null);
+
+  // Sprache setzen
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_language',
+    options: { getString: () => 'en' },
+  }));
   assert.equal(store.getLanguage('g1'), 'en');
 
-  // 4. /adminpanel in DM durch Owner
-  const mockPanelInteraction = {
-    commandName: 'adminpanel',
-    channel: { type: ChannelType.DM },
-    user: { id: 'owner_1' },
-    reply: async (p) => { replyPayload = p; },
-  };
-  await handleChatInput(ctx, mockPanelInteraction);
-  assert.ok(replyPayload);
+  // /help antwortet mit Container & klickbaren Mentions
+  let helpPayload = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_help_x', // fällt in default -> würde unbekannt antworten; stattdessen korrekt:
+  })).catch(() => {});
+  const helpInteraction = adminInteraction({
+    commandName: 'help',
+    reply: async (p) => { helpPayload = p; },
+  });
+  ctx.commandIds = { set_gemini_api_key: '1', set_prompt: '2', set_log_channel: '3', set_language: '4', help: '5' };
+  await handleChatInput(ctx, helpInteraction);
+  assert.ok(helpPayload);
+  assert.ok(JSON.stringify(helpPayload).includes('set_prompt'), 'help nennt /set_prompt');
 
-  // 5. sendJoinNotice
-  await sendJoinNotice(ctx, { id: 'g_new', name: 'Brand New Server', memberCount: 15, ownerId: 'guild_owner' });
-  assert.ok(dmMessages.length > 0);
+  // Unbekannter Command -> freundliche Antwort, kein Crash
+  const unknownReply = await handleChatInput(ctx, adminInteraction({ commandName: 'does_not_exist' }));
+  assert.ok(unknownReply);
 
-  // 6. Scheduler Start & Stop
-  const stopScheduler = startScheduler({ ctx });
-  assert.equal(typeof stopScheduler, 'function');
-  stopScheduler();
+  // commandMention-Fallback ohne IDs
+  assert.equal(commandMention({ commandIds: {} }, 'help'), '/help');
+  assert.equal(commandMention({ commandIds: { help: '42' } }, 'help'), '</help:42>');
 });

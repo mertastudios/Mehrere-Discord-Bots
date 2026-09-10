@@ -57,12 +57,14 @@ test('Security Commands: globaler Payload enthält den vollständigen Satz mit k
 
   assert.deepEqual(globalPayload.map((command) => command.name), ALL_COMMAND_NAMES);
   assert.deepEqual(GLOBAL_COMMAND_NAMES, ALL_COMMAND_NAMES);
+  assert.deepEqual(GUILD_COMMAND_NAMES, ALL_COMMAND_NAMES);
   assert.deepEqual(guildPayload.map((command) => command.name), GUILD_COMMAND_NAMES);
 
-  const adminPanel = globalPayload.find((command) => command.name === 'adminpanel');
-  assert.deepEqual(adminPanel.contexts, [1], '/adminpanel ist ausschließlich Bot-DM');
-  for (const command of globalPayload.filter((item) => item.name !== 'adminpanel')) {
+  // Alle fünf Commands sind Guild-only und Admin-only
+  for (const command of globalPayload) {
     assert.deepEqual(command.contexts, [0], `/${command.name} ist ausschließlich Guild-Context`);
+    assert.deepEqual(command.integration_types, [0]);
+    assert.equal(command.default_member_permissions, '8', `/${command.name} ist Admin-only`);
   }
   for (const command of guildPayload) {
     assert.equal(command.contexts, undefined);
@@ -100,7 +102,7 @@ test('Security Commands: Reihenfolge ist globaler PUT, optionale Guild, dann alt
   assert.deepEqual(stored.guilds.get(GUILD_2), {});
   assert.ok(logs.info.some((line) => line.includes(`Application-ID=${APP_ID}`)));
   assert.ok(logs.info.some((line) => line.includes('Deploy-Commit=test-commit')));
-  assert.ok(logs.info.some((line) => line.includes('/set_api_key (global-1)')));
+  assert.ok(logs.info.some((line) => line.includes('/set_gemini_api_key (global-1)')));
 });
 
 test('Security Commands: fehlerhafte optionale Guild blockiert den globalen Fallback nicht', async () => {
@@ -190,7 +192,7 @@ test('Security Commands: Live-Verifikation liest den vollständigen globalen Sat
   assert.equal(gets.length, 1);
   assert.deepEqual(Object.keys(ctx.commandIds), ALL_COMMAND_NAMES);
   assert.ok(logs.info.some((line) => line.includes('Discord GET global zurückgegeben')));
-  assert.ok(logs.info.some((line) => line.includes('/adminpanel (live-11)')));
+  assert.ok(logs.info.some((line) => line.includes('/help (live-5)')));
 });
 
 test('Security Commands: Live-Verifikation repariert einen unvollständigen globalen Satz', async () => {

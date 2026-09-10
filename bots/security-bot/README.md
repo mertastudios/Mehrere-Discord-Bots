@@ -1,95 +1,171 @@
 # 🛡️ Security Bot
 
-Ein moderner, leistungsstarker Sicherheits- und Moderations-Bot für Discord mit direkter Anbindung an die **Mistral Moderation API** (`mistral-moderation-latest`).
+Ein vollautomatischer **KI-Sicherheitsbot** für Discord, angetrieben von **Google Gemini** –
+mit dem günstigsten Gemini-Modell (`gemini-2.5-flash-lite`, 0,10 $ / 1 Mio. Input-Tokens,
+kostenloser Free-Tier verfügbar).
 
-Der Bot überwacht vollautomatisch alle Textnachrichten von Nicht-Administratoren in Echtzeit, straft Regelverstöße gemäß anpassbaren Eskalationsstufen ab und schützt deinen Server vor Hass und Diskriminierung, Gewalt und Bedrohungen, gefährlichen bzw. kriminellen Inhalten, NSFW und Selbstverletzung.
+Der Bot verhält sich wie ein zuverlässiger **OP-Moderator**: Er sammelt diskret alle
+Textnachrichten echter Nutzer, bis genug Tokens für eine Analyse beisammen sind (oder
+Mitternacht ist), schickt den Verlauf gemeinsam mit euren Server-Regeln an Gemini und
+setzt dessen Entscheidungen um – **Warnung oder Timeout**, immer mit einer persönlichen,
+begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendsten Verstoß.
 
 ---
 
 ## 🌟 Highlights
 
-- **Mistral Moderation API**: Modernste mehrsprachige KI-Erkennung für Text (`mistral-moderation-latest`).
-- **Resilienz & Silent Fallback**: Bei fehlendem API-Key oder Mistral-Fehlern/Rate-Limits arbeitet der Bot geräuschlos weiter ohne den Chat zu stören.
-- **Admin-Bypass**: Mitglieder mit Administrator-Berechtigungen werden automatisch ignoriert.
-- **10 Sprachen**: Vollständig lokalisiert auf Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch, Japanisch, Koreanisch, Chinesisch und Italienisch.
-- **Turso DB & RAM-First**: Nutzt dieselbe Turso-Datenbank wie der XP-Bot mit Dirty-Tracking, periodischem Backup und lokalem Datei-Fallback.
-- **Kein Kick / Kein Ban**: Der Bot verhängt gezielt Verwarnungen und Timeouts (keine zerstörerischen Serverausschlüsse).
-- **Modernes Design**: Alle Nachrichten und Menüs nutzen Discord Components V2 (Container-Layout).
+- **Gemini-Powered Context-Moderation**: Gemini bekommt den Chat-Verlauf **mit Kontext**
+  (chronologisch, nach Kanälen gruppiert) und entscheidet selbstständig – auch mehrere
+  Nutzer gleichzeitig.
+- **Günstigstes Modell**: `gemini-2.5-flash-lite` (überschreibbar), gesteuertes JSON-
+  Antwortformat via Structured Output, Thinking & Safety-Filter bewusst deaktiviert
+  (ein Moderationsbot muss Toxizität ja lesen dürfen).
+- **Nichts geht verloren**: Bei API-Fehlern oder Rate-Limits bleibt der gesammelte
+  Verlauf **vollständig erhalten**, neue Nachrichten sammeln sich derweil weiter, und
+  der Bot wiederholt die Analyse mit wachsendem Abstand (2min → 5min → 15min → … → max. 6h).
+- **0-Uhr-Flush**: Jede Nacht um 0 Uhr (Zeitzone der Serversprache) wird auch ein kleiner
+  Verlauf analysiert – auf toten Servern bekommen Nutzer ihre Verwarnung spätestens
+  nachts statt erst nach Tagen.
+- **Admins sind immun**: Mitglieder mit Administrator-Berechtigung werden nie gesammelt,
+  nie an Gemini geschickt und beim Anwenden zusätzlich ein zweites Mal geprüft.
+- **Nur Text**: Bilder und Anhänge werden bewusst nicht analysiert – der Bot moderiert
+  Text. Anhänge werden im Verlauf nur als Hinweis markiert.
+- **Sauber lesbarer Verlauf für die KI**: Mentions → Anzeigenamen, Rollen/Kanäle/Emojis/
+  Timestamps → Klartext, Markdown escaped, Nachrichten-IDs zählen pro Analyse von 1.
+- **Strafenregister**: Gemini sieht pro Teilnehmer, wie oft er in den letzten **20 Tagen**
+  moderiert wurde – Eskalation inklusive.
+- **Fair & deeskalierend**: In den meisten Fällen macht niemand etwas Schlimmes – dann
+  moderiert Gemini niemanden und darf optional kurz und locker im Chat antworten.
+- **10 Sprachen**: Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch,
+  Japanisch, Koreanisch, Chinesisch, Italienisch.
+- **Turso DB & RAM-First**: Nutzt dieselbe Turso-Datenbank wie der XP-Bot (neue,
+  getrennte Tabellen `secgem_*`), mit Dirty-Tracking, Backup-Intervall und lokalem
+  Datei-Fallback – Batches & Buffer überleben Neustarts.
 
 ---
 
-## 📋 Slash-Commands
+## 📋 Slash-Commands (alle ausschließlich für Administratoren)
 
-| Befehl | Berechtigung | Beschreibung |
-|---|---|---|
-| `/set_api_key` | **Admins** | Öffnet ein Modal-Formular zur sicheren Eingabe des Mistral API-Keys für diesen Server. |
-| `/set_language` | **Admins** | Wählt eine von 10 Sprachen aus, die dauerhaft für den Server gilt. |
-| `/set_sensitivity` | **Admins** | Ändert das Schutzlevel (`Strikt` 30%, `Ausgewogen` 50%, `Tolerant` 75%). |
-| `/configure_rules` | **Admins** | Interaktive Übersicht aller Moderationskategorien, Schwellenwerte und Auto-Delete-Optionen. |
-| `/set_warnings` | **Admins** | Konfiguriert die maximale Anzahl an Verwarnungen, Verfallsdauer (in Tagen) und Aktionen pro Verwarnungsstufe. |
-| `/status` | **Alle** | Zeigt dem Nutzer seine eigenen aktiven Verwarnungen, Timeout-Status und Historie an. |
-| `/manage_user [user]` | **Admins** | Überprüft den Status beliebiger Nutzer, hebt Timeouts auf oder löscht einzelne Verwarnungen (z. B. bei Fehlalarmen). |
-| `/test_text [text]` | **Admins** | Testet einen Text gegen die Mistral Moderation API und liefert einen detaillierten Analysebericht mit Score-Balken. |
-| `/admin_set_bot_profile` | **Admins** | Ändert das Server-Profilbild des Bots (`Standard`, `Server-Icon` oder `Server-Owner`). |
-| `/help` | **Alle** | Listet alle Befehle mit klickbaren Mentions und Erklärungen in der Serversprache auf. |
-| `/adminpanel` | **Bot-Owner** | Owner-Verwaltungsübersicht aller Server im Privatchat (DM) des Bots. |
+| Befehl | Beschreibung |
+|---|---|
+| `/set_gemini_api_key [key]` | Hinterlegt den Google Gemini API-Key für diesen Server (wird live bei Google geprüft). `remove` löscht den Key. Keys: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `/set_prompt` | Öffnet ein **Formular** für die KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der Standardtext (oder dein letzter Text) ist bereits eingetragen. Leer absenden = zurücksetzen auf Standard. |
+| `/set_log_channel [channel]` | Setzt den Log-Kanal, in den der Bot Moderations-Hinweise, API-Fehler und Meldungen sendet. Ohne Kanal-Angabe wird der Log-Kanal entfernt. |
+| `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die 0-Uhr-Zeitzone & die Standardsprache der KI-Antworten). |
+| `/help` | Übersicht aller Befehle mit klickbaren Mentions. |
+
+---
+
+## 🧠 Wie die Moderation funktioniert
+
+1. **Sammeln**: Jede Textnachricht echter Nutzer (ohne Bots/Webhooks/Admins) landet im
+   Buffer – mit Kanal, Anzeigename, Nutzer-ID und Zeitstempel.
+2. **Batch bauen**: Sobald das Token-Budget erreicht ist (Standard **15.000 Token** ≈
+   45.000 Zeichen, einstellbar über `SECURITY_GEMINI_MAX_INPUT_TOKENS`), werden alle
+   gesammelten Nachrichten zu einem Batch mit **IDs ab 1** verpackt. Zusätzlich wird der
+   Buffer **jede Nacht um 0 Uhr** als Mini-Verlauf ausgewertet.
+3. **Analyse**: Gemini erhält
+   - den **System-Prompt** (Rolle, Antwortformat, `{USER}`-Platzhalter-Regel,
+     „genau ein `primary`“-Regel, Timeout-Stufen, Strafenregister der Teilnehmer),
+   - die **Admin-Anweisungen** aus `/set_prompt` (Regeln, Strenge, Maßnahmen) und
+   - den **Chat-Verlauf** (gruppiert nach Kanälen, chronologisch, Klartext).
+4. **Antwort**: Ein einziges JSON:
+   ```json
+   {
+     "moderations": [
+       {
+         "message_id": 7,
+         "action": "timeout",
+         "duration": "5m",
+         "primary": true,
+         "reason": "Gegen Regel 2 verstoßen: Beleidigung",
+         "personal_message": "{USER}, das war eine klare Beleidigung – 5 Minuten Pause."
+       }
+     ],
+     "chat_reply": ""
+   }
+   ```
+5. **Anwenden**: Der Bot antwortet **auf die Nachricht mit dem schwerwiegendsten
+   Verstoß** (`primary: true`), ersetzt `{USER}` durch die echte Erwähnung, wendet den
+   **Timeout** an (1m / 5m / 10m / 1h / 1d / 1w) bzw. sendet nur die **Warnung**, und
+   pflegt das Strafenregister. Alles Details wandern in den Log-Kanal.
+6. **Niemand schuldig?** Dann passiert nichts – optional schreibt Gemini eine kurze,
+   lockere Antwort in den Chat (`chat_reply`).
+
+### Maßnahmen, die Gemini wählen kann
+
+- `warn` – persönliche Ermahnung ohne Timeout
+- `timeout` mit `duration`: `1m`, `5m`, `10m`, `1h`, `1d`, `1w`
+
+Welche Maßnahme wann greift, bestimmst **du** in `/set_prompt` (z. B. „kleine Verstöße
+→ Warnung, Hate → 1 Tag Timeout“). Kick/Ban gibt es bewusst nicht.
 
 ---
 
 ## 🔧 Konfiguration (Umgebungsvariablen)
 
-In der `.env`-Datei oder im Render-Dashboard:
-
 ```env
-# Token des Sicherheitsbots
+# Token des Sicherheitsbots (eigene Discord App!)
 SECURITY_BOT_TOKEN=
 
-# Owner Discord-ID für das /adminpanel und Beitritts-Benachrichtigungen
+# Owner Discord-ID (Join-Notice per DM)
 SECURITY_BOT_OWNER_ID=
 
 # Optional: genau eine Gilde erhält zusätzlich sofort verfügbare Guild-Commands.
-# Leer lassen, wenn ausschließlich der zuverlässige globale Satz gewünscht ist.
 SECURITY_BOT_GUILD_ID=
 
 # Turso-Datenbank (wird mit dem XP-Bot geteilt)
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
+
+# Optional: anderes Gemini-Modell (Standard: gemini-2.5-flash-lite)
+# SECURITY_GEMINI_MODEL=gemini-2.5-flash-lite
+
+# Optional: Token-Budget pro Analyse (Standard 15000)
+# SECURITY_GEMINI_MAX_INPUT_TOKENS=15000
 ```
 
 ### Slash-Command-Registrierung
 
 Der vollständige Satz wird zuerst global über
-`PUT /applications/{application.id}/commands` registriert. Die zehn
-Server-Commands tragen ausschließlich den Guild-Context; `/adminpanel` trägt
-ausschließlich den Bot-DM-Context. Erst nachdem Discord alle elf globalen
-Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides entfernt.
-Eine gültige `SECURITY_BOT_GUILD_ID`, in der der Bot Mitglied ist, behält
-optional einen sofort sichtbaren Guild-Satz (ohne `/adminpanel`). Ein Fehler bei
-diesem optionalen PUT beeinträchtigt den globalen Satz nicht.
+`PUT /applications/{application.id}/commands` registriert (alle Commands tragen
+ausschließlich den Guild-Context und Admin-Berechtigung). Erst nachdem Discord alle
+fünf globalen Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides
+entfernt. Eine gültige `SECURITY_BOT_GUILD_ID` behält optional einen sofort sichtbaren
+Guild-Satz. Ein Fehler bei diesem optionalen PUT beeinträchtigt den globalen Satz nicht.
 
-### Mistral API-Key einrichten
+### Gemini API-Key einrichten
 
-1. Auf [console.mistral.ai](https://console.mistral.ai/) ein kostenloses Konto anlegen.
-2. Im Bereich für Abrechnung/Pläne den kostenlosen **Experiment**-Plan aktivieren.
-   Dafür werden keine Zahlungsdaten benötigt.
-3. Unter **API Keys** einen Schlüssel erzeugen.
-4. Auf jedem Discord-Server einmal `/set_api_key` ausführen und den Schlüssel
-   eintragen. Der Bot prüft ihn direkt mit `mistral-moderation-latest`.
+1. Auf [aistudio.google.com/apikey](https://aistudio.google.com/apikey) einen
+   kostenlosen API-Key erstellen (Free-Tier reicht für kleine/mittelgroße Server).
+2. Auf dem Discord-Server einmal `/set_gemini_api_key` ausführen und den Key eintragen.
+   Der Bot prüft ihn direkt bei Google.
+3. Optional `/set_prompt` und `/set_log_channel` – danach ist die KI-Überwachung aktiv.
 
-> **Hinweis zur Migration:** Bereits gespeicherte OpenAI-Schlüssel werden bewusst
-> nicht übernommen, weil sie bei Mistral ungültig sind. Nach dem Deployment muss
-> daher pro Server ein Mistral-Schlüssel eingerichtet werden. Mistrals dedizierter
-> Moderations-Endpunkt analysiert Text. Reine Bildnachrichten werden ignoriert;
-> bei Nachrichten mit Text und Bild wird ausschließlich der Text geprüft.
+---
 
-Der Bot muss mit den OAuth2-Scopes **`bot` und `applications.commands`**
-installiert sein. Ob eine bereits bestehende Guild-Installation den Scope
-enthält, stellt Discord dem Bot nicht über den Command-Endpunkt zur Verfügung.
-Falls der globale PUT laut Log erfolgreich ist, Commands aber nach der
-Propagation weiterhin nicht erscheinen, den Bot über eine OAuth2-URL mit
-beiden Scopes erneut autorisieren (kein Token erforderlich).
+## 🗄️ Datenhaltung
 
-Die Startlogs nennen die Application-ID, konfigurierte Guild-ID, tatsächlichen
-REST-Routen, den Render-Commit sowie jeden von Discord bestätigten
-Command-Namen und dessen ID. Fehler enthalten HTTP-Status, Discord-Code und
-`rawError`; Tokens und Request-Header werden bewusst nie geloggt.
+| Tabelle | Inhalt |
+|---|---|
+| `secgem_guilds` | API-Key (verschlüsselt durch die DB-Zugangskontrolle), Prompt, Log-Kanal, Sprache |
+| `secgem_messages` | Gesammelte Nachrichten (`batch_id = NULL` → offener Buffer, sonst fest zugeordneter Batch) |
+| `secgem_batches` | Retry-Metadaten pro Gilde (Versuche, nächster Zeitpunkt, letzter Fehler) |
+| `secgem_penalties` | Strafenregister (20-Tage-Fenster für Gemini, 30-Tage-Aufbewahrung) |
+
+Batches, die dauerhaft fehlschlagen, werden nach **30 Tagen** aus Datenschutzgründen
+verworfen (mit Meldung im Log-Kanal). Beim Verlassen des Servers räumt der Bot alle
+Daten der Gilde vollständig weg.
+
+---
+
+## ✅ Tests
+
+```bash
+node --test tests/security-bot.test.js tests/security-command-registration.test.js tests/security-ready-presence.test.js
+```
+
+Die Tests decken die komplette Pipeline ab: Sammel-Regeln & Discord-Format-Auflösung,
+Batch-Bau mit IDs ab 1, Gemini-Request-Struktur & JSON-Parsing, Prompt-Bau (Register,
+`{USER}`, `primary`), Anwendungs-Flow (Timeout, Reply auf Hauptverstoß, Log-Kanal),
+Retry-Backoff ohne Datenverlust, Admin-Doppelabsicherung, 0-Uhr-Flush und alle Commands.
