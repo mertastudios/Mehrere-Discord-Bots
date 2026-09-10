@@ -138,8 +138,13 @@ function createSecurityStore({ logger, env } = {}) {
       author_name TEXT NOT NULL,
       content TEXT NOT NULL,
       discord_message_id TEXT,
-      sent_at INTEGER NOT NULL
+      sent_at INTEGER NOT NULL,
+      is_admin INTEGER DEFAULT 0
     );`);
+    // Migration für bestehende Tabellen (Spalte is_admin nachrüsten)
+    try {
+      await db.execute('ALTER TABLE secgem_messages ADD COLUMN is_admin INTEGER DEFAULT 0');
+    } catch {}
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_secgem_msg_guild ON secgem_messages(guild_id, batch_id);`);
     await db.execute(`CREATE TABLE IF NOT EXISTS secgem_penalties (
       key TEXT PRIMARY KEY,
@@ -198,6 +203,7 @@ function createSecurityStore({ logger, env } = {}) {
         content: String(row.content || ''),
         discordMessageId: row.discord_message_id ? String(row.discord_message_id) : null,
         sentAt: Number(row.sent_at) || Date.now(),
+        isAdmin: Boolean(Number(row.is_admin) || 0),
       };
       messages.set(rec.key, rec);
       if (rec.batchId) {
@@ -445,6 +451,7 @@ function createSecurityStore({ logger, env } = {}) {
       content: String(data.content || '').slice(0, MAX_CONTENT_CHARS),
       discordMessageId: data.discordMessageId ? String(data.discordMessageId) : null,
       sentAt: Number(data.sentAt) || Date.now(),
+      isAdmin: Boolean(data.isAdmin),
     };
     buffer.push(rec);
     messages.set(rec.key, rec);
@@ -463,6 +470,8 @@ function createSecurityStore({ logger, env } = {}) {
   /**
    * Verschiebt den kompletten offenen Buffer in einen neuen Batch und vergibt
    * die Gemini-Nachrichten-IDs (seq) ab 1 in chronologischer Reihenfolge.
+   * Admin-Nachrichten bleiben im Batch (Kontext), bekommen aber KEINE seq –
+   * sie sind damit für Gemini nicht referenzierbar und nie moderierbar.
    */
   function buildBatchFromBuffer(guildId) {
     const id = String(guildId);
@@ -473,12 +482,13 @@ function createSecurityStore({ logger, env } = {}) {
     const ordered = [...buffer].sort((a, b) => a.ord - b.ord);
     const mapKey = `${id}:${batchId}`;
     const list = [];
-    ordered.forEach((rec, index) => {
+    let seq = 0;
+    for (const rec of ordered) {
       rec.batchId = batchId;
-      rec.seq = index + 1;
+      rec.seq = rec.isAdmin ? null : ++seq;
       dirtyMessages.add(rec.key);
       list.push(rec);
-    });
+    }
     messagesByBatch.set(mapKey, list);
     bufferByGuild.set(id, []);
 
@@ -490,6 +500,7 @@ function createSecurityStore({ logger, env } = {}) {
       lastError: null,
       failuresNotified: 0,
       size: list.length,
+      moderatable: seq,
     };
     const batches = batchesByGuild.get(id) || [];
     batches.push(meta);
@@ -497,7 +508,8 @@ function createSecurityStore({ logger, env } = {}) {
     dirtyBatches.add(id);
 
     logger?.info?.(
-      `[security-bot] Batch ${batchId} für Gilde ${id} erstellt: ${list.length} Nachrichten (IDs 1-${list.length})`
+      `[security-bot] Batch ${batchId} für Gilde ${id} erstellt: ${list.length} Nachrichten ` +
+        `(${seq} moderierbar mit IDs 1-${seq}, ${list.length - seq} Admin-Kontext)`
     );
     return meta;
   }
@@ -516,7 +528,9 @@ function createSecurityStore({ logger, env } = {}) {
 
   function getBatchMessages(guildId, batchId) {
     const list = messagesByBatch.get(`${String(guildId)}:${String(batchId)}`) || [];
-    return [...list].sort((a, b) => (a.seq || 0) - (b.seq || 0));
+    // Chronologisch (ord) – Admin-Nachrichten haben keine seq, gehören aber
+    // an ihre echte Position im Gespräch.
+    return [...list].sort((a, b) => (a.ord || 0) - (b.ord || 0));
   }
 
   function deleteBatch(guildId, batchId) {
@@ -732,8 +746,8 @@ function createSecurityStore({ logger, env } = {}) {
           if (!m) continue;
           statements.push({
             sql: `INSERT INTO secgem_messages (key, guild_id, batch_id, seq, ord, channel_id, channel_name,
-                    author_id, author_name, content, discord_message_id, sent_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    author_id, author_name, content, discord_message_id, sent_at, is_admin)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(key) DO UPDATE SET
                     batch_id=excluded.batch_id,
                     seq=excluded.seq,
@@ -741,6 +755,7 @@ function createSecurityStore({ logger, env } = {}) {
             args: [
               m.key, m.guildId, m.batchId, m.seq, m.ord, m.channelId, m.channelName,
               m.authorId, m.authorName, m.content, m.discordMessageId, m.sentAt,
+              m.isAdmin ? 1 : 0,
             ],
           });
         }

@@ -36,6 +36,10 @@ function fmtUtc(ms) {
 function buildPenaltyRegister({ participants, penaltyByUser, now = Date.now() }) {
   const lines = [];
   for (const p of participants) {
+    if (p.isAdmin) {
+      lines.push(`- ${p.authorName} (user_id=${p.authorId}): IMMUN (Administrator) – nur Kontext, NIEMALS moderieren`);
+      continue;
+    }
     const entry = penaltyByUser.get(p.authorId);
     if (!entry || entry.count === 0) {
       lines.push(`- ${p.authorName} (user_id=${p.authorId}): sauber – keine Moderationen in den letzten 20 Tagen`);
@@ -68,16 +72,20 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     `Antworte IMMER auf ${languageName}. Auch "reason" und "personal_message" müssen auf ${languageName} sein.`,
 
     '== SO LIEST DU DEN CHAT-VERLAUF ==',
-    'Der Verlauf ist nach Kanälen gruppiert und chronologisch sortiert. Jede Nachricht hat',
-    'eine eindeutige ID ab 1 und sieht so aus:',
+    'Der Verlauf ist nach Kanälen gruppiert und chronologisch sortiert. Jede moderierbare',
+    'Nachricht hat eine eindeutige ID ab 1 und sieht so aus:',
     '  [ID] YYYY-MM-DD HH:MM UTC · Anzeigename (user_id=...):',
     '  | Nachrichtentext (mehrzeilig = mehrere | -Zeilen)',
+    'Nachrichten von Administratoren stehen OHNE ID im Verlauf und sind so markiert:',
+    '  [ADMIN – immun] YYYY-MM-DD HH:MM UTC · Anzeigename (user_id=...):',
+    'Sie dienen NUR dem Kontext (z.B. damit du verstehst, worauf jemand reagiert).',
+    'Da sie keine ID haben, kannst und darfst du sie nicht moderieren.',
     'Mentions, Rollen, Kanäle und Emojis wurden bereits in lesbaren Text umgewandelt.',
     'user_id ist die eindeutige, dauerhafte Discord-Nutzer-ID.',
 
     '== TEILNEHMER & STRAFENREGISTER (letzte 20 Tage) ==',
-    'Diese Personen tauchen im Verlauf auf. Administratoren sind IMMER immun und tauchen',
-    'deshalb nie im Verlauf auf – sie dürfen NIE moderiert werden:',
+    'Diese Personen tauchen im Verlauf auf. Administratoren sind IMMER immun – ihre',
+    'Nachrichten sind nur Kontext und dürfen NIE moderiert werden:',
     register || '- (keine Teilnehmer)',
 
     '== DEINE ENTSCHEIDUNG ==',
@@ -149,7 +157,8 @@ function buildUserPrompt({ adminPrompt, logText }) {
 
 /**
  * Formatiert die gesammelten Nachrichten für Gemini.
- * `messages`: [{ seq, channelName, sentAt, authorName, authorId, content }]
+ * `messages`: [{ seq, channelName, sentAt, authorName, authorId, content, isAdmin }]
+ * Admin-Nachrichten (isAdmin / seq=null) erscheinen ohne ID als [ADMIN – immun].
  * (chronologisch sortiert; Gruppierung nach Kanal passiert hier)
  */
 function buildChatLog(messages) {
@@ -165,7 +174,8 @@ function buildChatLog(messages) {
     const name = msgs[0]?.channelName || 'unbekannt';
     const lines = [`########## KANAL: #${name} (kanal_id=${channelId}) ##########`];
     for (const m of msgs) {
-      lines.push(`[${m.seq}] ${fmtUtc(m.sentAt)} · ${m.authorName} (user_id=${m.authorId}):`);
+      const tag = m.isAdmin || m.seq == null ? '[ADMIN – immun]' : `[${m.seq}]`;
+      lines.push(`${tag} ${fmtUtc(m.sentAt)} · ${m.authorName} (user_id=${m.authorId}):`);
       for (const row of String(m.content).split('\n')) {
         lines.push(`| ${row}`);
       }

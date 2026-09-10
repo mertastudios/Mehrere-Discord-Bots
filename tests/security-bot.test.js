@@ -41,6 +41,7 @@ const {
 const {
   handleIncoming,
   shouldCollect,
+  classifyMessage,
   humanizeContent,
   escapeDiscordMarkdown,
   maxInputTokens,
@@ -427,11 +428,11 @@ test('Security Bot: Sammel-Regeln (echte User, Admin-Immunität, nur Text)', asy
   assert.equal(await shouldCollect({ ctx, msg: w.msg({ author: { id: 'u9', bot: true } }) }), false, 'Bot-Nachricht');
   assert.equal(await shouldCollect({ ctx, msg: w.msg({ webhookId: 'wh1' }) }), false, 'Webhook');
   assert.equal(await shouldCollect({ ctx, msg: w.msg({ content: '   ' }) }), false, 'ohne Text');
-  assert.equal(
-    await shouldCollect({ ctx, msg: w.msg({ member: w.membersCache.get('333333333333333333'), author: { id: '333333333333333333' } }) }),
-    false,
-    'Admin ist immun'
-  );
+  // Admins werden als KONTEXT gesammelt, aber als isAdmin markiert (→ keine ID, nie moderierbar)
+  const adminMsg = w.msg({ member: w.membersCache.get('333333333333333333'), author: { id: '333333333333333333' } });
+  assert.equal(await shouldCollect({ ctx, msg: adminMsg }), true, 'Admin wird als Kontext gesammelt');
+  assert.deepEqual(await classifyMessage({ ctx, msg: adminMsg }), { collect: true, isAdmin: true }, 'Admin als immun markiert');
+  assert.deepEqual(await classifyMessage({ ctx, msg: w.msg({ content: 'hi' }) }), { collect: true, isAdmin: false }, 'normaler User');
   assert.equal(await shouldCollect({ ctx, msg: { ...w.msg(), guild: null } }), false, 'DMs werden ignoriert');
   assert.equal(await shouldCollect({ ctx, msg: w.msg({ author: { id: 'bot1', bot: false } }) }), false, 'eigene Nachrichten');
 });
@@ -792,7 +793,8 @@ test('Security Bot: Admin-Immunität greift auch beim Anwenden (Doppelabsicherun
   const store = await makeStore();
   store.setApiKey('g1', 'AIza-pipeline-key-123456');
   store.setLogChannelId('g1', 'clog');
-  // Collector würde Admins nie einsammeln – hier wird der Schutz im Moderator geprüft:
+  // Admin-Nachricht ohne isAdmin-Flag (z.B. Nutzer wurde NACH dem Sammeln Admin) –
+  // hier wird der Live-Schutz im Moderator geprüft:
   store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '333333333333333333', authorName: 'Admin', content: 'admin text', discordMessageId: 'm1', sentAt: Date.now() });
   store.buildBatchFromBuffer('g1');
 
@@ -814,6 +816,91 @@ test('Security Bot: Admin-Immunität greift auch beim Anwenden (Doppelabsicherun
     assert.equal(w.replies.length, 0, 'Admin wird nicht angesprochen');
     assert.equal(store.countPenaltiesSince('g1', '333333333333333333', 20), 0);
     assert.equal(w.logChannel.sent.length, 1, 'Übersprungen-Hinweis im Log');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: Admin-Nachrichten sind Kontext ohne ID – im Batch, Log & Register, nie moderierbar', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.setLogChannelId('g1', 'clog');
+  const base = Date.now();
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '333333333333333333', authorName: 'Admin', content: 'Wer ist dieser Idiot?', discordMessageId: 'a1', sentAt: base, isAdmin: true });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'Der Idiot bin wohl ich', discordMessageId: 'm1', sentAt: base + 1 });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '333333333333333333', authorName: 'Admin', content: 'Ruhe jetzt', discordMessageId: 'a2', sentAt: base + 2, isAdmin: true });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '222222222222222222', authorName: 'Anna', content: 'ok', discordMessageId: 'm2', sentAt: base + 3 });
+  const batch = store.buildBatchFromBuffer('g1');
+  assert.equal(batch.size, 4);
+  assert.equal(batch.moderatable, 2, 'nur 2 Nachrichten bekommen IDs');
+
+  const msgs = store.getBatchMessages('g1', batch.id);
+  assert.deepEqual(msgs.map((m) => m.seq), [null, 1, null, 2], 'IDs überspringen Admins, Reihenfolge bleibt chronologisch');
+
+  const log = buildChatLog(msgs);
+  assert.ok(log.includes('[ADMIN – immun]'), 'Admin ohne ID markiert');
+  assert.ok(!/\[\d+\] .*Admin \(user_id=333333333333333333\)/.test(log), 'Admin hat keine numerische ID');
+  assert.ok(log.indexOf('Wer ist dieser Idiot') < log.indexOf('[1]'), 'Admin-Kontext steht vor der Antwort');
+
+  const sp = buildSystemPrompt({
+    guildName: 'X', lang: 'de',
+    participants: [{ authorId: '333333333333333333', authorName: 'Admin', isAdmin: true }, { authorId: '111111111111111111', authorName: 'Max' }],
+    penaltyByUser: new Map(),
+  });
+  assert.ok(sp.includes('Admin (user_id=333333333333333333): IMMUN (Administrator)'), 'Register zeigt Admin als immun');
+  assert.ok(sp.includes('Max (user_id=111111111111111111): sauber'));
+
+  // Gemini versucht trotzdem, "message_id 3" (gibt es nicht) und ID 1 (Max) zu moderieren
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+  const origFetch = globalThis.fetch;
+  let sentPrompt = '';
+  globalThis.fetch = async (url, init) => {
+    sentPrompt = JSON.parse(init.body).contents[0].parts[0].text;
+    return geminiJsonResponse({
+      moderations: [
+        { message_id: 3, action: 'timeout', duration: '1d', primary: false, reason: 'x', personal_message: '{USER} x' },
+        { message_id: 1, action: 'warn', primary: true, reason: 'Beleidigung', personal_message: '{USER} bitte nicht' },
+      ],
+    });
+  };
+  try {
+    assert.equal(await processGuild(ctx, 'g1'), true);
+    assert.ok(sentPrompt.includes('[ADMIN – immun]'), 'Admin-Kontext wurde an Gemini gesendet');
+    assert.equal(w.membersCache.get('333333333333333333').timeouts.length, 0, 'Admin bekommt keinen Timeout');
+    assert.equal(w.replies.length, 1, 'nur Max wird angesprochen');
+    assert.ok(w.replies[0].payload.content.includes('<@111111111111111111>'));
+    assert.equal(store.countPenaltiesSince('g1', '333333333333333333', 20), 0);
+    assert.equal(store.countPenaltiesSince('g1', '111111111111111111', 20), 1);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: Batch nur mit Admin-Nachrichten wird ohne API-Aufruf verworfen', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '333333333333333333', authorName: 'Admin', content: 'nur admin', discordMessageId: 'a1', sentAt: Date.now(), isAdmin: true });
+  store.buildBatchFromBuffer('g1');
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+  const origFetch = globalThis.fetch;
+  let called = 0;
+  globalThis.fetch = async () => { called++; return geminiJsonResponse({ moderations: [] }); };
+  try {
+    assert.equal(await processGuild(ctx, 'g1'), true);
+    assert.equal(called, 0, 'kein Gemini-Aufruf');
+    assert.equal(store.getBatches('g1').length, 0, 'Batch aufgeräumt');
   } finally {
     globalThis.fetch = origFetch;
   }

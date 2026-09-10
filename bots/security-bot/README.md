@@ -26,8 +26,13 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 - **0-Uhr-Flush**: Jede Nacht um 0 Uhr (Zeitzone der Serversprache) wird auch ein kleiner
   Verlauf analysiert – auf toten Servern bekommen Nutzer ihre Verwarnung spätestens
   nachts statt erst nach Tagen.
-- **Admins sind immun**: Mitglieder mit Administrator-Berechtigung werden nie gesammelt,
-  nie an Gemini geschickt und beim Anwenden zusätzlich ein zweites Mal geprüft.
+- **Admins sind immun – aber Kontext bleibt erhalten**: Nachrichten von Mitgliedern mit
+  Administrator-Berechtigung werden **als Kontext** mitgesammelt, damit Gemini das
+  Gespräch versteht (z. B. worauf ein Nutzer reagiert). Im Verlauf stehen sie jedoch
+  **ohne ID** als `[ADMIN – immun]`, im Strafenregister als `IMMUN (Administrator)` –
+  Gemini kann sie damit gar nicht referenzieren. Beim Anwenden wird der Admin-Status
+  zusätzlich ein zweites Mal live geprüft. Batches, die nur Admin-Nachrichten
+  enthalten, werden ohne API-Aufruf verworfen.
 - **Nur Text**: Bilder und Anhänge werden bewusst nicht analysiert – der Bot moderiert
   Text. Anhänge werden im Verlauf nur als Hinweis markiert.
 - **Sauber lesbarer Verlauf für die KI**: Mentions → Anzeigenamen, Rollen/Kanäle/Emojis/
@@ -58,11 +63,13 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 
 ## 🧠 Wie die Moderation funktioniert
 
-1. **Sammeln**: Jede Textnachricht echter Nutzer (ohne Bots/Webhooks/Admins) landet im
-   Buffer – mit Kanal, Anzeigename, Nutzer-ID und Zeitstempel.
+1. **Sammeln**: Jede Textnachricht echter Nutzer (ohne Bots/Webhooks) landet im
+   Buffer – mit Kanal, Anzeigename, Nutzer-ID und Zeitstempel. Admin-Nachrichten
+   werden als `isAdmin` markiert (reiner Kontext).
 2. **Batch bauen**: Sobald das Token-Budget erreicht ist (Standard **15.000 Token** ≈
    45.000 Zeichen, einstellbar über `SECURITY_GEMINI_MAX_INPUT_TOKENS`), werden alle
-   gesammelten Nachrichten zu einem Batch mit **IDs ab 1** verpackt. Zusätzlich wird der
+   gesammelten Nachrichten zu einem Batch mit **IDs ab 1** verpackt (Admin-Nachrichten
+   bekommen **keine ID**). Zusätzlich wird der
    Buffer **jede Nacht um 0 Uhr** als Mini-Verlauf ausgewertet.
 3. **Analyse**: Gemini erhält
    - den **System-Prompt** (Rolle, Antwortformat, `{USER}`-Platzhalter-Regel,
@@ -149,7 +156,7 @@ Guild-Satz. Ein Fehler bei diesem optionalen PUT beeinträchtigt den globalen Sa
 | Tabelle | Inhalt |
 |---|---|
 | `secgem_guilds` | API-Key (verschlüsselt durch die DB-Zugangskontrolle), Prompt, Log-Kanal, Sprache |
-| `secgem_messages` | Gesammelte Nachrichten (`batch_id = NULL` → offener Buffer, sonst fest zugeordneter Batch) |
+| `secgem_messages` | Gesammelte Nachrichten (`batch_id = NULL` → offener Buffer, sonst fest zugeordneter Batch; `is_admin = 1` → nur Kontext, ohne ID) |
 | `secgem_batches` | Retry-Metadaten pro Gilde (Versuche, nächster Zeitpunkt, letzter Fehler) |
 | `secgem_penalties` | Strafenregister (20-Tage-Fenster für Gemini, 30-Tage-Aufbewahrung) |
 
