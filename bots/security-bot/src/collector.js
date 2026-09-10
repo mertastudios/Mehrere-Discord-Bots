@@ -98,21 +98,33 @@ async function humanizeContent(msg, text) {
   return escapeDiscordMarkdown(out).trim();
 }
 
-/** Soll die Nachricht gesammelt werden? (Echte User, mit Text, kein Admin) */
-async function shouldCollect({ ctx, msg }) {
-  if (!msg?.guild || msg.system) return false;
-  if (msg.author?.bot || msg.webhookId) return false;
-  if (ctx.client?.user && msg.author?.id === ctx.client.user.id) return false;
-  if (!String(msg.content || '').trim()) return false; // Nur-Emoji/Sticker/Bilder -> kein Text
+/**
+ * Klassifiziert eine Nachricht für das Sammeln.
+ * Rückgabe: { collect: boolean, isAdmin: boolean }
+ *
+ * - Echte User mit Text werden gesammelt.
+ * - Administratoren werden EBENFALLS gesammelt – aber nur als Kontext: Ihre
+ *   Nachrichten bekommen im Batch keine ID, sind für Gemini als "ADMIN – immun"
+ *   markiert und können deshalb nie moderiert werden.
+ */
+async function classifyMessage({ ctx, msg }) {
+  const no = { collect: false, isAdmin: false };
+  if (!msg?.guild || msg.system) return no;
+  if (msg.author?.bot || msg.webhookId) return no;
+  if (ctx.client?.user && msg.author?.id === ctx.client.user.id) return no;
+  if (!String(msg.content || '').trim()) return no; // Nur-Emoji/Sticker/Bilder -> kein Text
 
   let member = msg.member;
   if (!member && typeof msg.guild.members?.fetch === 'function') {
     member = await msg.guild.members.fetch(msg.author.id).catch(() => null);
   }
-  // Admin-Bypass: Administratoren sind komplett immun.
-  if (member?.permissions?.has?.(PermissionFlagsBits.Administrator)) return false;
+  const isAdmin = Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator));
+  return { collect: true, isAdmin };
+}
 
-  return true;
+/** Soll die Nachricht gesammelt werden? (Echte User mit Text – inkl. Admins als Kontext) */
+async function shouldCollect({ ctx, msg }) {
+  return (await classifyMessage({ ctx, msg })).collect;
 }
 
 /**
@@ -128,12 +140,14 @@ async function handleIncoming({ ctx, msg }) {
     // Ohne Gemini-Key wird nichts gesammelt (keine sinnlosen Chatdaten speichern).
     if (!cfg?.geminiApiKey) return;
 
-    if (!(await shouldCollect({ ctx, msg }))) return;
+    const { collect, isAdmin } = await classifyMessage({ ctx, msg });
+    if (!collect) return;
 
     const text = await humanizeContent(msg, msg.content);
     if (!text) return;
 
     const payload = {
+      isAdmin,
       channelId: String(msg.channelId || msg.channel?.id || ''),
       channelName: msg.channel?.name || 'unbekannt',
       authorId: String(msg.author.id),
@@ -173,6 +187,7 @@ function dispatchBatch(ctx, guildId) {
 module.exports = {
   handleIncoming,
   shouldCollect,
+  classifyMessage,
   humanizeContent,
   displayNameOf,
   escapeDiscordMarkdown,

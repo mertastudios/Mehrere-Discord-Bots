@@ -11,8 +11,8 @@
  *   mit wachsendem Abstand erneut versucht (2m → 5m → 15m → … → max. 6h).
  * - Neue Nachrichten sammeln sich derweil ganz normal im Buffer.
  * - Wurde niemand moderiert, passiert nichts (keine Spam-Nachrichten).
- * - Administratoren werden zusätzlich zur Sammel-Immunität bei der Anwendung
- *   noch einmal geprüft und notfalls übersprungen.
+ * - Administratoren sind im Batch nur Kontext (keine ID) und werden bei der
+ *   Anwendung zusätzlich noch einmal live geprüft und notfalls übersprungen.
  */
 
 const { PermissionFlagsBits } = require('discord.js');
@@ -142,6 +142,17 @@ async function processSingleBatch(ctx, guildId, batch) {
     return true;
   }
 
+  // Nur Admin-Kontext ohne eine einzige moderierbare Nachricht -> nichts zu tun,
+  // keine API-Kosten verursachen.
+  if (!messages.some((m) => !m.isAdmin && m.seq != null)) {
+    ctx.store.deleteBatch(gid, batch.id);
+    void ctx.store.flush();
+    ctx.logger?.info?.(
+      `[security-bot] Batch ${batch.id} für Gilde ${gid} übersprungen: nur Admin-Nachrichten (${messages.length}).`
+    );
+    return true;
+  }
+
   if (!apiKey) {
     // Kein Key -> nichts analysieren, aber NICHTS verwerfen. Selten melden.
     if (!batch.keyNoticeSent) {
@@ -164,7 +175,12 @@ async function processSingleBatch(ctx, guildId, batch) {
   // Teilnehmer (letzte Anzeigenamen gewinnen) für das Strafenregister im System-Prompt
   const participantMap = new Map();
   for (const m of [...messages].sort((a, b) => a.ord - b.ord)) {
-    participantMap.set(m.authorId, { authorId: m.authorId, authorName: m.authorName });
+    const prev = participantMap.get(m.authorId);
+    participantMap.set(m.authorId, {
+      authorId: m.authorId,
+      authorName: m.authorName,
+      isAdmin: Boolean(prev?.isAdmin || m.isAdmin),
+    });
   }
   const participants = [...participantMap.values()];
 
@@ -269,7 +285,10 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
     ctx.client?.guilds?.cache?.get?.(guildId) ||
     (await ctx.client?.guilds?.fetch?.(guildId).catch(() => null));
 
-  const bySeq = new Map(messages.map((m) => [m.seq, m]));
+  // Nur moderierbare Nachrichten (Admin-Kontext hat keine seq)
+  const bySeq = new Map(
+    messages.filter((m) => m.seq != null && !m.isAdmin).map((m) => [m.seq, m])
+  );
   // Primary zuerst: Die wichtigste Antwort soll als erstes im Chat landen.
   const list = [...parsed.moderations]
     .sort((a, b) => (b.primary === true) - (a.primary === true))
