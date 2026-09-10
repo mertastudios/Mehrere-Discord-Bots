@@ -86,7 +86,7 @@ function updateBatch(ctx, guildId, batchMeta) {
 
 /**
  * Verarbeitet fällige Batches einer Gilde (FIFO). Läuft nie doppelt parallel:
- * Während ein Lauf aktiv ist, wird ein Folgelauf an_requested vorgemerkt.
+ * Während ein Lauf aktiv ist, wird ein Folgelauf über rerunRequested vorgemerkt.
  */
 async function processGuild(ctx, guildId) {
   const gid = String(guildId);
@@ -143,7 +143,7 @@ async function processSingleBatch(ctx, guildId, batch) {
   }
 
   if (!apiKey) {
-    // Kein Key -> nichts analyisieren, aber NICHTS verwerfen. Selten melden.
+    // Kein Key -> nichts analysieren, aber NICHTS verwerfen. Selten melden.
     if (!batch.keyNoticeSent) {
       batch.keyNoticeSent = true;
       updateBatch(ctx, gid, batch);

@@ -81,8 +81,8 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     register || '- (keine Teilnehmer)',
 
     '== DEINE ENTSCHEIDUNG ==',
-    'Wichtig: In den meisten Chats macht NIEMAND etwas Schlimmes. Fasse deep – nutze den',
-    'Kontext (Witze unter Freunden, Zitate, Reaktionen auf andere). Bestrafe nur echte,',
+    'Wichtig: In den meisten Chats macht NIEMAND etwas Schlimmes. Lies mit Kontext – Witze',
+    'unter Freunden, Zitate, Reaktionen auf andere zählen. Bestrafe nur echte, klare',
     'klare Verstöße gegen die Regeln. Bei mehreren Verstößen darfst du MEHRERE Personen',
     'gleichzeitig moderieren (eine moderation pro betroffener Nachricht).',
 
