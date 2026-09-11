@@ -8,7 +8,7 @@
  *    Verlauf täglich um 0 Uhr (Serversprache-Zeitzone) ausgewertet.
  *  - Sendet System-Prompt + Admin-Prompt (/set_prompt) + sauber formatierten
  *    Chat-Verlauf (IDs ab 1, mentions aufgelöst) an das günstigste Gemini-
- *    Modell (gemini-2.5-flash-lite).
+ *    Modell (gemini-3.5-flash-lite).
  *  - Gemini entscheidet über Warnungen / Timeouts (1m–1w) mit persönlicher
  *    Nachricht; der Bot antwortet auf die schwerwiegendste Verstoßnachricht.
  *  - Fehlgeschlagene Analysen werden NICHT verworfen: Retry-Queue mit Backoff,
