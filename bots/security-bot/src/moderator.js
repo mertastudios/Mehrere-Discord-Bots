@@ -52,7 +52,6 @@ const BACKOFF_SCHEDULE_MS = [
   3 * 60 * 60_000,
   6 * 60 * 60_000,
 ];
-const NOTIFY_EVERY_N_FAILURES = 5;
 
 // Ein-Flug-Steuerung pro Gilde (mehrere parallele Gemini-Aufrufe pro Server vermeiden)
 const runningByGuild = new Set();
@@ -211,20 +210,20 @@ async function processSingleBatch(ctx, guildId, batch) {
     updateBatch(ctx, gid, batch);
     void ctx.store.flush();
 
-    const shouldNotify = batch.retryCount === 1 || batch.retryCount % NOTIFY_EVERY_N_FAILURES === 0;
-    if (shouldNotify) {
-      await sendLogNotice(
-        ctx,
-        gid,
-        buildApiErrorContainer({
-          lang,
-          count: messages.length,
-          error: errorText,
-          attempt: batch.retryCount,
-          nextRetry: fmtDateTime(batch.nextRetryAt, lang),
-        })
-      );
-    }
+    // Jede Wiederholung wird protokolliert. Die alte Drosselung (nur Versuch 1
+    // und danach 5, 10, ...) machte den Retry-Verlauf unsichtbar und erschwerte
+    // die Fehlersuche erheblich.
+    await sendLogNotice(
+      ctx,
+      gid,
+      buildApiErrorContainer({
+        lang,
+        count: messages.length,
+        error: errorText,
+        attempt: batch.retryCount,
+        nextRetry: fmtDateTime(batch.nextRetryAt, lang),
+      })
+    );
     ctx.logger?.warn?.(
       `[security-bot] Gemini-Fehler für Gilde ${gid} (Batch ${batch.id}, Versuch ${batch.retryCount}): ${errorText} – ` +
         `Nachrichten bleiben erhalten, Retry um ${new Date(batch.nextRetryAt).toISOString()}`
@@ -240,19 +239,17 @@ async function processSingleBatch(ctx, guildId, batch) {
     batch.nextRetryAt = Date.now() + nextRetryDelay(batch.retryCount);
     updateBatch(ctx, gid, batch);
     void ctx.store.flush();
-    if (batch.retryCount === 1 || batch.retryCount % NOTIFY_EVERY_N_FAILURES === 0) {
-      await sendLogNotice(
-        ctx,
-        gid,
-        buildApiErrorContainer({
-          lang,
-          count: messages.length,
-          error: batch.lastError,
-          attempt: batch.retryCount,
-          nextRetry: fmtDateTime(batch.nextRetryAt, lang),
-        })
-      );
-    }
+    await sendLogNotice(
+      ctx,
+      gid,
+      buildApiErrorContainer({
+        lang,
+        count: messages.length,
+        error: batch.lastError,
+        attempt: batch.retryCount,
+        nextRetry: fmtDateTime(batch.nextRetryAt, lang),
+      })
+    );
     return false;
   }
 

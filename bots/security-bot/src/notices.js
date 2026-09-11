@@ -29,8 +29,19 @@ async function sendLogNotice(ctx, guildId, container) {
   try {
     const channel = await resolveLogChannel(ctx, guildId);
     if (!channel) return false;
-    await channel.send(componentsV2Payload([container]));
-    return true;
+    // Discord kann bei einem kurzen Netzwerk-/Rate-Limit-Fehler ablehnen.
+    // Fehler beim Loggen dürfen nicht still verschwinden: drei kurze Retries.
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await channel.send(componentsV2Payload([container]));
+        return true;
+      } catch (err) {
+        lastError = err;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+      }
+    }
+    throw lastError;
   } catch (err) {
     ctx.logger?.warn?.('[security-bot] Log-Kanal-Nachricht fehlgeschlagen:', err?.message || err);
     return false;

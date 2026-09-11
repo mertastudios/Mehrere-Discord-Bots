@@ -1,7 +1,7 @@
 # 🛡️ Security Bot
 
 Ein vollautomatischer **KI-Sicherheitsbot** für Discord, angetrieben von **Google Gemini** –
-mit dem günstigsten Gemini-Modell (`gemini-2.5-flash-lite`, 0,10 $ / 1 Mio. Input-Tokens,
+mit dem günstigsten Gemini-Modell (`gemini-3.5-flash-lite`, 0,10 $ / 1 Mio. Input-Tokens,
 kostenloser Free-Tier verfügbar).
 
 Der Bot verhält sich wie ein zuverlässiger **OP-Moderator**: Er sammelt diskret alle
@@ -17,7 +17,7 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 - **Gemini-Powered Context-Moderation**: Gemini bekommt den Chat-Verlauf **mit Kontext**
   (chronologisch, nach Kanälen gruppiert) und entscheidet selbstständig – auch mehrere
   Nutzer gleichzeitig.
-- **Günstigstes Modell**: `gemini-2.5-flash-lite` (überschreibbar), gesteuertes JSON-
+- **Günstigstes Modell**: `gemini-3.5-flash-lite` (überschreibbar), gesteuertes JSON-
   Antwortformat via Structured Output, Thinking & Safety-Filter bewusst deaktiviert
   (ein Moderationsbot muss Toxizität ja lesen dürfen).
 - **Nichts geht verloren**: Bei API-Fehlern oder Rate-Limits bleibt der gesammelte
@@ -125,8 +125,8 @@ SECURITY_BOT_GUILD_ID=
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
 
-# Optional: anderes Gemini-Modell (Standard: gemini-2.5-flash-lite)
-# SECURITY_GEMINI_MODEL=gemini-2.5-flash-lite
+# Optional: anderes Gemini-Modell (Standard: gemini-3.5-flash-lite)
+# SECURITY_GEMINI_MODEL=gemini-3.5-flash-lite
 
 # Optional: Token-Budget pro Analyse (Standard 15000)
 # SECURITY_GEMINI_MAX_INPUT_TOKENS=15000

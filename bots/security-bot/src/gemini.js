@@ -1,7 +1,7 @@
 /**
  * Google Gemini API Anbindung für den Sicherheitsbot.
  *
- * - Nutzt das günstigste Gemini-Modell (Standard: gemini-2.5-flash-lite,
+ * - Nutzt das günstigste Gemini-Modell (Standard: gemini-3.5-flash-lite,
  *   0,10 $ / 1 Mio. Input-Tokens) – überschreibbar per SECURITY_GEMINI_MODEL.
  * - Erzwingt JSON-Output via responseSchema (Structured Output).
  * - Deaktiviert Gemini-eigene Safety-Filter: Ein Moderationsbot MUSST den
@@ -10,7 +10,10 @@
  *   Retries mit Backoff übernimmt der Moderator (siehe moderator.js).
  */
 
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash-lite';
+// gemini-3.5-flash-lite is no longer available to new users. Keep the
+// current default here so deployments without SECURITY_GEMINI_MODEL do not
+// fail before an administrator can configure anything.
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const REQUEST_TIMEOUT_MS = 90_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -79,7 +82,10 @@ function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
   const generationConfig = {
     temperature: 0.35,
     topP: 0.9,
-    maxOutputTokens: 8192,
+    // Gemini 3.5 Flash-Lite erlaubt laut Modelldokumentation bis zu 65.536
+    // Output-Tokens. Für unser festes Moderations-JSON reichen 4.096 völlig
+    // aus und lassen unnötig große Antworten/Tokenverbrauch nicht zu.
+    maxOutputTokens: 4096,
     responseMimeType: 'application/json',
   };
   if (withExtras) {
