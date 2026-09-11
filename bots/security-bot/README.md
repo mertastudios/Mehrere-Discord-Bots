@@ -39,6 +39,12 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
   Timestamps → Klartext, Markdown escaped, Nachrichten-IDs zählen pro Analyse von 1.
 - **Strafenregister**: Gemini sieht pro Teilnehmer, wie oft er in den letzten **20 Tagen**
   moderiert wurde – Eskalation inklusive.
+- **Warnungen zuerst**: Erste Verstöße werden grundsätzlich nur verwarnt. Timeouts gibt es
+  erst nach wiederholten Warnungen (Strafenregister) oder bei schweren Verstößen (Hass,
+  Diskriminierung, Drohungen, Phishing/Betrug).
+- **Max. 1 Timeout pro Person**: Pro Analyse kann jede Person höchstens **einmal** getimeoutet
+  werden. Weitere Verstöße derselben Person werden automatisch zu Warnungen herabgestuft –
+  das garantiert der Code, unabhängig davon, was Gemini liefert.
 - **Fair & deeskalierend**: In den meisten Fällen macht niemand etwas Schlimmes – dann
   moderiert Gemini niemanden und darf optional kurz und locker im Chat antworten.
 - **10 Sprachen**: Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch,
@@ -95,7 +101,9 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 5. **Anwenden**: Der Bot antwortet **auf die Nachricht mit dem schwerwiegendsten
    Verstoß** (`primary: true`), ersetzt `{USER}` durch die echte Erwähnung, wendet den
    **Timeout** an (1m / 5m / 10m / 1h / 1d / 1w) bzw. sendet nur die **Warnung**, und
-   pflegt das Strafenregister. Alles Details wandern in den Log-Kanal.
+   pflegt das Strafenregister. Dabei gilt als harte Garantie: **höchstens ein Timeout
+   pro Person** pro Analyse – weitere Verstöße derselben Person werden als Warnung
+   umgesetzt. Alle Details wandern in den Log-Kanal.
 6. **Niemand schuldig?** Dann passiert nichts – optional schreibt Gemini eine kurze,
    lockere Antwort in den Chat (`chat_reply`).
 
@@ -104,8 +112,16 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 - `warn` – persönliche Ermahnung ohne Timeout
 - `timeout` mit `duration`: `1m`, `5m`, `10m`, `1h`, `1d`, `1w`
 
-Welche Maßnahme wann greift, bestimmst **du** in `/set_prompt` (z. B. „kleine Verstöße
-→ Warnung, Hate → 1 Tag Timeout“). Kick/Ban gibt es bewusst nicht.
+**Eskalation (Standard):** Erster Verstoß → `warn`. Timeouts erst nach wiederholten
+Warnungen (laut Strafenregister) oder bei schweren Verstößen (Hass, Diskriminierung,
+Drohungen, Phishing/Betrug). Pro Person höchstens **ein** Timeout pro Analyse – weitere
+Verstöße derselben Person werden zu Warnungen. Den schwerwiegendsten Verstoß markiert
+Gemini mit `primary: true` (er trägt die längste Dauer).
+
+Welche Maßnahme wann greift, bestimmst **du** in `/set_prompt` – deine Anweisungen haben
+höchste Priorität (z. B. „kleine Verstöße → Warnung, Hate → 1 Tag Timeout“). Nur das
+Antwortformat, die Admin-Immunität, kein Kick/Ban und max. 1 Timeout pro Person sind fest.
+Kick/Ban gibt es bewusst nicht.
 
 ---
 
