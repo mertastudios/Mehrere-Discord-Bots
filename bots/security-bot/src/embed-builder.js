@@ -39,6 +39,8 @@ function buildHelpContainer({ lang, commands }) {
     '',
     `**${commands.set_log_channel}**\n${t('helpLogChannel', lang)}`,
     '',
+    `**${commands.set_anti_delete_messages}**\n${t('helpAntiDelete', lang)}`,
+    '',
     `**${commands.set_language}**\n${t('helpLanguage', lang)}`,
     '',
     `**${commands.security_check_now}**\n${t('helpCheckNow', lang)}`,

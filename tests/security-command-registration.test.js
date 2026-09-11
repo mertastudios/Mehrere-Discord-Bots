@@ -192,7 +192,7 @@ test('Security Commands: Live-Verifikation liest den vollständigen globalen Sat
   assert.equal(gets.length, 1);
   assert.deepEqual(Object.keys(ctx.commandIds), ALL_COMMAND_NAMES);
   assert.ok(logs.info.some((line) => line.includes('Discord GET global zurückgegeben')));
-  assert.ok(logs.info.some((line) => line.includes('/help (live-6)')));
+  assert.ok(logs.info.some((line) => line.includes('/help (live-')), '/help erscheint mit einer Live-ID');
 });
 
 test('Security Commands: Live-Verifikation repariert einen unvollständigen globalen Satz', async () => {

@@ -140,6 +140,20 @@ function flushBuffer(ctx, guildId) {
   return batch;
 }
 
+/** Steht ein Nutzer (authorId) irgendwo in Buffer oder wartenden Batches? */
+function pendingHasAuthor(store, gid, authorId) {
+  const id = String(authorId);
+  for (const rec of store.getBuffer(gid)) {
+    if (rec.authorId === id) return true;
+  }
+  for (const batch of store.getBatches(gid)) {
+    for (const rec of store.getBatchMessages(gid, batch.id)) {
+      if (rec.authorId === id) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * /security_check_now – wertet ALLE aktuell wartenden Nachrichten einer Gilde
  * SOFORT aus: Der offene Buffer wird (auch unterhalb des Token-Limits) zu
@@ -149,21 +163,39 @@ function flushBuffer(ctx, guildId) {
  * Fehlern Stunden entfernt sein kann) warten, um eine Konfigurationsänderung
  * (z. B. neuer Key oder neues Modell) zu testen.
  *
+ * `forceUser` (optional): { id, name } – Nutzer, der bei dieser Prüfung
+ * ZWINGEND moderiert werden soll (/security_check_now user). Die Direktive
+ * wird an alle fälligen Batches geheftet und landet als verbindlicher Abschnitt
+ * im System-Prompt (buildSystemPrompt). Sie überlebt bewusst auch Retries
+ * desselben Batches: Der Auftrag gilt, bis die Analyse einmal durchgelaufen ist.
+ *
  * Wartet (im Gegensatz zu flushBuffer/processGuild) auf den tatsächlichen
  * Abschluss des Laufs, damit der Slash-Command ein verlässliches Ergebnis
  * melden kann.
  */
-async function runCheckNow(ctx, guildId) {
+async function runCheckNow(ctx, guildId, { forceUser } = {}) {
   const gid = String(guildId);
   const beforePending = ctx.store.countPendingMessages(gid);
   if (beforePending === 0) {
-    return { empty: true, analyzed: 0, remaining: 0 };
+    return { empty: true, analyzed: 0, remaining: 0, forcedSeen: false };
   }
+
+  // Kommt der Zwangsnutzer überhaupt in den wartenden Nachrichten vor?
+  // (Ohne eine einzige Nachricht von ihm kann auch die Direktive nichts moderieren.)
+  const forcedSeen = forceUser ? pendingHasAuthor(ctx.store, gid, forceUser.id) : false;
 
   ctx.store.buildBatchFromBuffer(gid);
   const batches = ctx.store.getBatches(gid);
   if (batches.length) {
-    for (const batch of batches) batch.nextRetryAt = 0;
+    for (const batch of batches) {
+      batch.nextRetryAt = 0;
+      if (forceUser && forcedSeen) {
+        batch.forceUser = {
+          id: String(forceUser.id),
+          name: String(forceUser.name || forceUser.id).replace(/\s+/g, ' ').slice(0, 100),
+        };
+      }
+    }
     ctx.store.setBatches(gid, batches);
   }
   void ctx.store.flush();
@@ -183,7 +215,7 @@ async function runCheckNow(ctx, guildId) {
 
   const remaining = ctx.store.countPendingMessages(gid);
   const analyzed = Math.max(0, beforePending - remaining);
-  return { empty: false, analyzed, remaining };
+  return { empty: false, analyzed, remaining, forcedSeen };
 }
 
 async function processSingleBatch(ctx, guildId, batch) {
@@ -245,6 +277,9 @@ async function processSingleBatch(ctx, guildId, batch) {
     lang,
     participants,
     penaltyByUser,
+    // /security_check_now kann eine Zwangsmoderation für einen Nutzer angeordnet
+    // haben – die Direktive hängt am Batch und wird hier Teil des System-Prompts.
+    forceUser: batch.forceUser || null,
   });
   const adminPrompt = ctx.store.getPrompt(gid) || t('defaultPrompt', lang);
   const userPrompt = buildUserPrompt({

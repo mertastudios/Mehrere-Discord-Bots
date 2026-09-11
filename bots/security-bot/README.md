@@ -63,6 +63,23 @@ tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett sti
 - **Max. 1 Timeout pro Person**: Pro Analyse kann jede Person höchstens **einmal** getimeoutet
   werden. Weitere Verstöße derselben Person werden automatisch zu Warnungen herabgestuft –
   das garantiert der Code, unabhängig davon, was Gemini liefert.
+- **Ausführlich begründete Moderations-Nachrichten**: Die persönliche Nachricht von Gemini
+  (`personal_message`) ist bewusst kein Ein-Zeilen-Hinweis mehr. Der System-Prompt verlangt
+  **4–8 vollständige Sätze**: konkreter Inhalt der Verstoß-Nachricht, welche Regel genau
+  verletzt wurde und warum, Kontext/Wirkung im Kanal, Begründung der gewählten Maßnahme
+  (inkl. Eskalation bei Wiederholungstätern) und ein konkreter Verhaltenshinweis. Dafür ist
+  auch das Output-Token-Budget der Gemini-Anfrage auf 8.192 erhöht.
+- **Zwangsmoderation per Befehl**: `/security_check_now` hat die optionale Auswahl `user` –
+  ein Nutzer, der bei dieser Prüfung **zwingend** moderiert werden soll. Diese Admin-Anordnung
+  wird als verbindliche Direktive in den System-Prompt eingebaut („ZWINGENDE MODERATION“) und
+  überlebt sogar Retries desselben Batches. Bots und Administratoren können nicht gewählt
+  werden (die Admin-Immunität bleibt doppelt geschützt).
+- **Anti-Delete (optional)**: Mit `/set_anti_delete_messages` (Auswahl `true`/`false`)
+  aktivierbar. Löscht ein echter Nutzer (keine Bots, keine Webhooks) seine eigene **letzte
+  Nachricht** eines Kanals, sendet der Bot sie per Webhook mit **exakter Profil-Kopie**
+  (Anzeigename & Avatar des Verfassers) erneut – inklusive Anhängen. Erwähnungen pingen
+  dabei grundsätzlich niemanden (Ghost-Ping-Schutz). Wurde die Nachricht zwischenzeitlich
+  überholt (sie ist nicht mehr die letzte im Kanal), bleibt der Bot still.
 - **Fair & deeskalierend**: In den meisten Fällen macht niemand etwas Schlimmes – dann
   moderiert Gemini niemanden und der Bot schreibt keine einzige Nachricht.
 - **10 Sprachen**: Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch,
@@ -80,8 +97,9 @@ tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett sti
 | `/set_gemini_api_key [key]` | Hinterlegt den Google Gemini API-Key für diesen Server (wird live bei Google geprüft). `remove` löscht den Key. Keys: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `/set_prompt` | Öffnet ein **Formular** für die KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der Standardtext (oder dein letzter Text) ist bereits eingetragen. Leer absenden = zurücksetzen auf Standard. |
 | `/set_log_channel [channel]` | Setzt den Log-Kanal, in den der Bot Moderations-Hinweise, API-Fehler und Meldungen sendet. Ohne Kanal-Angabe wird der Log-Kanal entfernt. |
+| `/set_anti_delete_messages [enabled:true/false]` | Schaltet **Anti-Delete** ein oder aus. Aktiv: Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, wird sie per Webhook mit exakter Profil-Kopie (Name & Avatar) erneut gesendet. |
 | `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die Zeitzone des 2-Stunden-Rasters & die Standardsprache der KI-Antworten). |
-| `/security_check_now` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf das Token-Limit oder den nächsten 2-Stunden-Lauf zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Praktisch, um nach einer Konfigurationsänderung direkt zu testen. |
+| `/security_check_now [user]` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf das Token-Limit oder den nächsten 2-Stunden-Lauf zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Mit der optionalen Auswahl `user` wird ein Nutzer bestimmt, der bei dieser Prüfung **zwingend moderiert** werden soll (Admin-Anordnung im System-Prompt; Bots/Admins nicht wählbar). |
 | `/help` | Übersicht aller Befehle mit klickbaren Mentions. |
 
 ---
@@ -171,12 +189,30 @@ TURSO_AUTH_TOKEN=
 
 ### Slash-Command-Registrierung
 
-Der vollständige Satz wird zuerst global über
+Der vollständige Satz (alle 7 Befehle, inklusive `/set_anti_delete_messages` und der
+`user`-Option von `/security_check_now`) wird zuerst global über
 `PUT /applications/{application.id}/commands` registriert (alle Commands tragen
 ausschließlich den Guild-Context und Admin-Berechtigung). Erst nachdem Discord alle
-fünf globalen Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides
+sieben globalen Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides
 entfernt. Eine gültige `SECURITY_BOT_GUILD_ID` behält optional einen sofort sichtbaren
 Guild-Satz. Ein Fehler bei diesem optionalen PUT beeinträchtigt den globalen Satz nicht.
+Durch den globalen Bulk-Overwrite landen **neue Befehle automatisch auf jedem Server,
+auf dem der Bot bereits ist** – kein erneutes Einladen nötig; der Start-Sync verifiziert
+den Satz per Rücklese-Check und repariert ihn bei Abweichungen selbstständig.
+
+### Anti-Delete im Detail
+
+- Pro Kanal nutzt der Bot einen eigenen Webhook (wird bei Bedarf angelegt, wiederverwendet
+  und im RAM gecacht) – der Bot braucht dafür die Berechtigung **„Webhooks verwalten“**.
+  In Threads hängt der Webhook am Parent-Kanal.
+- Nach dem Löschen wird geprüft, ob die gelöschte Nachricht die **letzte Nachricht des
+  Kanals** war (Snowflake-Vergleich mit der neuesten verbleibenden Nachricht). Sonst wird
+  nichts erneut gesendet, damit der Chat-Verlauf nicht verwürfelt wird.
+- Der Webhook postet mit `username` (Server-Anzeigename) und `avatarURL` (Server-Avatar)
+  des Verfassers – eine **exakte Profil-Kopie**. `allowedMentions: []` verhindert jede
+  Form von Pings (auch @everyone-Ghost-Pings).
+- Ausgenommen sind immer: Bots, Webhooks, Systemnachrichten und der Bot selbst. Nachrichten
+  ohne Text und ohne Anhänge (z. B. reine Sticker) werden ebenfalls ignoriert.
 
 ### Gemini API-Key einrichten
 
@@ -192,9 +228,9 @@ Guild-Satz. Ein Fehler bei diesem optionalen PUT beeinträchtigt den globalen Sa
 
 | Tabelle | Inhalt |
 |---|---|
-| `secgem_guilds` | API-Key (verschlüsselt durch die DB-Zugangskontrolle), Prompt, Log-Kanal, Sprache |
+| `secgem_guilds` | API-Key (verschlüsselt durch die DB-Zugangskontrolle), Prompt, Log-Kanal, Sprache, Anti-Delete-Flag (`anti_delete`) |
 | `secgem_messages` | Gesammelte Nachrichten (`batch_id = NULL` → offener Buffer, sonst fest zugeordneter Batch; `is_admin = 1` → nur Kontext, ohne ID) |
-| `secgem_batches` | Retry-Metadaten pro Gilde (Versuche, nächster Zeitpunkt, letzter Fehler) |
+| `secgem_batches` | Retry-Metadaten pro Gilde (Versuche, nächster Zeitpunkt, letzter Fehler, ggf. Zwangsmoderations-Direktive `forceUser`) |
 | `secgem_penalties` | Strafenregister (20-Tage-Fenster für Gemini, 30-Tage-Aufbewahrung) |
 
 Batches, die dauerhaft fehlschlagen, werden nach **30 Tagen** aus Datenschutzgründen
@@ -211,6 +247,9 @@ node --test tests/security-bot.test.js tests/security-command-registration.test.
 
 Die Tests decken die komplette Pipeline ab: Sammel-Regeln & Discord-Format-Auflösung,
 Batch-Bau mit IDs ab 1, Gemini-Request-Struktur & JSON-Parsing, Prompt-Bau (Register,
-`{USER}`, `primary`), Anwendungs-Flow (Timeout, Reply auf Hauptverstoß, Log-Kanal),
+`{USER}`, `primary`, Zwangsmoderations-Direktive, ausführliche `personal_message`),
+Anwendungs-Flow (Timeout, Reply auf Hauptverstoß, Log-Kanal),
 Retry-Backoff ohne Datenverlust, Admin-Doppelabsicherung, 2-Stunden-Flush (inkl.
-Nachholen verpasster Slots), garantierte Stille ohne Verstoß und alle Commands.
+Nachholen verpasster Slots), garantierte Stille ohne Verstoß, die Anti-Delete-Pipeline
+(Profil-Kopie per Webhook, Letzte-Nachricht-Erkennung, Bot/Webhook-Ausschluss) und alle
+Commands (inkl. `user`-Option & Anti-Delete-Schalter).

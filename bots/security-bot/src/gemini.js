@@ -61,7 +61,7 @@ const RESPONSE_SCHEMA = {
           duration: { type: 'STRING', enum: ['1m', '5m', '10m', '1h', '1d', '1w'], description: 'Nur bei action=timeout' },
           primary: { type: 'BOOLEAN', description: 'true für GENAU EINE Moderation: der schwerwiegendste Verstoß' },
           reason: { type: 'STRING', description: 'Kurze Begründung, gegen welche Regel verstoßen wurde' },
-          personal_message: { type: 'STRING', description: 'Persönliche Nachricht an den Nutzer, {USER} als Platzhalter für die Erwähnung' },
+          personal_message: { type: 'STRING', description: 'Ausführlich begründete persönliche Nachricht an den Nutzer (4-8 Sätze: konkreter Inhalt, betroffene Regel, Kontext, Maßnahmen-Begründung, Verhaltenshinweis), {USER} als Platzhalter für die Erwähnung' },
         },
         required: ['message_id', 'action', 'primary', 'reason', 'personal_message'],
       },
@@ -108,9 +108,10 @@ function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
     temperature: 0.35,
     topP: 0.9,
     // Aktuelle Flash-Lite-Generationen erlauben laut Modelldokumentation
-    // deutlich mehr Output-Tokens. Für unser festes Moderations-JSON reichen
-    // 4.096 völlig aus und lassen unnötig große Antworten/Tokenverbrauch nicht zu.
-    maxOutputTokens: 4096,
+    // deutlich mehr Output-Tokens. 8.192 deckt den Worst Case ab: 10 Moderationen
+    // mit jeweils ausführlich begründeter personal_message (mehrere hundert Zeichen
+    // pro Nachricht), ohne dass die JSON-Antwort mittendrin abgeschnitten wird.
+    maxOutputTokens: 8192,
     responseMimeType: 'application/json',
   };
   if (withExtras) {

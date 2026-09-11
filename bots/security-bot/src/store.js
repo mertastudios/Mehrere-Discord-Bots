@@ -38,6 +38,8 @@ function normalizeGuildConfig(raw) {
     prompt: raw.prompt ? String(raw.prompt).slice(0, 4000) : null,
     logChannelId: raw.logChannelId ? String(raw.logChannelId) : null,
     lang: raw.lang || 'de',
+    // Anti-Delete: gelöschte letzte Nachrichten echter Nutzer per Webhook erneut senden
+    antiDeleteEnabled: Boolean(raw.antiDeleteEnabled),
     createdAt: Number(raw.createdAt) || Date.now(),
     updatedAt: Number(raw.updatedAt) || Date.now(),
   };
@@ -126,6 +128,10 @@ function createSecurityStore({ logger, env } = {}) {
       created_at INTEGER,
       updated_at INTEGER
     );`);
+    // Migration für bestehende Tabellen (Spalte anti_delete nachrüsten)
+    try {
+      await db.execute('ALTER TABLE secgem_guilds ADD COLUMN anti_delete INTEGER DEFAULT 0');
+    } catch {}
     await db.execute(`CREATE TABLE IF NOT EXISTS secgem_messages (
       key TEXT PRIMARY KEY,
       guild_id TEXT NOT NULL,
@@ -182,6 +188,7 @@ function createSecurityStore({ logger, env } = {}) {
         prompt: row.prompt || null,
         logChannelId: row.log_channel_id || null,
         lang: row.lang || 'de',
+        antiDeleteEnabled: Boolean(Number(row.anti_delete) || 0),
         createdAt: row.created_at ? Number(row.created_at) : Date.now(),
         updatedAt: row.updated_at ? Number(row.updated_at) : Date.now(),
       });
@@ -416,6 +423,17 @@ function createSecurityStore({ logger, env } = {}) {
   function setLogChannelId(guildId, channelId) {
     const cfg = ensureGuild(guildId);
     cfg.logChannelId = channelId ? String(channelId) : null;
+    cfg.updatedAt = Date.now();
+    dirtyGuilds.add(cfg.guildId);
+  }
+
+  function getAntiDeleteEnabled(guildId) {
+    return Boolean(guilds.get(String(guildId))?.antiDeleteEnabled);
+  }
+
+  function setAntiDeleteEnabled(guildId, enabled) {
+    const cfg = ensureGuild(guildId);
+    cfg.antiDeleteEnabled = Boolean(enabled);
     cfg.updatedAt = Date.now();
     dirtyGuilds.add(cfg.guildId);
   }
@@ -721,13 +739,14 @@ function createSecurityStore({ logger, env } = {}) {
           const g = guilds.get(gid);
           if (!g) continue;
           statements.push({
-            sql: `INSERT INTO secgem_guilds (guild_id, gemini_api_key, prompt, log_channel_id, lang, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?)
+            sql: `INSERT INTO secgem_guilds (guild_id, gemini_api_key, prompt, log_channel_id, lang, anti_delete, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(guild_id) DO UPDATE SET
                     gemini_api_key=excluded.gemini_api_key,
                     prompt=excluded.prompt,
                     log_channel_id=excluded.log_channel_id,
                     lang=excluded.lang,
+                    anti_delete=excluded.anti_delete,
                     updated_at=excluded.updated_at`,
             args: [
               g.guildId,
@@ -735,6 +754,7 @@ function createSecurityStore({ logger, env } = {}) {
               g.prompt || null,
               g.logChannelId || null,
               g.lang || 'de',
+              g.antiDeleteEnabled ? 1 : 0,
               g.createdAt || Date.now(),
               g.updatedAt || Date.now(),
             ],
@@ -856,6 +876,8 @@ function createSecurityStore({ logger, env } = {}) {
     setPrompt,
     getLogChannelId,
     setLogChannelId,
+    getAntiDeleteEnabled,
+    setAntiDeleteEnabled,
     getLanguage,
     setLanguage,
     addBufferMessage,

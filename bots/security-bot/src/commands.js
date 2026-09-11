@@ -2,12 +2,13 @@
  * Slash-Commands Definition, Registrierung & Handlers für den Sicherheitsbot.
  *
  * Befehlssatz (ausschließlich, alles nur für Administratoren):
- *   /set_gemini_api_key [key]   – Gemini API-Key für den Server hinterlegen
- *   /set_prompt                 – Formular für KI-Anweisungen (Regeln/Strenge/Maßnahmen)
- *   /set_log_channel [channel]  – Log-Kanal für Moderations-Hinweise & API-Fehler
- *   /set_language               – Botsprache dauerhaft ändern (10 Sprachen)
- *   /security_check_now         – Sofort-Analyse der gesammelten Nachrichten anstoßen
- *   /help                       – Übersicht
+ *   /set_gemini_api_key [key]         – Gemini API-Key für den Server hinterlegen
+ *   /set_prompt                       – Formular für KI-Anweisungen (Regeln/Strenge/Maßnahmen)
+ *   /set_log_channel [channel]        – Log-Kanal für Moderations-Hinweise & API-Fehler
+ *   /set_anti_delete_messages [true/false] – gelöschte letzte Nachrichten per Webhook erneut senden
+ *   /set_language                     – Botsprache dauerhaft ändern (10 Sprachen)
+ *   /security_check_now [user]        – Sofort-Analyse anstoßen (optional: Nutzer zwangsmoderieren)
+ *   /help                             – Übersicht
  *
  * Alle Commands werden GLOBAL registriert (siehe registerCommands weiter
  * unten) – neue Commands wie /security_check_now landen dadurch automatisch
@@ -38,6 +39,7 @@ const ALL_COMMAND_NAMES = [
   'set_gemini_api_key',
   'set_prompt',
   'set_log_channel',
+  'set_anti_delete_messages',
   'set_language',
   'security_check_now',
   'help',
@@ -111,6 +113,19 @@ function defineCommands() {
       ),
 
     new SlashCommandBuilder()
+      .setName('set_anti_delete_messages')
+      .setDescription('Anti-Delete: gelöschte letzte Nachrichten per Webhook erneut senden (nur Admins)')
+      .setDescriptionLocalizations(pick('descAntiDelete'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addBooleanOption((o) =>
+        o
+          .setName('enabled')
+          .setDescription('true = Anti-Delete einschalten, false = ausschalten')
+          .setDescriptionLocalizations(pick('descAntiDeleteOption'))
+          .setRequired(true)
+      ),
+
+    new SlashCommandBuilder()
       .setName('set_language')
       .setDescription('Ändert die Sprache des Sicherheitsbots dauerhaft (nur Admins)')
       .setDescriptionLocalizations(pick('descLanguage'))
@@ -127,7 +142,14 @@ function defineCommands() {
       .setName('security_check_now')
       .setDescription('Startet sofort eine KI-Prüfung der gesammelten Nachrichten (nur Admins)')
       .setDescriptionLocalizations(pick('descCheckNow'))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addUserOption((o) =>
+        o
+          .setName('user')
+          .setDescription('Nutzer, der bei dieser Prüfung zwangsmoderiert werden soll (optional)')
+          .setDescriptionLocalizations(pick('descCheckNowUser'))
+          .setRequired(false)
+      ),
 
     new SlashCommandBuilder()
       .setName('help')
@@ -684,6 +706,7 @@ async function handleHelp(ctx, interaction) {
     set_gemini_api_key: commandMention(ctx, 'set_gemini_api_key', interaction.guildId),
     set_prompt: commandMention(ctx, 'set_prompt', interaction.guildId),
     set_log_channel: commandMention(ctx, 'set_log_channel', interaction.guildId),
+    set_anti_delete_messages: commandMention(ctx, 'set_anti_delete_messages', interaction.guildId),
     set_language: commandMention(ctx, 'set_language', interaction.guildId),
     security_check_now: commandMention(ctx, 'security_check_now', interaction.guildId),
     help: commandMention(ctx, 'help', interaction.guildId),
@@ -693,11 +716,43 @@ async function handleHelp(ctx, interaction) {
 }
 
 /**
- * /security_check_now – wertet die aktuell gesammelten Nachrichten SOFORT
- * aus (Buffer + evtl. hängende Retry-Batches), ohne auf das Token-Limit oder
- * den nächsten 2-Stunden-Flush zu warten. Praktisch, um nach einer Konfigurations-
- * änderung (z. B. neuer API-Key oder Modell) sofort zu testen, ob die
- * Analyse wieder funktioniert.
+ * /set_anti_delete_messages [enabled:true|false] – schaltet Anti-Delete für
+ * diesen Server ein oder aus. Aktiv: Löscht ein echter Nutzer (kein Bot/
+ * Webhook) seine eigene letzte Nachricht eines Kanals, wird sie per Webhook
+ * mit exakter Profil-Kopie erneut gesendet (siehe anti-delete.js).
+ */
+async function handleSetAntiDeleteMessages(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
+  }
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+
+  const enabled = Boolean(interaction.options?.getBoolean?.('enabled'));
+  ctx.store.setAntiDeleteEnabled(interaction.guildId, enabled);
+  await ctx.store.flush();
+
+  return interaction.reply(
+    componentsV2Payload(
+      [smallContainer(null, t(enabled ? 'antiDeleteEnabled' : 'antiDeleteDisabled', lang))],
+      { ephemeral: true }
+    )
+  );
+}
+
+/**
+ * /security_check_now [user] – wertet die aktuell gesammelten Nachrichten
+ * SOFORT aus (Buffer + evtl. hängende Retry-Batches), ohne auf das Token-Limit
+ * oder den nächsten 2-Stunden-Flush zu warten. Praktisch, um nach einer
+ * Konfigurationsänderung (z. B. neuer API-Key oder Modell) sofort zu testen,
+ * ob die Analyse wieder funktioniert.
+ *
+ * Option `user`: Ein Nutzer, der bei DIESER Prüfung zwingend moderiert werden
+ * soll. Die Anordnung wandert als verbindliche Direktive in den System-Prompt
+ * (buildSystemPrompt → "ZWINGENDE MODERATION"). Bots, der Bot selbst und
+ * Administratoren (doppelt geschützte Immunität) können nicht gewählt werden.
  */
 async function handleCheckNow(ctx, interaction) {
   if (!interaction.inGuild()) {
@@ -715,6 +770,43 @@ async function handleCheckNow(ctx, interaction) {
     );
   }
 
+  // Optionaler Zwangsmoderations-Zielnutzer (Option `user`).
+  const targetUser =
+    typeof interaction.options?.getUser === 'function'
+      ? interaction.options.getUser('user')
+      : null;
+  let forcedTarget = null;
+  if (targetUser) {
+    const ownId = ctx.client?.user?.id || interaction.client?.user?.id || null;
+    let targetMember = null;
+    try {
+      targetMember = interaction.guild?.members?.cache?.get?.(targetUser.id) || null;
+      if (!targetMember && typeof interaction.guild?.members?.fetch === 'function') {
+        targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+      }
+    } catch {
+      targetMember = null;
+    }
+    const isImmune =
+      Boolean(targetUser.bot) ||
+      (ownId && String(targetUser.id) === String(ownId)) ||
+      Boolean(targetMember?.permissions?.has?.(PermissionFlagsBits.Administrator));
+    if (isImmune) {
+      return interaction.reply(
+        componentsV2Payload(
+          [smallContainer(null, t('checkNowForcedInvalid', lang, { user: `<@${targetUser.id}>` }))],
+          { ephemeral: true }
+        )
+      );
+    }
+    forcedTarget = {
+      id: String(targetUser.id),
+      name: String(
+        targetMember?.displayName || targetUser.globalName || targetUser.username || targetUser.id
+      ),
+    };
+  }
+
   await interaction.deferReply({ ephemeral: true });
 
   // Lazy require: vermeidet einen zyklischen Require zwischen commands.js
@@ -722,11 +814,22 @@ async function handleCheckNow(ctx, interaction) {
   // bleibt die Abhängigkeitsrichtung eindeutig und Tests können den
   // Moderator weiterhin per require.cache austauschen).
   const { runCheckNow } = require('./moderator');
-  const result = await runCheckNow(ctx, interaction.guildId);
+  const result = await runCheckNow(ctx, interaction.guildId, { forceUser: forcedTarget });
+
+  // Hinweis zur Zwangsmoderation an die Antwort anhängen (falls gewählt).
+  let forcedNote = '';
+  if (forcedTarget) {
+    const mention = `<@${forcedTarget.id}>`;
+    forcedNote =
+      result.empty || !result.forcedSeen
+        ? t('checkNowForcedNoMsgs', lang, { user: mention })
+        : t('checkNowForcedActive', lang, { user: mention });
+  }
+  const withNote = (text) => (forcedNote ? `${text}\n${forcedNote}` : text);
 
   if (result.empty) {
     return interaction.editReply(
-      componentsV2Payload([smallContainer(null, t('checkNowEmpty', lang))])
+      componentsV2Payload([smallContainer(null, withNote(t('checkNowEmpty', lang)))])
     );
   }
 
@@ -735,17 +838,21 @@ async function handleCheckNow(ctx, interaction) {
       componentsV2Payload([
         smallContainer(
           null,
-          t('checkNowPartial', lang, {
-            count: result.analyzed + result.remaining,
-            remaining: result.remaining,
-          })
+          withNote(
+            t('checkNowPartial', lang, {
+              count: result.analyzed + result.remaining,
+              remaining: result.remaining,
+            })
+          )
         ),
       ])
     );
   }
 
   return interaction.editReply(
-    componentsV2Payload([smallContainer(null, t('checkNowDone', lang, { count: result.analyzed }))])
+    componentsV2Payload([
+      smallContainer(null, withNote(t('checkNowDone', lang, { count: result.analyzed }))),
+    ])
   );
 }
 
@@ -760,6 +867,8 @@ async function handleChatInput(ctx, interaction) {
       return handleSetPrompt(ctx, interaction);
     case 'set_log_channel':
       return handleSetLogChannel(ctx, interaction);
+    case 'set_anti_delete_messages':
+      return handleSetAntiDeleteMessages(ctx, interaction);
     case 'set_language':
       return handleSetLanguage(ctx, interaction);
     case 'security_check_now':

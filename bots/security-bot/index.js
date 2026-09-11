@@ -18,11 +18,15 @@
  *    Ohne Verstoß schreibt der Bot NICHTS in den Chat (kein Small-Talk).
  *  - Fehlgeschlagene Analysen werden NICHT verworfen: Retry-Queue mit Backoff,
  *    meanwhile läuft das Sammeln weiter. Log-Kanal informiert über alles.
- *    /security_check_now stellt alle wartenden Nachrichten sofort fällig.
+ *    /security_check_now stellt alle wartenden Nachrichten sofort fällig –
+ *    optional mit einem Nutzer, der dabei zwingend moderiert werden soll.
+ *  - Anti-Delete (optional, /set_anti_delete_messages): Löscht ein echter
+ *    Nutzer (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals,
+ *    sendet der Bot sie per Webhook mit exakter Profil-Kopie erneut.
  *
  *  Commands (alle nur für Administratoren):
- *  /set_gemini_api_key · /set_prompt · /set_log_channel · /set_language ·
- *  /security_check_now · /help
+ *  /set_gemini_api_key · /set_prompt · /set_log_channel ·
+ *  /set_anti_delete_messages · /set_language · /security_check_now · /help
  * ============================================================================
  */
 
@@ -38,6 +42,7 @@ const {
 } = require('./src/commands');
 const { handleInteraction } = require('./src/interactions');
 const { handleIncoming } = require('./src/collector');
+const { handleMessageDelete, clearWebhookCache } = require('./src/anti-delete');
 const { sendJoinNotice } = require('./src/notices');
 const { startScheduler } = require('./src/scheduler');
 
@@ -178,6 +183,11 @@ module.exports = {
       void handleIncoming({ ctx, msg });
     });
 
+    // ---------------- Anti-Delete (messageDelete) ----------------
+    client.on('messageDelete', (message) => {
+      void handleMessageDelete({ ctx, message });
+    });
+
     // ---------------- Guild Create / Delete ----------------
     client.on('guildCreate', (guild) => {
       void sendJoinNotice(ctx, guild);
@@ -197,6 +207,7 @@ module.exports = {
     client.on('guildDelete', (guild) => {
       store.deleteGuild(guild.id);
       void store.flush();
+      clearWebhookCache(); // Anti-Delete-Webhooks der alten Gilde verwerfen
       logger.info(`[security-bot] Server ${guild.name} verlassen – Daten bereinigt`);
       updatePresence();
     });

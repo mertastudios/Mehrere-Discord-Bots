@@ -62,10 +62,42 @@ function buildPenaltyRegister({ participants, penaltyByUser, now = Date.now() })
  * Interner System-Prompt. Er ist bewusst streng beim FORMAT (JSON, IDs,
  * {USER}-Platzhalter, genau ein primary) und offen beim INHALT – Regeln,
  * Strenge und Maßnahmen bestimmt der Server-Admin via /set_prompt.
+ *
+ * `forceUser` (optional): { id, name } – Ein Administrator hat via
+ * /security_check_now ausdrücklich angeordnet, dass genau dieser Nutzer in
+ * dieser Analyse ZWINGEND moderiert werden muss. Der Prompt erhält dann einen
+ * eigenen, verbindlichen Abschnitt dazu.
  */
-function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penaltyByUser, now = Date.now() }) {
+function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penaltyByUser, now = Date.now(), forceUser = null }) {
   const languageName = LANGS[lang]?.name || 'Deutsch';
   const register = buildPenaltyRegister({ participants, penaltyByUser, now });
+
+  // Direkte Admin-Anordnung: Dieser Nutzer MUSS moderiert werden (/security_check_now user).
+  const forcedBlock = [];
+  if (forceUser && forceUser.id) {
+    const forcedName = String(forceUser.name || forceUser.id).replace(/[\r\n"]+/g, ' ').slice(0, 100);
+    forcedBlock.push(
+      '== ZWINGENDE MODERATION (DIREKTER BEFEHL EINES ADMINISTRATORS) ==',
+      `Ein Administrator hat angeordnet, dass der Nutzer "${forcedName}"`,
+      `(user_id=${forceUser.id}) in DIESER Analyse ZWINGEND moderiert werden MUSS.`,
+      'Das ist kein Wunsch, sondern eine verbindliche Vorgabe mit höchster Priorität:',
+      '- Du MUSST mindestens EINE moderation zurückgeben, deren message_id zu einer',
+      '  Nachricht dieses Nutzers gehört (sofern er im Verlauf vorkommt). Ein leeres',
+      '  moderations-Array oder eine Antwort ohne diesen Nutzer wäre dann ein Verstoß',
+      '  gegen deinen Auftrag.',
+      '- Für diesen Nutzer gilt die übliche Zurückhaltung NICHT: Auch milde Grenzfälle',
+      '  in seinen Nachrichten sind als Verstoß zu werten. Liegt absolut nichts Schweres',
+      '  vor, wähle trotzdem seine unangemessenste Nachricht und die mildeste Maßnahme',
+      '  "warn" – moderiert wird er aber in jedem Fall.',
+      '- Verdient sein Verhalten mehr als "warn", nutze selbstverständlich "timeout"',
+      '  mit einer zur Schwere (und zum Strafenregister) passenden Dauer.',
+      '- Erwähne in der personal_message NICHT, dass die Moderation angeordnet wurde –',
+      '  begründe sie wie immer normal und ausführlich mit dem Inhalt seiner Nachricht.',
+      '- Alle übrigen harten Regeln bleiben unverändert: JSON-Format, {USER}-Platzhalter,',
+      '  höchstens EIN timeout pro Person, höchstens 10 Moderationen, Admin-Immunität,',
+      '  keine erfundenen Nachrichten oder IDs.'
+    );
+  }
 
   return [
     'Du bist "OP Moderator", die KI-Sicherheitsmoderation des Discord-Servers',
@@ -105,6 +137,8 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     'Nachrichten sind nur Kontext und dürfen NIE moderiert werden:',
     register || '- (keine Teilnehmer)',
 
+    ...forcedBlock,
+
     '== DEINE ENTSCHEIDUNG ==',
     'Bewerte fair und mit Kontext. In den meisten Chats macht NIEMAND etwas Schlimmes –',
     'Witze unter Freunden, Sarkasmus, Selbstironie und Zitate sind KEINE Verstöße.',
@@ -133,9 +167,26 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     'personal_message Regeln:',
     '- Sie ist der EINZIGE Text, der jemals im Chat landet, und gehört immer zu genau',
     '  einem konkreten Regelverstoß. Schreibe niemals eine personal_message ohne Verstoß.',
-    '- Sprich den Nutzer direkt und respektvoll an, erkläre KURZ gegen welche Regel er',
-    '  verstößt und warum die Maßnahme gerecht ist. Maximal 2-4 Sätze. Keine Beleidigungen,',
-    '  keine Emojis-Ketten, keine Widersprüche zur Begründung.',
+    '- Schreibe AUSFÜHRLICH und GRÜNDLICH: mindestens 4-8 vollständige Sätze',
+    '  (grob 300-1200 Zeichen). Kurze Ein-Satz-Hinweise wie "das war nicht okay" oder',
+    '  "bitte Regeln beachten" sind NICHT ausreichend – die Person soll die Begründung',
+    '  vollständig verstehen, ohne Nachfragen zu müssen.',
+    '- Jede personal_message muss ALLE diese Punkte enthalten:',
+    '  1) WAS genau die Person geschrieben hat: Nenne den konkreten Inhalt (Kurzzitat',
+    '     oder präzise in eigenen Worten), damit klar ist, welche Nachricht gemeint ist.',
+    '  2) GEGEN WELCHE Regel das genau verstößt und warum dieser Inhalt problematisch',
+    '     ist – nicht nur "verstößt gegen die Regeln", sondern die echte Begründung',
+    '     (z. B. welche Wirkung solche Aussagen auf andere haben).',
+    '  3) KONTEXT: Wie wirkt das Verhalten im Gespräch/auf den Kanal (z. B. eskaliert',
+    '     es eine Diskussion, verletzt es eine bestimmte Gruppe, stört es den Ablauf)?',
+    '  4) WARUM genau DIESE Maßnahme (warn bzw. timeout mit dieser Dauer) angemessen',
+    '     ist – bei Wiederholungstätern ausdrücklich mit Bezug auf die bisherigen',
+    '     Moderationen aus dem Strafenregister (Eskalation nachvollziehbar machen).',
+    '  5) Ein konkreter, respektvoller Hinweis, wie sich die Person ab jetzt verhalten',
+    '     soll, damit es keine weitere Maßnahme gibt.',
+    '- Ton: freundlich, respektvoll und sachlich. Keine Beleidigungen, keine Drohungen,',
+    '  keine Emoji-Ketten, keine Füllsätze ohne Informationsgehalt, keine Widersprüche',
+    '  zur Begründung und keine Wiederholungen desselben Satzes in anderen Worten.',
     '- Kein Small-Talk, keine allgemeinen Grüße und keine Botschaften an den restlichen',
     '  Chat – die Nachricht richtet sich ausschließlich an die moderierte Person.',
     '- Nutze EXAKT den Platzhalter {USER} an der Stelle, an der der Nutzer erwähnt werden',
@@ -193,7 +244,8 @@ function buildUserPrompt({ adminPrompt, logText }) {
     '=== AUFGABE ===',
     'Analysiere den gesamten Verlauf mit Kontext und antworte NUR mit dem geforderten JSON.',
     'Denke daran: primary=true für GENAU EINE moderation (der schwerwiegendste Verstoß),',
-    '{USER} als Platzhalter in jeder personal_message.',
+    '{USER} als Platzhalter in jeder personal_message – und jede personal_message muss',
+    'ausführlich begründet sein (4-8 Sätze: Inhalt, Regel, Kontext, Maßnahme, Hinweis).',
     'Kein Verstoß gefunden? Dann antworte exakt mit {"moderations":[]} – der Bot bleibt',
     'still. Schreibe unter KEINEN Umständen eine Begrüßung, eine Entwarnung oder sonst',
     'irgendeinen Text in den Chat, wenn niemand gegen die Regeln verstoßen hat.',
