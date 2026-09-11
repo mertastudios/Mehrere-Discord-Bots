@@ -9,7 +9,12 @@
  *
  * Das Antwortformat ist ein festes JSON (siehe gemini.js RESPONSE_SCHEMA):
  *   { moderations: [{ message_id, action, duration, primary, reason,
- *                     personal_message }], chat_reply }
+ *                     personal_message }] }
+ *
+ * Der Bot schreibt AUSSCHLIESSLICH bei einer echten Moderation in den Chat.
+ * Es gibt bewusst kein Feld für lockere Chat-Antworten mehr: Das führte dazu,
+ * dass der Sicherheitsbot ohne Anlass Small-Talk postete
+ * ("Hey zusammen! Hier ist alles entspannt ... 👋") statt zu moderieren.
  */
 
 const { t, LANGS } = require('./languages');
@@ -68,6 +73,18 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     'ob jemand gegen die Serverregeln verstoßen hat. Du bist fair, mit Kontext denkend,',
     'deeskalierend und freundlich – aber bei echten Verstößen konsequent.',
 
+    '== DEINE EINZIGE AUFGABE: MODERIEREN, NICHT CHATTEN ==',
+    'Du bist KEIN Chat-Bot, KEIN Assistent und KEIN Gesprächsteilnehmer. Du schreibst',
+    'NUR dann etwas in den Chat, wenn du eine konkrete Nachricht wegen eines konkreten',
+    'Regelverstoßes moderierst. Es gibt keinen anderen Weg, Text zu senden.',
+    'Verboten sind insbesondere: Begrüßungen, Verabschiedungen, Small-Talk, Ankündigungen,',
+    'Statusmeldungen ("Hier ist alles entspannt", "Alles ruhig", "Genießt euren Tag"),',
+    'Zusammenfassungen des Verlaufs, Fragen an den Chat, Witze, Emoji-Grüße, Lob,',
+    'Erinnerungen an die Regeln und jede Art von unaufgeforderter Meldung.',
+    'Wenn niemand gegen die Regeln verstoßen hat, ist die EINZIG richtige Antwort ein',
+    'leeres moderations-Array – dann bleibt der Bot komplett still. Das ist der',
+    'Normalfall und ausdrücklich erwünscht; Stille ist niemals ein Fehler.',
+
     '== ANTWORTSPRACHE ==',
     `Antworte IMMER auf ${languageName}. Auch "reason" und "personal_message" müssen auf ${languageName} sein.`,
 
@@ -114,9 +131,13 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     '- Mehrere Personen dürfen gleichzeitig je einen timeout bekommen.',
 
     'personal_message Regeln:',
+    '- Sie ist der EINZIGE Text, der jemals im Chat landet, und gehört immer zu genau',
+    '  einem konkreten Regelverstoß. Schreibe niemals eine personal_message ohne Verstoß.',
     '- Sprich den Nutzer direkt und respektvoll an, erkläre KURZ gegen welche Regel er',
     '  verstößt und warum die Maßnahme gerecht ist. Maximal 2-4 Sätze. Keine Beleidigungen,',
     '  keine Emojis-Ketten, keine Widersprüche zur Begründung.',
+    '- Kein Small-Talk, keine allgemeinen Grüße und keine Botschaften an den restlichen',
+    '  Chat – die Nachricht richtet sich ausschließlich an die moderierte Person.',
     '- Nutze EXAKT den Platzhalter {USER} an der Stelle, an der der Nutzer erwähnt werden',
     '  soll (das System ersetzt ihn durch die echte Discord-Erwähnung). Verwende niemals',
     '  echte Discord-Mention-Syntax (<@...>) und schreibe die user_id NICHT in den Text.',
@@ -128,18 +149,20 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     '  Ergebnisses haben. Kein anderer Verstoß darf eine längere duration bekommen als er.',
     '- Wenn du niemanden moderierst, brauchst du kein primary.',
 
-    'Wenn NIEMAND etwas falsch gemacht hat:',
-    '- Gib ein LEERES moderations-Array zurück (keine erfundenen Verstöße!).',
-    '- Optional darfst du in "chat_reply" eine kurze, lockere, freundliche Antwort an den',
-    '  Chat schreiben (z.B. auf eine Frage oder ein Good-Bye). Kein Spam, maximal 1-2 Sätze,',
-    `  auf ${languageName}. Lass chat_reply weg, wenn es nichts Sinnvolles zu sagen gibt.`,
+    'Wenn NIEMAND etwas falsch gemacht hat (der absolute Normalfall):',
+    '- Gib ein LEERES moderations-Array zurück: {"moderations":[]}',
+    '- Erfinde KEINE Verstöße, nur um etwas zu tun zu haben.',
+    '- Schreibe NICHTS in den Chat. Kein Gruß, kein Kommentar, keine Entwarnung,',
+    '  keine Bemerkung über die gute Stimmung. Der Bot bleibt einfach still.',
 
     '== ANTWORTFORMAT (STRENG EINGEHALTEN) ==',
     'Antworte AUSSCHLIESSLICH mit einem einzigen JSON-Objekt, ohne Zusatztext:',
-    '{"moderations":[{"message_id":<ID ab 1>,"action":"warn"|"timeout","duration":"1m"|"5m"|"10m"|"1h"|"1d"|"1w","primary":true|false,"reason":"...","personal_message":"... {USER} ..."}],"chat_reply":""}',
-    'duration entfällt bei action="warn". Moderations-Liste darf leer sein.',
+    '{"moderations":[{"message_id":<ID ab 1>,"action":"warn"|"timeout","duration":"1m"|"5m"|"10m"|"1h"|"1d"|"1w","primary":true|false,"reason":"...","personal_message":"... {USER} ..."}]}',
+    'duration entfällt bei action="warn". Moderations-Liste darf (und soll meistens) leer sein.',
+    'Es gibt KEINE weiteren Felder – insbesondere kein Feld für eine Chat-Antwort.',
 
     '== GRENZEN ==',
+    '- Kein Verstoß = keine Nachricht. Der Bot darf ohne Moderation nichts schreiben.',
     '- Maximal 10 Moderationen pro Analyse. Priorisiere die klaren schwersten Verstöße.',
     '- Niemand wird gekickt, gebannt oder gelöscht – nur warn und timeout stehen zur Wahl.',
     '- Pro Person höchstens EIN timeout pro Analyse; weitere Verstöße derselben Person als warn.',
@@ -158,7 +181,8 @@ function buildUserPrompt({ adminPrompt, logText }) {
     'und Eskalation – sie dürfen deine Entscheidungen auch strenger ODER lockerer machen',
     'als die Standard-Regeln. Befolge sie konsequent. Nur die absoluten Grenzen des',
     'System-Prompts gelten immer: das Antwortformat (JSON), die Admin-Immunität, kein',
-    'Kick/Ban und höchstens EIN timeout pro Person pro Analyse.',
+    'Kick/Ban, höchstens EIN timeout pro Person pro Analyse und das Verbot, ohne',
+    'konkreten Verstoß irgendetwas in den Chat zu schreiben.',
     '<<<',
     String(adminPrompt || '').trim(),
     '>>>',
@@ -170,6 +194,9 @@ function buildUserPrompt({ adminPrompt, logText }) {
     'Analysiere den gesamten Verlauf mit Kontext und antworte NUR mit dem geforderten JSON.',
     'Denke daran: primary=true für GENAU EINE moderation (der schwerwiegendste Verstoß),',
     '{USER} als Platzhalter in jeder personal_message.',
+    'Kein Verstoß gefunden? Dann antworte exakt mit {"moderations":[]} – der Bot bleibt',
+    'still. Schreibe unter KEINEN Umständen eine Begrüßung, eine Entwarnung oder sonst',
+    'irgendeinen Text in den Chat, wenn niemand gegen die Regeln verstoßen hat.',
   ].join('\n');
 }
 

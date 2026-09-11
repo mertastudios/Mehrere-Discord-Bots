@@ -9,10 +9,13 @@ aus – ein einzelnes abgeschaltetes Modell blockiert die Moderation also nie wi
 tagelang.
 
 Der Bot verhält sich wie ein zuverlässiger **OP-Moderator**: Er sammelt diskret alle
-Textnachrichten echter Nutzer, bis genug Tokens für eine Analyse beisammen sind (oder
-Mitternacht ist), schickt den Verlauf gemeinsam mit euren Server-Regeln an Gemini und
+Textnachrichten echter Nutzer, bis genug Tokens für eine Analyse beisammen sind (spätestens
+aber alle **2 Stunden**), schickt den Verlauf gemeinsam mit euren Server-Regeln an Gemini und
 setzt dessen Entscheidungen um – **Warnung oder Timeout**, immer mit einer persönlichen,
 begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendsten Verstoß.
+
+**Der Bot chattet nicht.** Er schreibt ausschließlich dann etwas in den Chat, wenn er
+tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett still.
 
 ---
 
@@ -31,9 +34,16 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 - **Nichts geht verloren**: Bei API-Fehlern oder Rate-Limits bleibt der gesammelte
   Verlauf **vollständig erhalten**, neue Nachrichten sammeln sich derweil weiter, und
   der Bot wiederholt die Analyse mit wachsendem Abstand (2min → 5min → 15min → … → max. 6h).
-- **0-Uhr-Flush**: Jede Nacht um 0 Uhr (Zeitzone der Serversprache) wird auch ein kleiner
-  Verlauf analysiert – auf toten Servern bekommen Nutzer ihre Verwarnung spätestens
-  nachts statt erst nach Tagen.
+- **2-Stunden-Flush**: Alle 2 Stunden (Raster 0/2/4/…/22 Uhr in der Zeitzone der
+  Serversprache) wird auch ein kleiner Verlauf analysiert – auf ruhigen Servern
+  bekommen Nutzer ihre Verwarnung so spätestens nach 2 Stunden statt erst am
+  nächsten Tag. Der frühere reine 0-Uhr-Lauf ist im Raster enthalten. Wurde ein
+  Slot durch einen Neustart/Deploy verpasst, holt der Bot ihn beim nächsten Tick
+  sofort nach.
+- **Stille statt Small-Talk**: Ohne Verstoß postet der Bot **gar nichts**. Ein früheres
+  optionales Feld für lockere Chat-Antworten ist entfernt – es führte dazu, dass der
+  Sicherheitsbot ohne Anlass Sachen wie „Hey zusammen! Hier ist alles entspannt 👋"
+  schrieb, statt zu moderieren.
 - **Admins sind immun – aber Kontext bleibt erhalten**: Nachrichten von Mitgliedern mit
   Administrator-Berechtigung werden **als Kontext** mitgesammelt, damit Gemini das
   Gespräch versteht (z. B. worauf ein Nutzer reagiert). Im Verlauf stehen sie jedoch
@@ -54,7 +64,7 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
   werden. Weitere Verstöße derselben Person werden automatisch zu Warnungen herabgestuft –
   das garantiert der Code, unabhängig davon, was Gemini liefert.
 - **Fair & deeskalierend**: In den meisten Fällen macht niemand etwas Schlimmes – dann
-  moderiert Gemini niemanden und darf optional kurz und locker im Chat antworten.
+  moderiert Gemini niemanden und der Bot schreibt keine einzige Nachricht.
 - **10 Sprachen**: Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch,
   Japanisch, Koreanisch, Chinesisch, Italienisch.
 - **Turso DB & RAM-First**: Nutzt dieselbe Turso-Datenbank wie der XP-Bot (neue,
@@ -70,8 +80,8 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 | `/set_gemini_api_key [key]` | Hinterlegt den Google Gemini API-Key für diesen Server (wird live bei Google geprüft). `remove` löscht den Key. Keys: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `/set_prompt` | Öffnet ein **Formular** für die KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der Standardtext (oder dein letzter Text) ist bereits eingetragen. Leer absenden = zurücksetzen auf Standard. |
 | `/set_log_channel [channel]` | Setzt den Log-Kanal, in den der Bot Moderations-Hinweise, API-Fehler und Meldungen sendet. Ohne Kanal-Angabe wird der Log-Kanal entfernt. |
-| `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die 0-Uhr-Zeitzone & die Standardsprache der KI-Antworten). |
-| `/security_check_now` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf das Token-Limit oder Mitternacht zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Praktisch, um nach einer Konfigurationsänderung direkt zu testen. |
+| `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die Zeitzone des 2-Stunden-Rasters & die Standardsprache der KI-Antworten). |
+| `/security_check_now` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf das Token-Limit oder den nächsten 2-Stunden-Lauf zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Praktisch, um nach einer Konfigurationsänderung direkt zu testen. |
 | `/help` | Übersicht aller Befehle mit klickbaren Mentions. |
 
 ---
@@ -85,13 +95,13 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
    45.000 Zeichen, einstellbar über `SECURITY_GEMINI_MAX_INPUT_TOKENS`), werden alle
    gesammelten Nachrichten zu einem Batch mit **IDs ab 1** verpackt (Admin-Nachrichten
    bekommen **keine ID**). Zusätzlich wird der
-   Buffer **jede Nacht um 0 Uhr** als Mini-Verlauf ausgewertet.
+   Buffer **alle 2 Stunden** als Mini-Verlauf ausgewertet.
 3. **Analyse**: Gemini erhält
    - den **System-Prompt** (Rolle, Antwortformat, `{USER}`-Platzhalter-Regel,
      „genau ein `primary`“-Regel, Timeout-Stufen, Strafenregister der Teilnehmer),
    - die **Admin-Anweisungen** aus `/set_prompt` (Regeln, Strenge, Maßnahmen) und
    - den **Chat-Verlauf** (gruppiert nach Kanälen, chronologisch, Klartext).
-4. **Antwort**: Ein einziges JSON:
+4. **Antwort**: Ein einziges JSON – es gibt **nur** das Feld `moderations`:
    ```json
    {
      "moderations": [
@@ -103,18 +113,18 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
          "reason": "Gegen Regel 2 verstoßen: Beleidigung",
          "personal_message": "{USER}, das war eine klare Beleidigung – 5 Minuten Pause."
        }
-     ],
-     "chat_reply": ""
+     ]
    }
    ```
+   Kein Verstoß gefunden? Dann `{"moderations": []}` – und der Bot bleibt still.
 5. **Anwenden**: Der Bot antwortet **auf die Nachricht mit dem schwerwiegendsten
    Verstoß** (`primary: true`), ersetzt `{USER}` durch die echte Erwähnung, wendet den
    **Timeout** an (1m / 5m / 10m / 1h / 1d / 1w) bzw. sendet nur die **Warnung**, und
    pflegt das Strafenregister. Dabei gilt als harte Garantie: **höchstens ein Timeout
    pro Person** pro Analyse – weitere Verstöße derselben Person werden als Warnung
    umgesetzt. Alle Details wandern in den Log-Kanal.
-6. **Niemand schuldig?** Dann passiert nichts – optional schreibt Gemini eine kurze,
-   lockere Antwort in den Chat (`chat_reply`).
+6. **Niemand schuldig?** Dann passiert **gar nichts**: keine Nachricht im Chat, kein
+   Eintrag im Log-Kanal. Genau das ist der Normalfall.
 
 ### Maßnahmen, die Gemini wählen kann
 
@@ -129,7 +139,7 @@ Gemini mit `primary: true` (er trägt die längste Dauer).
 
 Welche Maßnahme wann greift, bestimmst **du** in `/set_prompt` – deine Anweisungen haben
 höchste Priorität (z. B. „kleine Verstöße → Warnung, Hate → 1 Tag Timeout“). Nur das
-Antwortformat, die Admin-Immunität, kein Kick/Ban und max. 1 Timeout pro Person sind fest.
+Antwortformat, die Admin-Immunität, kein Kick/Ban, max. 1 Timeout pro Person und das Verbot von Nachrichten ohne Verstoß sind fest.
 Kick/Ban gibt es bewusst nicht.
 
 ---
@@ -202,4 +212,5 @@ node --test tests/security-bot.test.js tests/security-command-registration.test.
 Die Tests decken die komplette Pipeline ab: Sammel-Regeln & Discord-Format-Auflösung,
 Batch-Bau mit IDs ab 1, Gemini-Request-Struktur & JSON-Parsing, Prompt-Bau (Register,
 `{USER}`, `primary`), Anwendungs-Flow (Timeout, Reply auf Hauptverstoß, Log-Kanal),
-Retry-Backoff ohne Datenverlust, Admin-Doppelabsicherung, 0-Uhr-Flush und alle Commands.
+Retry-Backoff ohne Datenverlust, Admin-Doppelabsicherung, 2-Stunden-Flush (inkl.
+Nachholen verpasster Slots), garantierte Stille ohne Verstoß und alle Commands.

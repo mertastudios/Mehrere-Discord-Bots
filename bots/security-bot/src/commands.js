@@ -695,7 +695,7 @@ async function handleHelp(ctx, interaction) {
 /**
  * /security_check_now – wertet die aktuell gesammelten Nachrichten SOFORT
  * aus (Buffer + evtl. hängende Retry-Batches), ohne auf das Token-Limit oder
- * den Mitternachts-Flush zu warten. Praktisch, um nach einer Konfigurations-
+ * den nächsten 2-Stunden-Flush zu warten. Praktisch, um nach einer Konfigurations-
  * änderung (z. B. neuer API-Key oder Modell) sofort zu testen, ob die
  * Analyse wieder funktioniert.
  */

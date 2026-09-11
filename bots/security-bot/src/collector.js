@@ -11,7 +11,8 @@
  * - Discord-Formate (Mentions, Rollen, Kanäle, Emojis, Timestamps, Markdown)
  *   werden in lesbaren Klartext für Gemini umgewandelt.
  * - Sobald das Token-Budget für eine Gemini-Anfrage voll ist, wird der Buffer
- *   als Batch mit IDs ab 1 verpackt und die Analyse angestoßen.
+ *   als Batch mit IDs ab 1 verpackt und die Analyse angestoßen. Unabhängig
+ *   davon wertet der Scheduler den Buffer alle 2 Stunden aus (scheduler.js).
  */
 
 const { PermissionFlagsBits } = require('discord.js');

@@ -2,7 +2,7 @@
  * Moderations-Pipeline des Sicherheitsbots.
  *
  * Ablauf:
- *   Buffer voll (Token-Limit) oder Mitternachts-Flush
+ *   Buffer voll (Token-Limit) oder 2-Stunden-Flush
  *     → Batch mit IDs ab 1 → Gemini (System-Prompt + Admin-Prompt + Verlauf)
  *     → Antwort parsen → Maßnahmen anwenden → Log-Kanal informieren
  *
@@ -10,7 +10,9 @@
  * - Bei API-Fehlern/Rate-Limits bleibt der Batch VOLLSTÄNDIG erhalten und wird
  *   mit wachsendem Abstand erneut versucht (2m → 5m → 15m → … → max. 6h).
  * - Neue Nachrichten sammeln sich derweil ganz normal im Buffer.
- * - Wurde niemand moderiert, passiert nichts (keine Spam-Nachrichten).
+ * - Wurde niemand moderiert, passiert GAR NICHTS: Der Bot schreibt in diesem
+ *   Fall keine einzige Nachricht in den Chat (kein Small-Talk, keine
+ *   Entwarnung, kein Gruß). Nur echte Moderationen erzeugen einen Post.
  * - Administratoren sind im Batch nur Kontext (keine ID) und werden bei der
  *   Anwendung zusätzlich noch einmal live geprüft und notfalls übersprungen.
  */
@@ -31,7 +33,6 @@ const {
   smallContainer,
   clip,
   buildModerationLogContainer,
-  buildChatReplyLogContainer,
   buildApiErrorContainer,
   buildNoKeyContainer,
 } = require('./embed-builder');
@@ -315,8 +316,9 @@ async function processSingleBatch(ctx, guildId, batch) {
   ctx.store.deleteBatch(gid, batch.id);
   void ctx.store.flush();
   ctx.logger?.info?.(
-    `[security-bot] Analyse ok für Gilde ${gid}: ${parsed.moderations.length} Moderation(en), ` +
-      `Chat-Antwort: ${parsed.chat_reply ? 'ja' : 'nein'} (Batch ${batch.id} abgeschlossen)`
+    `[security-bot] Analyse ok für Gilde ${gid}: ${parsed.moderations.length} Moderation(en) ` +
+      `(Batch ${batch.id} abgeschlossen)` +
+      (parsed.moderations.length === 0 ? ' – niemand moderiert, Bot bleibt still.' : '')
   );
   return true;
 }
@@ -491,30 +493,11 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
     }
   }
 
-  // Optionale lockere Chat-Antwort (wenn niemand moderiert wurde / als Zugabe)
-  if (parsed.chat_reply) {
-    try {
-      const last = messages.reduce((a, b) => (b.ord > a.ord ? b : a), messages[0]);
-      const channel = guild?.channels?.cache?.get?.(last?.channelId) || null;
-      if (channel) {
-        await channel.send({
-          content: clip(parsed.chat_reply, 1500),
-          allowedMentions: { parse: [] },
-        });
-      }
-      await sendLogNotice(
-        ctx,
-        guildId,
-        buildChatReplyLogContainer({
-          lang,
-          reply: parsed.chat_reply,
-          channelMention: last?.channelId ? `<#${last.channelId}>` : null,
-        })
-      );
-    } catch (err) {
-      ctx.logger?.warn?.('[security-bot] Chat-Antwort fehlgeschlagen:', err?.message || err);
-    }
-  }
+  // Bewusst KEIN weiterer Kanal-Post: Der Bot schreibt ausschließlich die
+  // persönlichen Moderations-Nachrichten oben. Früher konnte Gemini über ein
+  // Feld "chat_reply" ohne jeden Verstoß Small-Talk in den Chat posten
+  // ("Hey zusammen! Hier ist alles entspannt ... 👋"). Das ist entfernt: keine
+  // Moderation = keine Nachricht.
 }
 
 module.exports = {

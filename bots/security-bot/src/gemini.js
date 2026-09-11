@@ -42,6 +42,12 @@ const MODEL_NOT_FOUND_STATUS = 404; // Modell existiert nicht (mehr) / für dies
 // Entfernte Struktur der erzwungenen Gemini-Antwort. Die Felder sind im
 // System-Prompt (prompts.js) ausführlich erklärt – das Schema erzwingt nur
 // noch die Form (JSON, Typen, Enums).
+//
+// WICHTIG: Das Schema kennt AUSSCHLIESSLICH "moderations". Ein früher
+// vorhandenes Feld "chat_reply" verleitete das Modell dazu, auch ohne jeden
+// Verstoß Small-Talk in den Chat zu posten ("Hey zusammen! Hier ist alles
+// entspannt ... 👋"). Ein Sicherheitsbot moderiert – er plaudert nicht.
+// Ohne das Feld im Schema kann das Modell gar nichts anderes zurückgeben.
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -60,7 +66,6 @@ const RESPONSE_SCHEMA = {
         required: ['message_id', 'action', 'primary', 'reason', 'personal_message'],
       },
     },
-    chat_reply: { type: 'STRING', description: 'Optional: lockere Antwort an den Chat, wenn NIEMAND moderiert wurde' },
   },
   required: ['moderations'],
 };
@@ -363,7 +368,6 @@ function parseModerationJson(rawText) {
   return {
     ok: true,
     moderations,
-    chat_reply: String(data?.chat_reply || '').slice(0, 1500) || null,
     raw: data,
   };
 }
