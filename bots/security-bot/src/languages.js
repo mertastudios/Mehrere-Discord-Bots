@@ -89,7 +89,9 @@ const LANGS = {
 
 const DEFAULT_LANG = 'de';
 
+
 const STRINGS = {
+
   de: {
     errGuildOnly: '🔒 Dieser Befehl funktioniert nur in einem Server.',
     errNoPermission: '🔒 Nur Server-Administratoren können diesen Befehl nutzen.',
@@ -107,6 +109,8 @@ const STRINGS = {
 
     logChannelSet: '✅ **Log-Kanal gesetzt:** {channel}\nDorthin sendet der Bot Moderations-Hinweise, API-Fehler und sonstige Meldungen.',
     logChannelRemoved: '🗑️ **Log-Kanal entfernt.** Es werden keine Hinweise mehr versendet.',
+    antiDeleteEnabled: '✅ **Anti-Delete aktiviert.** Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, sendet der Bot sie per Webhook mit exakter Profil-Kopie (Anzeigename & Avatar) erneut. Erwähnungen pingen dabei niemanden.',
+    antiDeleteDisabled: '⛔ **Anti-Delete deaktiviert.** Gelöschte Nachrichten werden nicht mehr erneut gesendet.',
 
     langChanged: '✅ Sprache geändert: {name}',
 
@@ -116,6 +120,9 @@ const STRINGS = {
     descLanguage: 'Sprache des Bots dauerhaft ändern',
     descHelp: 'Zeigt alle Befehle und Funktionen',
     descCheckNow: 'Startet sofort eine KI-Prüfung der gesammelten Nachrichten (nur Admins)',
+    descCheckNowUser: 'Nutzer, der bei dieser Prüfung zwangsmoderiert werden soll (optional)',
+    descAntiDelete: 'Anti-Delete: gelöschte letzte Nachrichten per Webhook erneut senden',
+    descAntiDeleteOption: 'true = Anti-Delete einschalten, false = ausschalten',
 
     helpTitle: '🛡️ Security Bot – KI-Moderation mit Gemini',
     helpDesc: 'Dieser Bot sammelt **Textnachrichten echter Nutzer** (Admins sind immun), bis das Token-Limit für eine Gemini-Analyse voll ist – zusätzlich wird der Verlauf **alle 2 Stunden** ausgewertet. Gemini erhält den System-Prompt, eure Server-Regeln und den sauber formatierten Chat-Verlauf und entscheidet über Warnungen & Timeouts. Bei API-Fehlern geht **nichts verloren**: Es wird so lange wiederholt, bis es klappt.',
@@ -124,7 +131,8 @@ const STRINGS = {
     helpLogChannel: 'Setzt den Log-Kanal für Moderations-Hinweise, API-Fehler und Meldungen. Ohne Kanal-Angabe wird der Log-Kanal entfernt.',
     helpLanguage: 'Ändert die Sprache des Bots dauerhaft (steuert auch die Zeitzone der 2-Stunden-Auswertung & die Standardsprache der KI).',
     helpHelp: 'Zeigt diese Übersicht.',
-    helpCheckNow: 'Wertet die bisher gesammelten Nachrichten sofort aus, ohne auf das Token-Limit oder die nächste 2-Stunden-Auswertung zu warten.',
+    helpCheckNow: 'Wertet die bisher gesammelten Nachrichten sofort aus, ohne auf das Token-Limit oder die nächste 2-Stunden-Auswertung zu warten. Mit der Option `user` lässt sich ein Nutzer wählen, der bei dieser Prüfung zwingend moderiert werden soll.',
+    helpAntiDelete: 'Schaltet Anti-Delete ein oder aus: Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, sendet der Bot sie per Webhook mit exakter Profil-Kopie (Name & Avatar) erneut. Erwähnungen pingen dabei niemanden.',
 
     logModTitle: '🛡️ KI-Moderation',
     logFieldUser: 'Nutzer',
@@ -148,6 +156,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ Aktuell liegen keine gesammelten Nachrichten vor – nichts zu prüfen.',
     checkNowDone: '✅ **Sofort-Prüfung abgeschlossen** ({count} Nachrichten analysiert). Ergebnisse siehe Log-Kanal.',
     checkNowPartial: '⚠️ **Sofort-Prüfung gestartet** ({count} Nachrichten), aber {remaining} davon konnten nicht abgeschlossen werden (API-Fehler) – Details im Log-Kanal, es wird automatisch weiter versucht.',
+    checkNowForcedActive: '🎯 Zwangsmoderation angefordert: {user} wird bei dieser Prüfung zwingend moderiert – Details siehe Log-Kanal.',
+    checkNowForcedNoMsgs: '⚠️ {user} kommt in den gesammelten Nachrichten nicht vor – es gab keine Nachricht, die moderiert werden könnte.',
+    checkNowForcedInvalid: '⚠️ {user} ist ein Bot oder Administrator und kann nicht moderiert werden. Wähle ein reguläres Mitglied.',
 
     joinTitle: '👋 Security Bot ist beigelegt!',
     joinDesc: 'Danke fürs Einladen! So startest du:\n\n1️⃣ `/set_gemini_api_key` – Google Gemini Key hinterlegen ([kostenlos erstellen](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – Regeln & Strenge der KI festlegen (Standardtext ist vorbelegt)\n3️⃣ `/set_log_channel` – Log-Kanal für Moderations-Hinweise wählen\n\nAb dann überwacht die KI automatisch alle Textnachrichten. **Alle Commands sind nur für Administratoren sichtbar.**',
@@ -202,6 +213,8 @@ const STRINGS = {
 
     logChannelSet: '✅ **Log channel set:** {channel}\nThe bot will post moderation notices, API errors and other reports there.',
     logChannelRemoved: '🗑️ **Log channel removed.** No more notices will be sent.',
+    antiDeleteEnabled: '✅ **Anti-delete enabled.** When someone (not a bot/webhook) deletes their own last message of a channel, the bot resends it via webhook with an exact profile copy (display name & avatar). Mentions never ping anyone.',
+    antiDeleteDisabled: '⛔ **Anti-delete disabled.** Deleted messages are no longer resent.',
 
     langChanged: '✅ Language changed: {name}',
 
@@ -211,6 +224,9 @@ const STRINGS = {
     descLanguage: 'Change the bot language permanently',
     descHelp: 'Shows all commands and features',
     descCheckNow: 'Immediately runs an AI check on the collected messages (admins only)',
+    descCheckNowUser: 'User who must definitely be moderated in this check (optional)',
+    descAntiDelete: 'Anti-delete: resend users\' deleted last messages via webhook',
+    descAntiDeleteOption: 'true = turn anti-delete on, false = turn it off',
 
     helpTitle: '🛡️ Security Bot – AI Moderation with Gemini',
     helpDesc: 'This bot collects **text messages from real users** (admins are immune) until the token limit for one Gemini analysis is full – in addition, the history is analyzed **every 2 hours**. Gemini receives the system prompt, your server rules and a cleanly formatted chat history, then decides on warnings & timeouts. If the API fails, **nothing is lost**: retries continue until it succeeds.',
@@ -219,7 +235,8 @@ const STRINGS = {
     helpLogChannel: 'Sets the log channel for moderation notices, API errors and reports. Calling it without a channel removes the log channel.',
     helpLanguage: 'Permanently changes the bot language (also controls the timezone of the 2-hour analysis and the AI default language).',
     helpHelp: 'Shows this overview.',
-    helpCheckNow: 'Analyzes the currently collected messages right away, without waiting for the token limit or the next 2-hour run.',
+    helpCheckNow: 'Analyzes the currently collected messages right away, without waiting for the token limit or the next 2-hour run. The `user` option lets you pick a user who must be moderated during this check.',
+    helpAntiDelete: 'Turns anti-delete on or off: if someone (not a bot/webhook) deletes their own last message of a channel, the bot resends it via webhook with an exact profile copy (name & avatar). Mentions never ping anyone.',
 
     logModTitle: '🛡️ AI Moderation',
     logFieldUser: 'User',
@@ -243,6 +260,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ There are currently no collected messages – nothing to check.',
     checkNowDone: '✅ **Instant check complete** ({count} messages analyzed). See the log channel for results.',
     checkNowPartial: '⚠️ **Instant check started** ({count} messages), but {remaining} of them could not be completed (API error) – see the log channel for details, retries continue automatically.',
+    checkNowForcedActive: '🎯 Forced moderation requested: {user} will definitely be moderated in this check – see the log channel for details.',
+    checkNowForcedNoMsgs: '⚠️ {user} does not appear in the collected messages – there was no message to moderate.',
+    checkNowForcedInvalid: '⚠️ {user} is a bot or an administrator and cannot be moderated. Please pick a regular member.',
 
     joinTitle: '👋 Security Bot has arrived!',
     joinDesc: 'Thanks for inviting me! Getting started:\n\n1️⃣ `/set_gemini_api_key` – add a Google Gemini key ([create one free](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – define the AI rules & strictness (a default text is pre-filled)\n3️⃣ `/set_log_channel` – pick a log channel for moderation notices\n\nAfter that the AI automatically monitors all text messages. **All commands are visible to administrators only.**',
@@ -294,6 +314,8 @@ const STRINGS = {
     promptReset: '♻️ **Instructions IA réinitialisées au texte par défaut.**',
     logChannelSet: '✅ **Salon de journal défini :** {channel}\nLe bot y publiera les avis de modération, les erreurs API et autres rapports.',
     logChannelRemoved: '🗑️ **Salon de journal supprimé.** Plus aucun avis ne sera envoyé.',
+    antiDeleteEnabled: '✅ **Anti-suppression activée.** Si quelqu’un (ni bot ni webhook) supprime son propre dernier message d’un salon, le bot le renvoie via webhook avec une copie exacte du profil (nom d’affichage et avatar). Les mentions ne pingent personne.',
+    antiDeleteDisabled: '⛔ **Anti-suppression désactivée.** Les messages supprimés ne sont plus renvoyés.',
     langChanged: '✅ Langue modifiée : {name}',
 
     descApiKey: 'Définir la clé API Google Gemini pour ce serveur',
@@ -302,6 +324,9 @@ const STRINGS = {
     descLanguage: 'Changer définitivement la langue du bot',
     descHelp: 'Affiche toutes les commandes et fonctions',
     descCheckNow: 'Lance immédiatement une analyse IA des messages collectés (admins uniquement)',
+    descCheckNowUser: 'Utilisateur à modérer obligatoirement lors de ce contrôle (optionnel)',
+    descAntiDelete: 'Anti-suppression : renvoyer les derniers messages supprimés via webhook',
+    descAntiDeleteOption: 'true = activer l’anti-suppression, false = désactiver',
 
     helpTitle: '🛡️ Security Bot – Modération IA avec Gemini',
     helpDesc: 'Ce bot collecte les **messages texte des vrais utilisateurs** (les admins sont immunisés) jusqu’à la limite de tokens pour une analyse Gemini – en plus, l’historique est analysé **toutes les 2 heures**. Gemini reçoit le prompt système, vos règles et un historique bien formaté, puis décide des avertissements et timeouts. En cas d’erreur API, **rien n’est perdu** : les tentatives continuent jusqu’au succès.',
@@ -310,7 +335,8 @@ const STRINGS = {
     helpLogChannel: 'Définit le salon de journal pour les avis de modération et erreurs API. Sans salon, le journal est supprimé.',
     helpLanguage: 'Change définitivement la langue du bot (contrôle aussi le fuseau horaire de l’analyse toutes les 2 heures et la langue par défaut de l’IA).',
     helpHelp: 'Affiche cet aperçu.',
-    helpCheckNow: 'Analyse immédiatement les messages déjà collectés, sans attendre la limite de tokens ni la prochaine analyse bihoraire.',
+    helpCheckNow: 'Analyse immédiatement les messages déjà collectés, sans attendre la limite de tokens ni la prochaine analyse bihoraire. L’option `user` permet de choisir un utilisateur qui sera obligatoirement modéré lors de ce contrôle.',
+    helpAntiDelete: 'Active ou désactive l’anti-suppression : si quelqu’un (ni bot ni webhook) supprime son propre dernier message d’un salon, le bot le renvoie via webhook avec une copie exacte du profil (nom et avatar). Les mentions ne pingent personne.',
     logModTitle: '🛡️ Modération IA',
     logFieldUser: 'Utilisateur',
     logFieldAction: 'Mesure',
@@ -332,6 +358,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ Aucun message collecté pour le moment – rien à analyser.',
     checkNowDone: '✅ **Analyse immédiate terminée** ({count} messages analysés). Voir le salon de journal pour les résultats.',
     checkNowPartial: '⚠️ **Analyse immédiate lancée** ({count} messages), mais {remaining} d’entre eux n’ont pas pu être terminés (erreur API) – détails dans le salon de journal, nouvelles tentatives automatiques.',
+    checkNowForcedActive: '🎯 Modération forcée demandée : {user} sera obligatoirement modéré lors de ce contrôle – détails dans le salon de journal.',
+    checkNowForcedNoMsgs: '⚠️ {user} n’apparaît pas dans les messages collectés – aucun message à modérer.',
+    checkNowForcedInvalid: '⚠️ {user} est un bot ou un administrateur et ne peut pas être modéré. Choisissez un membre régulier.',
     joinTitle: '👋 Security Bot est arrivé !',
     joinDesc: 'Merci pour l’invitation ! Pour commencer :\n\n1️⃣ `/set_gemini_api_key` – ajoutez une clé Google Gemini ([création gratuite](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – définissez les règles et la strictesse de l’IA (texte par défaut prérempli)\n3️⃣ `/set_log_channel` – choisissez un salon de journal\n\nEnsuite, l’IA surveille automatiquement tous les messages texte. **Toutes les commandes sont réservées aux administrateurs.**',
     defaultPrompt: `Modère ce serveur comme une équipe d’OP juste, aimable mais ferme.
@@ -381,6 +410,8 @@ const STRINGS = {
     promptReset: '♻️ **Instrucciones de IA restablecidas al texto predeterminado.**',
     logChannelSet: '✅ **Canal de registro establecido:** {channel}\nEl bot publicará allí avisos de moderación, errores de API y otros informes.',
     logChannelRemoved: '🗑️ **Canal de registro eliminado.** Ya no se enviarán avisos.',
+    antiDeleteEnabled: '✅ **Anti-borrado activado.** Si alguien (ni bot ni webhook) elimina su propio último mensaje de un canal, el bot lo reenvía vía webhook con una copia exacta del perfil (nombre visible y avatar). Las menciones no notifican a nadie.',
+    antiDeleteDisabled: '⛔ **Anti-borrado desactivado.** Los mensajes eliminados ya no se reenvían.',
     langChanged: '✅ Idioma cambiado: {name}',
 
     descApiKey: 'Configura la clave API de Google Gemini para este servidor',
@@ -389,6 +420,9 @@ const STRINGS = {
     descLanguage: 'Cambia el idioma del bot de forma permanente',
     descHelp: 'Muestra todos los comandos y funciones',
     descCheckNow: 'Ejecuta de inmediato un análisis de IA de los mensajes recopilados (solo admins)',
+    descCheckNowUser: 'Usuario que debe ser moderado obligatoriamente en esta revisión (opcional)',
+    descAntiDelete: 'Anti-borrado: reenviar los últimos mensajes eliminados vía webhook',
+    descAntiDeleteOption: 'true = activar anti-borrado, false = desactivar',
 
     helpTitle: '🛡️ Security Bot – Moderación IA con Gemini',
     helpDesc: 'Este bot recopila **mensajes de texto de usuarios reales** (los admins son inmunes) hasta llenar el límite de tokens para un análisis de Gemini; además, el historial se analiza **cada 2 horas**. Gemini recibe el prompt del sistema, las reglas del servidor y un historial bien formateado, y decide advertencias y timeouts. Si la API falla, **no se pierde nada**: se reintenta hasta lograrlo.',
@@ -397,7 +431,8 @@ const STRINGS = {
     helpLogChannel: 'Establece el canal de registro para avisos de moderación y errores de API. Sin canal, se elimina el registro.',
     helpLanguage: 'Cambia el idioma del bot de forma permanente (también controla la zona horaria del análisis cada 2 horas y el idioma predeterminado de la IA).',
     helpHelp: 'Muestra este resumen.',
-    helpCheckNow: 'Analiza de inmediato los mensajes ya recopilados, sin esperar el límite de tokens ni el próximo análisis bihorario.',
+    helpCheckNow: 'Analiza de inmediato los mensajes ya recopilados, sin esperar el límite de tokens ni el próximo análisis bihorario. La opción `user` permite elegir un usuario que será moderado obligatoriamente en esta revisión.',
+    helpAntiDelete: 'Activa o desactiva el anti-borrado: si alguien (ni bot ni webhook) elimina su propio último mensaje de un canal, el bot lo reenvía vía webhook con una copia exacta del perfil (nombre y avatar). Las menciones no notifican a nadie.',
     logModTitle: '🛡️ Moderación IA',
     logFieldUser: 'Usuario',
     logFieldAction: 'Medida',
@@ -419,6 +454,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ Actualmente no hay mensajes recopilados – nada que analizar.',
     checkNowDone: '✅ **Análisis inmediato completado** ({count} mensajes analizados). Consulta el canal de registro para ver los resultados.',
     checkNowPartial: '⚠️ **Análisis inmediato iniciado** ({count} mensajes), pero {remaining} de ellos no se pudieron completar (error de API) – detalles en el canal de registro, los reintentos continúan automáticamente.',
+    checkNowForcedActive: '🎯 Moderación forzada solicitada: {user} será moderado obligatoriamente en esta revisión – detalles en el canal de registro.',
+    checkNowForcedNoMsgs: '⚠️ {user} no aparece en los mensajes recopilados – no hubo ningún mensaje que moderar.',
+    checkNowForcedInvalid: '⚠️ {user} es un bot o un administrador y no puede ser moderado. Elige un miembro normal.',
     joinTitle: '👋 ¡Security Bot ha llegado!',
     joinDesc: '¡Gracias por invitarme! Para empezar:\n\n1️⃣ `/set_gemini_api_key` – añade una clave de Google Gemini ([crea una gratis](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – define las reglas y el rigor de la IA (texto predeterminado rellenado)\n3️⃣ `/set_log_channel` – elige un canal de registro\n\nDespués la IA vigila automáticamente todos los mensajes de texto. **Todos los comandos son solo para administradores.**',
     defaultPrompt: `Modera este servidor como un equipo de OP justo, amable pero firme.
@@ -468,6 +506,8 @@ const STRINGS = {
     promptReset: '♻️ **Instruções da IA redefinidas para o texto padrão.**',
     logChannelSet: '✅ **Canal de registro definido:** {channel}\nO bot publicará lá avisos de moderação, erros de API e outros relatórios.',
     logChannelRemoved: '🗑️ **Canal de registro removido.** Nenhum aviso será mais enviado.',
+    antiDeleteEnabled: '✅ **Anti-exclusão ativada.** Se alguém (não bot/webhook) apagar a própria última mensagem de um canal, o bot a reenvia via webhook com uma cópia exata do perfil (nome de exibição e avatar). Menções nunca notificam ninguém.',
+    antiDeleteDisabled: '⛔ **Anti-exclusão desativada.** Mensagens apagadas não são mais reenviadas.',
     langChanged: '✅ Idioma alterado: {name}',
 
     descApiKey: 'Define a chave de API do Google Gemini para este servidor',
@@ -476,6 +516,9 @@ const STRINGS = {
     descLanguage: 'Muda o idioma do bot permanentemente',
     descHelp: 'Mostra todos os comandos e funções',
     descCheckNow: 'Executa imediatamente uma verificação de IA das mensagens coletadas (somente admins)',
+    descCheckNowUser: 'Usuário que deve ser moderado obrigatoriamente nesta verificação (opcional)',
+    descAntiDelete: 'Anti-exclusão: reenviar últimas mensagens apagadas via webhook',
+    descAntiDeleteOption: 'true = ativar anti-exclusão, false = desativar',
 
     helpTitle: '🛡️ Security Bot – Moderação por IA com Gemini',
     helpDesc: 'Este bot coleta **mensagens de texto de usuários reais** (admins são imunes) até encher o limite de tokens para uma análise do Gemini – além disso, o histórico é analisado **a cada 2 horas**. O Gemini recebe o prompt do sistema, as regras do servidor e um histórico bem formatado e decide avisos e timeouts. Se a API falhar, **nada se perde**: as tentativas continuam até dar certo.',
@@ -484,7 +527,8 @@ const STRINGS = {
     helpLogChannel: 'Define o canal de registro para avisos de moderação e erros de API. Sem canal, o registro é removido.',
     helpLanguage: 'Muda o idioma do bot permanentemente (também controla o fuso horário da análise a cada 2 horas e o idioma padrão da IA).',
     helpHelp: 'Mostra este resumo.',
-    helpCheckNow: 'Analisa imediatamente as mensagens já coletadas, sem esperar o limite de tokens ou a próxima análise de 2 em 2 horas.',
+    helpCheckNow: 'Analisa imediatamente as mensagens já coletadas, sem esperar o limite de tokens ou a próxima análise de 2 em 2 horas. A opção `user` permite escolher um usuário que será moderado obrigatoriamente nesta verificação.',
+    helpAntiDelete: 'Ativa ou desativa o anti-exclusão: se alguém (não bot/webhook) apagar a própria última mensagem de um canal, o bot a reenvia via webhook com uma cópia exata do perfil (nome e avatar). Menções nunca notificam ninguém.',
     logModTitle: '🛡️ Moderação por IA',
     logFieldUser: 'Usuário',
     logFieldAction: 'Medida',
@@ -506,6 +550,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ No momento não há mensagens coletadas – nada para analisar.',
     checkNowDone: '✅ **Verificação imediata concluída** ({count} mensagens analisadas). Veja o canal de registro para os resultados.',
     checkNowPartial: '⚠️ **Verificação imediata iniciada** ({count} mensagens), mas {remaining} delas não puderam ser concluídas (erro de API) – detalhes no canal de registro, as novas tentativas continuam automaticamente.',
+    checkNowForcedActive: '🎯 Moderação forçada solicitada: {user} será obrigatoriamente moderado nesta verificação – detalhes no canal de registro.',
+    checkNowForcedNoMsgs: '⚠️ {user} não aparece nas mensagens coletadas – não houve mensagem para moderar.',
+    checkNowForcedInvalid: '⚠️ {user} é um bot ou administrador e não pode ser moderado. Escolha um membro comum.',
     joinTitle: '👋 O Security Bot chegou!',
     joinDesc: 'Obrigado por me convidar! Para começar:\n\n1️⃣ `/set_gemini_api_key` – adicione uma chave do Google Gemini ([crie grátis](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – defina as regras e o rigor da IA (texto padrão já preenchido)\n3️⃣ `/set_log_channel` – escolha um canal de registro\n\nDepois disso a IA monitora automaticamente todas as mensagens de texto. **Todos os comandos são só para administradores.**',
     defaultPrompt: `Modere este servidor como uma equipe de OP justa, simpática, mas firme.
@@ -555,6 +602,8 @@ const STRINGS = {
     promptReset: '♻️ **Инструкции для ИИ сброшены к стандартному тексту.**',
     logChannelSet: '✅ **Канал журнала установлен:** {channel}\nТам бот будет публиковать уведомления о модерации, ошибки API и другие отчёты.',
     logChannelRemoved: '🗑️ **Канал журнала удалён.** Уведомления больше не отправляются.',
+    antiDeleteEnabled: '✅ **Анти-удаление включено.** Если кто-то (не бот и не вебхук) удалит своё последнее сообщение в канале, бот отправит его заново вебхуком с точной копией профиля (отображаемое имя и аватар). Упоминания никого не уведомляют.',
+    antiDeleteDisabled: '⛔ **Анти-удаление выключено.** Удалённые сообщения больше не отправляются заново.',
     langChanged: '✅ Язык изменён: {name}',
 
     descApiKey: 'Задать API-ключ Google Gemini для этого сервера',
@@ -563,6 +612,9 @@ const STRINGS = {
     descLanguage: 'Навсегда изменить язык бота',
     descHelp: 'Показывает все команды и функции',
     descCheckNow: 'Немедленно запускает ИИ-проверку собранных сообщений (только админы)',
+    descCheckNowUser: 'Пользователь, которого нужно обязательно модерировать при этой проверке',
+    descAntiDelete: 'Анти-удаление: повторно отправлять удалённые последние сообщения вебхуком',
+    descAntiDeleteOption: 'true = включить анти-удаление, false = выключить',
 
     helpTitle: '🛡️ Security Bot – ИИ-модерация с Gemini',
     helpDesc: 'Бот собирает **текстовые сообщения реальных пользователей** (админы неприкосновенны), пока не заполнится лимит токенов для анализа Gemini – кроме того, история анализируется **каждые 2 часа**. Gemini получает системный промпт, правила сервера и аккуратно оформленную историю чата, после чего решает, кого предупредить или выдать тайм-аут. При сбое API **ничего не теряется**: попытки повторяются до успеха.',
@@ -571,7 +623,8 @@ const STRINGS = {
     helpLogChannel: 'Задаёт канал журнала для уведомлений о модерации и ошибок API. Без канала журнал удаляется.',
     helpLanguage: 'Навсегда меняет язык бота (также задаёт часовой пояс анализа каждые 2 часа и язык ИИ по умолчанию).',
     helpHelp: 'Показывает этот обзор.',
-    helpCheckNow: 'Немедленно анализирует уже собранные сообщения, не дожидаясь лимита токенов или следующего запуска раз в 2 часа.',
+    helpCheckNow: 'Немедленно анализирует уже собранные сообщения, не дожидаясь лимита токенов или следующего запуска раз в 2 часа. Опция `user` позволяет выбрать пользователя, который будет обязательно модерирован при этой проверке.',
+    helpAntiDelete: 'Включает или выключает анти-удаление: если кто-то (не бот и не вебхук) удалит своё последнее сообщение в канале, бот отправит его заново вебхуком с точной копией профиля (имя и аватар). Упоминания никого не уведомляют.',
     logModTitle: '🛡️ ИИ-модерация',
     logFieldUser: 'Пользователь',
     logFieldAction: 'Мера',
@@ -593,6 +646,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ Сейчас нет собранных сообщений – проверять нечего.',
     checkNowDone: '✅ **Мгновенная проверка завершена** ({count} сообщений проанализировано). Результаты смотрите в канале журнала.',
     checkNowPartial: '⚠️ **Мгновенная проверка запущена** ({count} сообщений), но {remaining} из них не удалось завершить (ошибка API) – подробности в канале журнала, повторные попытки продолжаются автоматически.',
+    checkNowForcedActive: '🎯 Запрошена принудительная модерация: {user} будет обязательно модерирован при этой проверке – подробности в канале журнала.',
+    checkNowForcedNoMsgs: '⚠️ {user} не встречается в собранных сообщениях – сообщений для модерации не было.',
+    checkNowForcedInvalid: '⚠️ {user} — бот или администратор и не может быть модерирован. Выберите обычного участника.',
     joinTitle: '👋 Security Bot на сервере!',
     joinDesc: 'Спасибо за приглашение! Как начать:\n\n1️⃣ `/set_gemini_api_key` – добавьте ключ Google Gemini ([создать бесплатно](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – задайте правила и строгость ИИ (стандартный текст уже вставлен)\n3️⃣ `/set_log_channel` – выберите канал журнала\n\nПосле этого ИИ автоматически следит за всеми текстовыми сообщениями. **Все команды видны только администраторам.**',
     defaultPrompt: `Модерируй этот сервер как справедливая, дружелюбная, но твёрдая команда ОП.
@@ -642,6 +698,8 @@ const STRINGS = {
     promptReset: '♻️ **AIへの指示をデフォルトのテキストに戻しました。**',
     logChannelSet: '✅ **ログチャンネルを設定しました：** {channel}\nモデレーションのお知らせやAPIエラーなどはここに送られます。',
     logChannelRemoved: '🗑️ **ログチャンネルを削除しました。** お知らせは送信されなくなります。',
+    antiDeleteEnabled: '✅ **アンチ削除を有効化しました。** 誰かが（ボット・Webhook以外）自分の最後のメッセージを削除した場合、ボットが正確なプロフィール（表示名とアバター）でWebhook経由で再送信します。メンションは通知されません。',
+    antiDeleteDisabled: '⛔ **アンチ削除を無効化しました。** 削除されたメッセージは再送信されません。',
     langChanged: '✅ 言語を変更しました：{name}',
 
     descApiKey: 'このサーバーのGoogle Gemini APIキーを設定',
@@ -650,6 +708,9 @@ const STRINGS = {
     descLanguage: 'ボットの言語を永久に変更',
     descHelp: 'すべてのコマンドと機能を表示',
     descCheckNow: '収集済みメッセージのAIチェックを今すぐ実行します（管理者のみ）',
+    descCheckNowUser: 'このチェックで必ずモデレートするユーザー（任意）',
+    descAntiDelete: 'アンチ削除：削除された最後のメッセージをWebhookで再送信',
+    descAntiDeleteOption: 'true = アンチ削除を有効化、false = 無効化',
 
     helpTitle: '🛡️ Security Bot – GeminiによるAIモデレーション',
     helpDesc: 'このボットは、Geminiで分析するためのトークン上限に達するまで**実際のユーザーのテキストメッセージ**を収集します（管理者は対象外）。さらに、履歴は**2時間ごと**にも分析されます。Geminiはシステムプロンプト・サーバーのルール・整形されたチャット履歴を受け取り、警告やタイムアウトを決定します。APIエラー時も**何も失われません**：成功するまで再試行を続けます。',
@@ -658,7 +719,8 @@ const STRINGS = {
     helpLogChannel: 'モデレーションのお知らせやAPIエラー用のログチャンネルを設定します。チャンネルを指定しない場合は削除されます。',
     helpLanguage: 'ボットの言語を永久に変更します（2時間ごとの分析のタイムゾーンとAIのデフォルト言語にも影響します）。',
     helpHelp: 'この概要を表示します。',
-    helpCheckNow: 'トークン上限や次の2時間ごとの分析を待たずに、これまでに収集したメッセージを今すぐ分析します。',
+    helpCheckNow: 'トークン上限や次の2時間ごとの分析を待たずに、これまでに収集したメッセージを今すぐ分析します。`user` オプションで必ずモデレートするユーザーを指定できます。',
+    helpAntiDelete: 'アンチ削除のオン／オフ：誰かが（ボット・Webhook以外）自分の最後のメッセージを削除した場合、ボットが正確なプロフィール（名前とアバター）でWebhook経由で再送信します。メンションは通知されません。',
     logModTitle: '🛡️ AIモデレーション',
     logFieldUser: 'ユーザー',
     logFieldAction: '措置',
@@ -680,6 +742,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ 現在収集されたメッセージはありません – チェックする内容がありません。',
     checkNowDone: '✅ **即時チェックが完了しました**（{count}件のメッセージを分析）。結果はログチャンネルをご覧ください。',
     checkNowPartial: '⚠️ **即時チェックを開始しました**（{count}件）が、うち{remaining}件は完了できませんでした（APIエラー）。詳細はログチャンネルを確認してください。自動的に再試行が続きます。',
+    checkNowForcedActive: '🎯 強制モデレーションが指定されました：{user} はこのチェックで必ずモデレートされます。詳細はログチャンネルへ。',
+    checkNowForcedNoMsgs: '⚠️ {user} は収集されたメッセージに存在しません。モデレートするメッセージがありませんでした。',
+    checkNowForcedInvalid: '⚠️ {user} はボットまたは管理者のためモデレートできません。通常のメンバーを選んでください。',
     joinTitle: '👋 Security Botが到着しました！',
     joinDesc: '招待ありがとうございます！始め方：\n\n1️⃣ `/set_gemini_api_key` – Google Geminiキーを設定（[無料で作成](https://aistudio.google.com/apikey)）\n2️⃣ `/set_prompt` – AIのルールと厳しさを設定（デフォルト文を入力済み）\n3️⃣ `/set_log_channel` – ログチャンネルを選択\n\nその後、AIがすべてのテキストメッセージを自動監視します。**すべてのコマンドは管理者のみ表示されます。**',
     defaultPrompt: `このサーバーを、公正で親しみやすいけれど毅然としたOPチームとしてモデレートしてください。
@@ -729,6 +794,8 @@ const STRINGS = {
     promptReset: '♻️ **AI 지시사항이 기본 텍스트로 초기화되었습니다.**',
     logChannelSet: '✅ **로그 채널이 설정되었습니다:** {channel}\n검열 알림, API 오류 등이 이곳에 전송됩니다.',
     logChannelRemoved: '🗑️ **로그 채널이 제거되었습니다.** 더 이상 알림을 보내지 않습니다.',
+    antiDeleteEnabled: '✅ **안티 삭제가 활성화되었습니다.** 누군가(봇/웹훅 제외) 자신의 마지막 메시지를 삭제하면 봇이 정확한 프로필(표시 이름과 아바타)로 웹훅을 통해 다시 본냅니다. 멘션은 알림을 본내지 않습니다.',
+    antiDeleteDisabled: '⛔ **안티 삭제가 비활성화되었습니다.** 삭제된 메시지는 더 이상 다시 본내지 않습니다.',
     langChanged: '✅ 언어가 변경되었습니다: {name}',
 
     descApiKey: '이 서버의 Google Gemini API 키 설정',
@@ -737,6 +804,9 @@ const STRINGS = {
     descLanguage: '봇 언어를 영구적으로 변경',
     descHelp: '모든 명령어와 기능 표시',
     descCheckNow: '수집된 메시지에 대한 AI 검사를 즉시 시작합니다 (관리자 전용)',
+    descCheckNowUser: '이 점검에서 반드시 모더레이션할 사용자 (선택 사항)',
+    descAntiDelete: '안티 삭제: 삭제된 마지막 메시지를 웹훅으로 다시 본내기',
+    descAntiDeleteOption: 'true = 안티 삭제 켜기, false = 끄기',
 
     helpTitle: '🛡️ Security Bot – Gemini AI 검열',
     helpDesc: '이 봇은 Gemini 분석 토큰 한도가 채워질 때까지 **실제 사용자의 텍스트 메시지**를 수집합니다(관리자는 면역). 또한 2시간마다 기록을 분석합니다. Gemini는 시스템 프롬프트, 서버 규칙, 정리된 채팅 기록을 받아 경고와 타임아웃을 결정합니다. API 오류가 발생해도 **아무것도 사라지지 않습니다**: 성공할 때까지 재시도합니다.',
@@ -745,7 +815,8 @@ const STRINGS = {
     helpLogChannel: '검열 알림과 API 오류를 위한 로그 채널을 설정합니다. 채널 없이 호출하면 제거됩니다.',
     helpLanguage: '봇 언어를 영구적으로 변경합니다 (2시간 주기 분석의 시간대와 AI 기본 언어에도 영향).',
     helpHelp: '이 개요를 표시합니다.',
-    helpCheckNow: '토큰 한도나 다음 2시간 주기 분석을 기다리지 않고 지금까지 수집된 메시지를 즉시 분석합니다.',
+    helpCheckNow: '토큰 한도나 다음 2시간 주기 분석을 기다리지 않고 지금까지 수집된 메시지를 즉시 분석합니다. `user` 옵션으로 반드시 모더레이션할 사용자를 지정할 수 있습니다.',
+    helpAntiDelete: '안티 삭제 켜기/끄기: 누군가(봇/웹훅 제외) 자신의 마지막 메시지를 삭제하면 봇이 정확한 프로필(이름과 아바타)로 웹훅을 통해 다시 본냅니다. 멘션은 알림을 본내지 않습니다.',
     logModTitle: '🛡️ AI 검열',
     logFieldUser: '사용자',
     logFieldAction: '조치',
@@ -767,6 +838,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ 현재 수집된 메시지가 없습니다 – 검사할 내용이 없습니다.',
     checkNowDone: '✅ **즉시 검사 완료** ({count}개 메시지 분석됨). 결과는 로그 채널을 확인하세요.',
     checkNowPartial: '⚠️ **즉시 검사 시작됨** ({count}개), 그러나 {remaining}개는 완료되지 못했습니다(API 오류) – 자세한 내용은 로그 채널에서 확인하세요. 재시도가 자동으로 계속됩니다.',
+    checkNowForcedActive: '🎯 강제 모더레이션이 요청되었습니다: {user} 님은 이번 점검에서 반드시 모더레이션됩니다. 자세한 내용은 로그 채널을 확인하세요.',
+    checkNowForcedNoMsgs: '⚠️ 수집된 메시지에 {user} 님이 없습니다 – 모더레이션할 메시지가 없었습니다.',
+    checkNowForcedInvalid: '⚠️ {user} 님은 봇이거나 관리자이므로 모더레이션할 수 없습니다. 일반 멤버를 선택하세요.',
     joinTitle: '👋 Security Bot이 도착했습니다!',
     joinDesc: '초대해 주셔서 감사합니다! 시작 방법:\n\n1️⃣ `/set_gemini_api_key` – Google Gemini 키 추가([무료 생성](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – AI 규칙과 엄격함 설정(기본 텍스트 미리 입력됨)\n3️⃣ `/set_log_channel` – 로그 채널 선택\n\n이후 AI가 모든 텍스트 메시지를 자동 감시합니다. **모든 명령어는 관리자에게만 보입니다.**',
     defaultPrompt: `이 서버를 공정하고 친절하지만 단호한 운영팀처럼 검열하세요.
@@ -816,6 +890,8 @@ const STRINGS = {
     promptReset: '♻️ **AI 指令已重置为默认文本。**',
     logChannelSet: '✅ **日志频道已设置：** {channel}\n机器人将在此发布审核通知、API 错误等报告。',
     logChannelRemoved: '🗑️ **日志频道已移除。** 不再发送通知。',
+    antiDeleteEnabled: '✅ **反删除已开启。** 当有人（非机器人/Webhook）删除自己在频道中的最后一条消息时，机器人会通过 Webhook 以完全相同的个人资料（显示名称和头像）重新发送。提及不会通知任何人。',
+    antiDeleteDisabled: '⛔ **反删除已关闭。** 被删除的消息将不再重新发送。',
     langChanged: '✅ 语言已更改：{name}',
 
     descApiKey: '设置此服务器的 Google Gemini API 密钥',
@@ -824,6 +900,9 @@ const STRINGS = {
     descLanguage: '永久更改机器人语言',
     descHelp: '显示所有命令与功能',
     descCheckNow: '立即对已收集的消息运行 AI 检查（仅限管理员）',
+    descCheckNowUser: '本次检查中必须被审核的用户（可选）',
+    descAntiDelete: '反删除：通过 Webhook 重新发送被删除的最后一条消息',
+    descAntiDeleteOption: 'true = 开启反删除，false = 关闭',
 
     helpTitle: '🛡️ Security Bot – Gemini AI 审核',
     helpDesc: '此机器人收集**真实用户的文本消息**（管理员免疫），直到达到一次 Gemini 分析的令牌上限——此外，**每 2 小时**也会分析历史记录。Gemini 会收到系统提示词、服务器规则和格式良好的聊天记录，然后决定警告与禁言。API 出错时**不会丢失任何内容**：会不断重试直到成功。',
@@ -832,7 +911,8 @@ const STRINGS = {
     helpLogChannel: '设置用于审核通知和 API 错误的日志频道。不带频道调用则移除日志频道。',
     helpLanguage: '永久更改机器人语言（同时控制每 2 小时分析的时区和 AI 默认语言）。',
     helpHelp: '显示此概览。',
-    helpCheckNow: '无需等待令牌上限或下一次每 2 小时的分析，立即分析目前已收集的消息。',
+    helpCheckNow: '无需等待令牌上限或下一次每 2 小时的分析，立即分析目前已收集的消息。可通过 `user` 选项指定一位必须被审核的用户。',
+    helpAntiDelete: '开启或关闭反删除：当有人（非机器人/Webhook）删除自己在频道中的最后一条消息时，机器人会通过 Webhook 以完全相同的个人资料（名称和头像）重新发送。提及不会通知任何人。',
     logModTitle: '🛡️ AI 审核',
     logFieldUser: '用户',
     logFieldAction: '措施',
@@ -854,6 +934,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ 目前没有已收集的消息——无需检查。',
     checkNowDone: '✅ **即时检查已完成**（已分析 {count} 条消息）。结果请查看日志频道。',
     checkNowPartial: '⚠️ **即时检查已开始**（{count} 条消息），但其中 {remaining} 条未能完成（API 错误)——详情见日志频道，系统会自动继续重试。',
+    checkNowForcedActive: '🎯 已请求强制审核：{user} 将在本次检查中被强制审核——详情见日志频道。',
+    checkNowForcedNoMsgs: '⚠️ 收集的消息中没有 {user}——没有可审核的消息。',
+    checkNowForcedInvalid: '⚠️ {user} 是机器人或管理员，无法被审核。请选择普通成员。',
     joinTitle: '👋 Security Bot 已加入！',
     joinDesc: '感谢邀请！开始步骤：\n\n1️⃣ `/set_gemini_api_key` – 配置 Google Gemini 密钥（[免费创建](https://aistudio.google.com/apikey)）\n2️⃣ `/set_prompt` – 设置 AI 规则与严格度（已预填默认文本）\n3️⃣ `/set_log_channel` – 选择日志频道\n\n之后 AI 将自动监控所有文本消息。**所有命令仅管理员可见。**',
     defaultPrompt: `像一支公正、友善但坚定的管理团队一样审核这个服务器。
@@ -903,6 +986,8 @@ const STRINGS = {
     promptReset: '♻️ **Istruzioni per l’IA ripristinate al testo predefinito.**',
     logChannelSet: '✅ **Canale di log impostato:** {channel}\nIl bot pubblicherà lì avvisi di moderazione, errori API e altri rapporti.',
     logChannelRemoved: '🗑️ **Canale di log rimosso.** Non verranno più inviati avvisi.',
+    antiDeleteEnabled: '✅ **Anti-eliminazione attivata.** Se qualcuno (non bot/webhook) elimina il proprio ultimo messaggio di un canale, il bot lo reinvia via webhook con una copia esatta del profilo (nome visualizzato e avatar). Le menzioni non notificano nessuno.',
+    antiDeleteDisabled: '⛔ **Anti-eliminazione disattivata.** I messaggi eliminati non vengono più reinviati.',
     langChanged: '✅ Lingua cambiata: {name}',
 
     descApiKey: 'Imposta la chiave API Google Gemini per questo server',
@@ -911,6 +996,9 @@ const STRINGS = {
     descLanguage: 'Cambia permanentemente la lingua del bot',
     descHelp: 'Mostra tutti i comandi e le funzioni',
     descCheckNow: 'Avvia subito un controllo IA dei messaggi raccolti (solo admin)',
+    descCheckNowUser: 'Utente da moderare obbligatoriamente in questo controllo (opzionale)',
+    descAntiDelete: 'Anti-eliminazione: reinvia gli ultimi messaggi eliminati via webhook',
+    descAntiDeleteOption: 'true = attiva anti-eliminazione, false = disattiva',
 
     helpTitle: '🛡️ Security Bot – Moderazione IA con Gemini',
     helpDesc: 'Questo bot raccoglie i **messaggi di testo degli utenti reali** (gli admin sono immuni) fino al limite di token per un’analisi Gemini – in aggiunta, la cronologia viene analizzata **ogni 2 ore**. Gemini riceve il prompt di sistema, le regole del server e una cronologia ben formattata, poi decide avvisi e timeout. Se l’API fallisce, **non si perde nulla**: i tentativi continuano finché non riesce.',
@@ -919,7 +1007,8 @@ const STRINGS = {
     helpLogChannel: 'Imposta il canale di log per avvisi di moderazione ed errori API. Senza canale, il log viene rimosso.',
     helpLanguage: 'Cambia permanentemente la lingua del bot (controlla anche il fuso orario dell’analisi ogni 2 ore e la lingua predefinita dell’IA).',
     helpHelp: 'Mostra questa panoramica.',
-    helpCheckNow: 'Analizza subito i messaggi già raccolti, senza attendere il limite di token o la prossima analisi ogni 2 ore.',
+    helpCheckNow: 'Analizza subito i messaggi già raccolti, senza attendere il limite di token o la prossima analisi ogni 2 ore. L’opzione `user` permette di scegliere un utente che sarà moderato obbligatoriamente in questo controllo.',
+    helpAntiDelete: 'Attiva o disattiva l’anti-eliminazione: se qualcuno (non bot/webhook) elimina il proprio ultimo messaggio di un canale, il bot lo reinvia via webhook con una copia esatta del profilo (nome e avatar). Le menzioni non notificano nessuno.',
     logModTitle: '🛡️ Moderazione IA',
     logFieldUser: 'Utente',
     logFieldAction: 'Misura',
@@ -941,6 +1030,9 @@ const STRINGS = {
     checkNowEmpty: 'ℹ️ Al momento non ci sono messaggi raccolti – niente da controllare.',
     checkNowDone: '✅ **Controllo immediato completato** ({count} messaggi analizzati). Vedi il canale di log per i risultati.',
     checkNowPartial: '⚠️ **Controllo immediato avviato** ({count} messaggi), ma {remaining} di essi non sono stati completati (errore API) – dettagli nel canale di log, i tentativi continuano automaticamente.',
+    checkNowForcedActive: '🎯 Moderazione forzata richiesta: {user} sarà obbligatoriamente moderato in questo controllo – dettagli nel canale di log.',
+    checkNowForcedNoMsgs: '⚠️ {user} non compare nei messaggi raccolti – nessun messaggio da moderare.',
+    checkNowForcedInvalid: '⚠️ {user} è un bot o un amministratore e non può essere moderato. Scegli un membro normale.',
     joinTitle: '👋 Security Bot è arrivato!',
     joinDesc: 'Grazie per l’invito! Per iniziare:\n\n1️⃣ `/set_gemini_api_key` – aggiungi una chiave Google Gemini ([creala gratis](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – definisci regole e severità dell’IA (testo predefinito già compilato)\n3️⃣ `/set_log_channel` – scegli un canale di log\n\nDa quel momento l’IA monitora automaticamente tutti i messaggi di testo. **Tutti i comandi sono visibili solo agli amministratori.**',
     defaultPrompt: `Modera questo server come una squadra di OP equa, gentile ma ferma.

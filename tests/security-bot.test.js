@@ -63,6 +63,11 @@ const {
   oldestBufferedAt,
   FLUSH_INTERVAL_HOURS,
 } = require('../bots/security-bot/src/scheduler');
+const {
+  handleMessageDelete,
+  wasLastChannelMessage,
+  clearWebhookCache,
+} = require('../bots/security-bot/src/anti-delete');
 const { maskApiKey } = require('../bots/security-bot/src/mask');
 
 const noopLogger = { info: () => {}, warn: () => {}, error: () => {} };
@@ -93,14 +98,15 @@ test('Security Bot: Modul-Export & Intents', () => {
 // 2. Commands
 // ============================================================================
 
-test('Security Bot: genau 6 Commands, alle nur für Admins', () => {
+test('Security Bot: genau 7 Commands, alle nur für Admins', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 6);
+  assert.equal(cmds.length, 7);
 
   const names = cmds.map((c) => c.name);
   assert.deepEqual([...names].sort(), [
     'help',
     'security_check_now',
+    'set_anti_delete_messages',
     'set_gemini_api_key',
     'set_language',
     'set_log_channel',
@@ -139,10 +145,21 @@ test('Security Bot: genau 6 Commands, alle nur für Admins', () => {
   const langCmd = cmds.find((c) => c.name === 'set_language');
   assert.equal(langCmd.options[0].choices.length, 10, '10 Sprachen stehen zur Auswahl');
 
-  // /security_check_now hat KEINE Optionen (nur ein Trigger)
+  // /security_check_now hat eine OPTIONALE User-Option (Zwangsmoderation)
   const checkNowCmd = cmds.find((c) => c.name === 'security_check_now');
   assert.ok(checkNowCmd, '/security_check_now existiert');
-  assert.equal(checkNowCmd.options?.length || 0, 0);
+  assert.equal(checkNowCmd.options.length, 1, 'eine optionale user-Option');
+  assert.equal(checkNowCmd.options[0].name, 'user');
+  assert.equal(checkNowCmd.options[0].type, 6); // USER
+  assert.equal(checkNowCmd.options[0].required, false);
+
+  // /set_anti_delete_messages hat eine Pflicht-Boolean-Option (Auswahl true/false)
+  const antiCmd = cmds.find((c) => c.name === 'set_anti_delete_messages');
+  assert.ok(antiCmd, '/set_anti_delete_messages existiert');
+  assert.equal(antiCmd.options.length, 1);
+  assert.equal(antiCmd.options[0].name, 'enabled');
+  assert.equal(antiCmd.options[0].type, 5); // BOOLEAN
+  assert.equal(antiCmd.options[0].required, true);
 
   // Guild-Payload identisch (kein DM-Command mehr)
   assert.deepEqual(guildCommandJson().map((c) => c.name), ALL_COMMAND_NAMES);
@@ -210,6 +227,18 @@ test('Security Bot: Store CRUD (Key, Prompt, Log-Kanal, Sprache)', async () => {
 
   store.setLogChannelId('g1', 'c-log');
   assert.equal(store.getLogChannelId('g1'), 'c-log');
+
+  // Anti-Delete-Flag (Standard: aus)
+  assert.equal(store.getAntiDeleteEnabled('g1'), false, 'Anti-Delete standardmäßig deaktiviert');
+  store.setAntiDeleteEnabled('g1', true);
+  assert.equal(store.getAntiDeleteEnabled('g1'), true);
+  store.setAntiDeleteEnabled('g1', false);
+  assert.equal(store.getAntiDeleteEnabled('g1'), false);
+  // Flag überlebt andere Config-Updates (normalizeGuildConfig beim Speichern)
+  store.setAntiDeleteEnabled('g1', true);
+  store.setLogChannelId('g1', 'c-log2');
+  assert.equal(store.getAntiDeleteEnabled('g1'), true, 'Anti-Delete bleibt bei anderem Update erhalten');
+
   store.setLanguage('g1', 'en');
   assert.equal(store.getLanguage('g1'), 'en');
   store.setLanguage('g1', 'invalid');
@@ -311,6 +340,7 @@ test('Security Bot: Persistenz über Datei-Fallback (RAM-first Roundtrip)', asyn
     storeA.setApiKey('gX', 'AIza-roundtrip-key-123456');
     storeA.setPrompt('gX', 'Regel: nett sein');
     storeA.setLogChannelId('gX', 'c-log');
+    storeA.setAntiDeleteEnabled('gX', true);
     storeA.addBufferMessage('gX', { channelId: 'c1', authorId: 'u1', authorName: 'Max', content: 'Hallo Welt' });
     const batch = storeA.buildBatchFromBuffer('gX');
     storeA.addPenalty({ guildId: 'gX', userId: 'u1', userName: 'Max', action: 'warn', reason: 'test' });
@@ -321,6 +351,7 @@ test('Security Bot: Persistenz über Datei-Fallback (RAM-first Roundtrip)', asyn
     assert.equal(storeB.getApiKey('gX'), 'AIza-roundtrip-key-123456');
     assert.equal(storeB.getPrompt('gX'), 'Regel: nett sein');
     assert.equal(storeB.getLogChannelId('gX'), 'c-log');
+    assert.equal(storeB.getAntiDeleteEnabled('gX'), true, 'Anti-Delete-Flag überlebt Neustarts');
     assert.equal(storeB.getBuffer('gX').length, 0);
     assert.equal(storeB.getBatchMessages('gX', batch.id).length, 1);
     assert.equal(storeB.getBatchMessages('gX', batch.id)[0].seq, 1, 'IDs überleben Neustarts');
@@ -670,6 +701,28 @@ test('Security Bot: System-Prompt enthält Register, Format & {USER}-Regel', () 
   assert.ok(sp.includes('Administratoren'), 'Admin-Immunität erklärt');
   assert.ok(sp.includes('moderations'), 'JSON-Format erklärt');
   assert.ok(sp.includes('Deutsch'), 'Antwortsprache vorgegeben');
+  assert.ok(sp.includes('AUSFÜHRLICH'), 'personal_message muss ausführlich begründet werden');
+  assert.ok(!sp.includes('ZWINGENDE MODERATION'), 'ohne forceUser keine Zwangsdirektive');
+});
+
+test('Security Bot: System-Prompt mit forceUser enthält die Zwangsmoderations-Direktive', () => {
+  const sp = buildSystemPrompt({
+    guildName: 'Knödel Server',
+    lang: 'de',
+    participants: [{ authorId: 'u9', authorName: 'Wega' }],
+    penaltyByUser: new Map(),
+    forceUser: { id: 'u9', name: 'Wega "Böse"\nZeile2' },
+  });
+
+  assert.ok(sp.includes('ZWINGENDE MODERATION'), 'Direktive vorhanden');
+  assert.ok(sp.includes('user_id=u9'), 'Ziel-user_id im Prompt');
+  assert.ok(sp.includes('MUSS'), 'verbindliche Formulierung');
+  // Prompt-Injection über den Anzeigenamen wird entschärft: keine neue Zeile aus dem Namen
+  assert.ok(!sp.split('\n').some((l) => l.startsWith('Zeile2')), 'Zeilenumbrüche im Namen werden entschärft');
+  assert.ok(sp.includes('{USER}'), 'Format-Regeln bleiben erhalten');
+  // Warnhinweis, dass milde Grenzfälle genügen & Befehl nicht erwähnt werden darf
+  assert.ok(sp.includes('Grenzfälle'), 'milde Grenzfälle ausreichend');
+  assert.ok(sp.includes('NICHT, dass die Moderation angeordnet wurde'), 'Anordnung bleibt intern');
 });
 
 test('Security Bot: Chat-Verlauf ist nach Kanälen gruppiert mit IDs ab 1', () => {
@@ -1454,6 +1507,45 @@ test('Security Bot: /set_log_channel & /set_language & /help', async () => {
   // commandMention-Fallback ohne IDs
   assert.equal(commandMention({ commandIds: {} }, 'help'), '/help');
   assert.equal(commandMention({ commandIds: { help: '42' } }, 'help'), '</help:42>');
+
+  // /help nennt auch den Anti-Delete-Command
+  assert.ok(JSON.stringify(helpPayload).includes('set_anti_delete_messages'), 'help nennt /set_anti_delete_messages');
+});
+
+test('Security Bot: /set_anti_delete_messages schaltet den Modus (nur Admins)', async () => {
+  const store = await makeStore();
+  const ctx = { store, logger: noopLogger, env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb) };
+
+  // Aktivieren (Auswahl true)
+  let onPayload = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_anti_delete_messages',
+    options: { getBoolean: () => true },
+    reply: async (p) => { onPayload = p; },
+  }));
+  assert.equal(store.getAntiDeleteEnabled('g1'), true, 'Flag gespeichert');
+  assert.ok(JSON.stringify(onPayload).includes('Anti-Delete aktiviert'), 'Bestätigung: aktiviert');
+
+  // Deaktivieren (Auswahl false)
+  let offPayload = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_anti_delete_messages',
+    options: { getBoolean: () => false },
+    reply: async (p) => { offPayload = p; },
+  }));
+  assert.equal(store.getAntiDeleteEnabled('g1'), false, 'Flag zurückgesetzt');
+  assert.ok(JSON.stringify(offPayload).includes('Anti-Delete deaktiviert'), 'Bestätigung: deaktiviert');
+
+  // Nicht-Admin: Abfuhr, kein Schreibzugriff
+  let deniedPayload = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'set_anti_delete_messages',
+    memberPermissions: { has: () => false },
+    options: { getBoolean: () => true },
+    reply: async (p) => { deniedPayload = p; },
+  }));
+  assert.ok(deniedPayload);
+  assert.equal(store.getAntiDeleteEnabled('g1'), false, 'kein Schreibzugriff ohne Rechte');
 });
 
 // ============================================================================
@@ -1471,7 +1563,7 @@ test('Security Bot: runCheckNow meldet "leer" ohne wartende Nachrichten', async 
   };
 
   const result = await runCheckNow(ctx, 'g1');
-  assert.deepEqual(result, { empty: true, analyzed: 0, remaining: 0 });
+  assert.deepEqual(result, { empty: true, analyzed: 0, remaining: 0, forcedSeen: false });
 });
 
 test('Security Bot: runCheckNow flusht den Buffer sofort und stellt Retry-Batches sofort fällig', async () => {
@@ -1593,6 +1685,142 @@ test('Security Bot: /security_check_now – kein Key, leer & erfolgreicher Lauf'
   assert.equal(store.getBatches('g1').length, 0);
 });
 
+test('Security Bot: runCheckNow mit Zwangs-Nutzer hängt die Moderations-Direktive an den System-Prompt', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-forced-key-123456');
+
+  store.addBufferMessage('g1', {
+    channelId: 'c1', channelName: 'allgemein',
+    authorId: '111111111111111111', authorName: 'Max',
+    content: 'max sagt was', discordMessageId: 'm1', sentAt: Date.now() - 1000,
+  });
+  store.addBufferMessage('g1', {
+    channelId: 'c1', channelName: 'allgemein',
+    authorId: '222222222222222222', authorName: 'Anna',
+    content: 'anna sagt was', discordMessageId: 'm2', sentAt: Date.now(),
+  });
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const systemPrompts = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    systemPrompts.push(JSON.parse(options.body).systemInstruction.parts[0].text);
+    return geminiJsonResponse({ moderations: [] });
+  };
+  try {
+    // 1) Ohne Ziel-Nutzer: keine Direktive im System-Prompt
+    const plain = await runCheckNow(ctx, 'g1');
+    assert.equal(plain.forcedSeen, false);
+    assert.ok(!systemPrompts[0].includes('ZWINGENDE MODERATION'), 'ohne Option keine Direktive');
+
+    // 2) Mit Ziel-Nutzer, der im Verlauf vorkommt: Direktive + forcedSeen
+    store.addBufferMessage('g1', {
+      channelId: 'c1', channelName: 'allgemein',
+      authorId: '222222222222222222', authorName: 'Anna',
+      content: 'anna nochmal', discordMessageId: 'm3', sentAt: Date.now(),
+    });
+    const forced = await runCheckNow(ctx, 'g1', {
+      forceUser: { id: '222222222222222222', name: 'Anna' },
+    });
+    assert.equal(forced.forcedSeen, true, 'Ziel kommt im Verlauf vor');
+    assert.equal(forced.remaining, 0);
+    assert.ok(systemPrompts[1].includes('ZWINGENDE MODERATION'), 'Direktive im System-Prompt');
+    assert.ok(systemPrompts[1].includes('user_id=222222222222222222'), 'Ziel-ID im System-Prompt');
+
+    // 3) Ziel-Nutzer OHNE gesammelte Nachrichten: keine Direktive möglich
+    store.addBufferMessage('g1', {
+      channelId: 'c1', channelName: 'allgemein',
+      authorId: '111111111111111111', authorName: 'Max',
+      content: 'nur max', discordMessageId: 'm4', sentAt: Date.now(),
+    });
+    const missing = await runCheckNow(ctx, 'g1', {
+      forceUser: { id: '999999999999999999', name: 'Unbekannt' },
+    });
+    assert.equal(missing.forcedSeen, false, 'Ziel kam nirgends vor');
+    assert.ok(!systemPrompts[2].includes('ZWINGENDE MODERATION'), 'keine Direktive ohne Vorkommen');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: /security_check_now mit user-Option (erlaubt, Bot/Admin abgelehnt, ohne Vorkommen)', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-forced-cmd-key-123');
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  // 1) Bot als Ziel: sofortige, ephemere Ablehnung – keine Analyse
+  let rejectedBot = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'security_check_now',
+    options: { getUser: () => ({ id: '555555555555555555', bot: true, username: 'boeserbot' }) },
+    reply: async (p) => { rejectedBot = p; },
+  }));
+  assert.ok(JSON.stringify(rejectedBot).includes('kann nicht moderiert werden'), 'Bot-Ziel abgelehnt');
+
+  // 2) Administrator als Ziel: Immunität gewinnt auch hier
+  let rejectedAdmin = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'security_check_now',
+    guild: w.guild,
+    options: { getUser: () => ({ id: '333333333333333333', bot: false, username: 'boss' }) },
+    reply: async (p) => { rejectedAdmin = p; },
+  }));
+  assert.ok(JSON.stringify(rejectedAdmin).includes('kann nicht moderiert werden'), 'Admin-Ziel abgelehnt');
+
+  // 3) Regulärer Nutzer ohne gesammelte Nachrichten: "leer" + Warnhinweis
+  let emptyForced = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'security_check_now',
+    guild: w.guild,
+    options: { getUser: () => ({ id: '111111111111111111', bot: false, username: 'max', globalName: 'Max' }) },
+    deferReply: async () => {},
+    editReply: async (p) => { emptyForced = p; },
+  }));
+  const emptyStr = JSON.stringify(emptyForced);
+  assert.ok(emptyStr.includes('nichts zu prüfen'), 'Basis: nichts vorhanden');
+  assert.ok(emptyStr.includes('⚠️'), 'Hinweis: Ziel ohne gesammelte Nachrichten');
+
+  // 4) Regulärer Nutzer MIT gesammelter Nachricht: Direktive + 🎯-Notiz
+  store.addBufferMessage('g1', {
+    channelId: 'c1', channelName: 'allgemein',
+    authorId: '111111111111111111', authorName: 'Max',
+    content: 'max ist verhaltensauffällig', discordMessageId: 'm1', sentAt: Date.now(),
+  });
+  const promptsSeen = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    promptsSeen.push(JSON.parse(options.body).systemInstruction.parts[0].text);
+    return geminiJsonResponse({ moderations: [] });
+  };
+  let doneForced = null;
+  try {
+    await handleChatInput(ctx, adminInteraction({
+      commandName: 'security_check_now',
+      guild: w.guild,
+      options: { getUser: () => ({ id: '111111111111111111', bot: false, username: 'max', globalName: 'Max' }) },
+      deferReply: async () => {},
+      editReply: async (p) => { doneForced = p; },
+    }));
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+  assert.ok(JSON.stringify(doneForced).includes('🎯'), 'Zwangsmoderations-Notiz in der Antwort');
+  assert.ok(promptsSeen.some((text) => text.includes('ZWINGENDE MODERATION')), 'Direktive erreicht Gemini');
+});
+
 // ============================================================================
 // 9. Gemini-Modell-Fallback (404 "no longer available")
 // ============================================================================
@@ -1650,4 +1878,156 @@ test('Security Bot: callGemini gibt bei 429/5xx/Netzwerkfehlern NICHT auf ein an
   assert.equal(res.status, 429);
   // Nur EIN Modell wurde angefragt – 429 ist kein Grund, das Modell zu wechseln.
   assert.ok(calls.every((u) => u.includes('/models/gemini-flash-lite-latest:generateContent')));
+});
+
+// ============================================================================
+// 11. Anti-Delete: gelöschte letzte Nachricht per Webhook (Profil-Kopie) erneut senden
+// ============================================================================
+
+function makeAntiDeleteWorld() {
+  const webhookCalls = [];
+  const webhook = {
+    send: async (p) => {
+      webhookCalls.push(p);
+      return { id: 'wm1' };
+    },
+  };
+  const state = {
+    // Snowflake-IDs sind chronologisch sortierbar: diese bleibende Nachricht
+    // ist ÄLTER als die gelöschte (Standardfall: gelöschte war die Letzte).
+    remaining: { id: '1400000000000000000' },
+  };
+  const channel = {
+    id: 'c1',
+    name: 'allgemein',
+    isThread: () => false,
+    parent: null,
+    messages: {
+      fetch: async (arg) => {
+        if (arg && arg.limit) return { first: () => state.remaining };
+        throw new Error('unexpected messages.fetch');
+      },
+    },
+    fetchWebhooks: async () => new Map(),
+    createWebhook: async () => webhook,
+  };
+  const guild = { id: 'g1', name: 'AntiDelete Test' };
+  const deletedMessage = (over = {}) => ({
+    id: '1500000000000000000',
+    guild,
+    guildId: 'g1',
+    channelId: 'c1',
+    channel,
+    author: {
+      id: '111111111111111111',
+      bot: false,
+      username: 'maxmustermann',
+      globalName: 'Max M.',
+      displayAvatarURL: () => 'https://cdn.discordapp.com/avatars/111/aaa.png',
+    },
+    member: {
+      displayName: 'Max',
+      displayAvatarURL: () => 'https://cdn.discordapp.com/guilds/g1/users/111/bbb.png',
+    },
+    content: 'Das war meine letzte Nachricht',
+    attachments: new Map(),
+    webhookId: null,
+    system: false,
+    ...over,
+  });
+  return { webhookCalls, webhook, channel, guild, deletedMessage, state };
+}
+
+test('Security Bot: Anti-Delete sendet gelöschte letzte Nachricht mit exakter Profil-Kopie erneut', async () => {
+  clearWebhookCache();
+  const w = makeAntiDeleteWorld();
+  const store = await makeStore();
+  store.setAntiDeleteEnabled('g1', true);
+  const ctx = { store, logger: noopLogger, client: { user: { id: 'bot1' } } };
+
+  await handleMessageDelete({ ctx, message: w.deletedMessage() });
+  assert.equal(w.webhookCalls.length, 1, 'genau ein Webhook-Versand');
+  const p = w.webhookCalls[0];
+  assert.equal(p.username, 'Max', 'Server-Anzeigename als Webhook-Name');
+  assert.equal(p.avatarURL, 'https://cdn.discordapp.com/guilds/g1/users/111/bbb.png', 'Server-Avatar des Mitglieds');
+  assert.equal(p.content, 'Das war meine letzte Nachricht', 'Inhalt unverändert');
+  assert.deepEqual(p.allowedMentions, { parse: [] }, 'keine Pings beim erneuten Senden');
+
+  // Zweite Löschung eines anderen Nutzers (ohne Member-Objekt): Fallback globalName
+  clearWebhookCache();
+  const w2 = makeAntiDeleteWorld();
+  await handleMessageDelete({
+    ctx,
+    message: w2.deletedMessage({ member: null }),
+  });
+  // Hinweis: gleicher Kanal -> selber Webhook-Cache, aber eigener World-Zähler
+  assert.equal(w2.webhookCalls.length, 1);
+  assert.equal(w2.webhookCalls[0].username, 'Max M.', 'Fallback: globalName ohne Member');
+  assert.equal(
+    w2.webhookCalls[0].avatarURL,
+    'https://cdn.discordapp.com/avatars/111/aaa.png',
+    'Fallback: User-Avatar ohne Member'
+  );
+});
+
+test('Security Bot: Anti-Delete ignoriert Bots, Webhooks, Leere/ältere/gelöschte-Nicht-Letzte & DMs', async () => {
+  clearWebhookCache();
+  const w = makeAntiDeleteWorld();
+  const store = await makeStore();
+  const ctx = { store, logger: noopLogger, client: { user: { id: 'bot1' } } };
+
+  // Modus AUS -> garantiert nichts
+  await handleMessageDelete({ ctx, message: w.deletedMessage() });
+  assert.equal(w.webhookCalls.length, 0, 'deaktiviert = still');
+
+  store.setAntiDeleteEnabled('g1', true);
+
+  // Bot-Nachricht
+  await handleMessageDelete({ ctx, message: w.deletedMessage({ author: { id: 'x1', bot: true } }) });
+  // Webhook-Nachricht
+  await handleMessageDelete({ ctx, message: w.deletedMessage({ webhookId: 'wh123' }) });
+  // Eigene Nachricht des Bots
+  await handleMessageDelete({ ctx, message: w.deletedMessage({ author: { id: 'bot1', bot: false } }) });
+  // Leere/Sticker-Nachricht ohne Text & Anhänge
+  await handleMessageDelete({ ctx, message: w.deletedMessage({ content: '   ', attachments: new Map() }) });
+  // Nicht die letzte Nachricht: es existiert eine NEUER verbleibende Nachricht
+  w.state.remaining = { id: '1600000000000000000' };
+  await handleMessageDelete({ ctx, message: w.deletedMessage() });
+  // DM (keine Gilde)
+  await handleMessageDelete({ ctx, message: { ...w.deletedMessage(), guild: null } });
+
+  assert.equal(w.webhookCalls.length, 0, 'nichts davon wird erneut gesendet');
+});
+
+test('Security Bot: Anti-Delete – Nachfolger existiert, Kanal jetzt leer, Anhänge & Webhook-Fehler', async () => {
+  clearWebhookCache();
+  const w = makeAntiDeleteWorld();
+  const store = await makeStore();
+  store.setAntiDeleteEnabled('g1', true);
+  const ctx = { store, logger: noopLogger, client: { user: { id: 'bot1' } } };
+
+  // wasLastChannelMessage: leerer Kanal nach Löschung -> gelöschte war letzte
+  w.state.remaining = null;
+  assert.equal(await wasLastChannelMessage(w.deletedMessage()), true, 'leerer Kanal = war letzte');
+  w.state.remaining = { id: '1400000000000000000' };
+  assert.equal(await wasLastChannelMessage(w.deletedMessage()), true, 'ältere Restnachricht = war letzte');
+  w.state.remaining = { id: '1700000000000000000' };
+  assert.equal(await wasLastChannelMessage(w.deletedMessage()), false, 'neuere Restnachricht = nicht letzte');
+
+  // Nur-Anhang-Nachricht: Inhalt leer, Anhang wird mitgesendet
+  w.state.remaining = { id: '1400000000000000000' };
+  const withFile = w.deletedMessage({
+    content: '',
+    attachments: new Map([['a1', { url: 'https://cdn.discordapp.com/attachments/c/m/datei.png' }]]),
+  });
+  await handleMessageDelete({ ctx, message: withFile });
+  assert.equal(w.webhookCalls.length, 1);
+  assert.deepEqual(w.webhookCalls[0].files, ['https://cdn.discordapp.com/attachments/c/m/datei.png']);
+  assert.equal(w.webhookCalls[0].content, undefined, 'kein Text -> content bleibt weg');
+
+  // Webhook nicht anlegbar (fehlende Rechte) -> Warnung, kein Crash, kein Send
+  clearWebhookCache();
+  w.channel.fetchWebhooks = async () => { throw new Error('Missing Permissions'); };
+  await handleMessageDelete({ ctx, message: w.deletedMessage() });
+  assert.equal(w.webhookCalls.length, 1, 'ohne nutzbaren Webhook wird nichts gesendet');
 });
