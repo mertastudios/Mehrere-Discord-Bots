@@ -1,23 +1,43 @@
 /**
  * Google Gemini API Anbindung für den Sicherheitsbot.
  *
- * - Nutzt das günstigste Gemini-Modell (Standard: gemini-3.5-flash-lite,
- *   0,10 $ / 1 Mio. Input-Tokens) – überschreibbar per SECURITY_GEMINI_MODEL.
+ * - Nutzt standardmäßig den von Google gepflegten Alias `gemini-flash-lite-latest`
+ *   (immer die aktuell günstigste Flash-Lite-Generation) – überschreibbar per
+ *   SECURITY_GEMINI_MODEL, falls ein Server ein festes Modell pinnen will.
+ * - Lehnt Google ein Modell mit 404 ("no longer available"/nicht gefunden)
+ *   ab, probiert callGemini automatisch die nächsten Modelle aus
+ *   MODEL_FALLBACK_CHAIN durch – innerhalb DESSELBEN Aufrufs, ohne auf den
+ *   nächsten Batch-Retry warten zu müssen.
  * - Erzwingt JSON-Output via responseSchema (Structured Output).
- * - Deaktiviert Gemini-eigene Safety-Filter: Ein Moderationsbot MUSST den
+ * - Deaktiviert Gemini-eigene Safety-Filter: Ein Moderationsbot MUSS den
  *   toxischen Chat ja lesen können, um ihn bewerten zu dürfen.
  * - Ein kurzer interner Sofort-Retry (429/5xx/Netzwerk), die langen Batch-
  *   Retries mit Backoff übernimmt der Moderator (siehe moderator.js).
  */
 
-// gemini-3.5-flash-lite is no longer available to new users. Keep the
-// current default here so deployments without SECURITY_GEMINI_MODEL do not
-// fail before an administrator can configure anything.
-const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
+// `gemini-flash-lite-latest` ist ein von Google selbst gepflegter Alias, der
+// immer auf die aktuell günstigste, verfügbare Flash-Lite-Generation zeigt.
+// Anders als eine fest gepinnte Versionsnummer (z. B. gemini-2.5-flash-lite,
+// das Google zwischenzeitlich für neue Nutzer/Keys deaktiviert hat) migriert
+// Google diesen Alias selbst weiter, sobald eine Generation abgeschaltet
+// wird – ein Code-Deploy ist dafür nicht mehr nötig.
+const DEFAULT_GEMINI_MODEL = 'gemini-flash-lite-latest';
+// Zusätzliches Sicherheitsnetz: Lehnt Google ein Modell mit 404
+// ("no longer available"/nicht gefunden) ab, probiert callGemini
+// automatisch die nächsten Modelle dieser Kette durch, BEVOR der Batch als
+// fehlgeschlagen gilt. So blockiert ein einzelnes abgeschaltetes Modell nie
+// wieder tagelang die komplette Moderation.
+const MODEL_FALLBACK_CHAIN = [
+  'gemini-flash-lite-latest',
+  'gemini-2.5-flash-lite',
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
+];
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const REQUEST_TIMEOUT_MS = 90_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const FATAL_STATUS = new Set([400, 401, 403]); // Bad Request / Key ungültig / Key ohne Zugang
+const MODEL_NOT_FOUND_STATUS = 404; // Modell existiert nicht (mehr) / für diesen Key nicht verfügbar
 
 // Entfernte Struktur der erzwungenen Gemini-Antwort. Die Felder sind im
 // System-Prompt (prompts.js) ausführlich erklärt – das Schema erzwingt nur
@@ -82,15 +102,16 @@ function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
   const generationConfig = {
     temperature: 0.35,
     topP: 0.9,
-    // Gemini 3.5 Flash-Lite erlaubt laut Modelldokumentation bis zu 65.536
-    // Output-Tokens. Für unser festes Moderations-JSON reichen 4.096 völlig
-    // aus und lassen unnötig große Antworten/Tokenverbrauch nicht zu.
+    // Aktuelle Flash-Lite-Generationen erlauben laut Modelldokumentation
+    // deutlich mehr Output-Tokens. Für unser festes Moderations-JSON reichen
+    // 4.096 völlig aus und lassen unnötig große Antworten/Tokenverbrauch nicht zu.
     maxOutputTokens: 4096,
     responseMimeType: 'application/json',
   };
   if (withExtras) {
     generationConfig.responseSchema = RESPONSE_SCHEMA;
-    // 2.5er-Modelle: Thinking komplett aus – kostet sonst Zeit und Output-Tokens.
+    // Thinking komplett aus – kostet sonst Zeit und Output-Tokens, ohne
+    // Mehrwert für dieses einfache Klassifikations-/JSON-Format.
     generationConfig.thinkingConfig = { thinkingBudget: 0 };
   }
   const body = {
@@ -103,29 +124,19 @@ function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
 }
 
 /**
- * Führt genau einen generateContent-Aufruf durch (plus ein kurzer Sofort-Retry
+ * Führt Anfragen gegen GENAU EIN Modell durch (plus ein kurzer Sofort-Retry
  * bei Rate-Limit/Serverfehlern). Gibt niemals werfende Fehler zurück.
  */
-async function callGemini({
+async function callGeminiForModel({
   apiKey,
   systemPrompt,
   userPrompt,
-  model,
-  env,
-  fetchFn = globalThis.fetch,
-  sleepFn = sleep,
-  maxQuickRetries = 1,
-  timeoutMs = REQUEST_TIMEOUT_MS,
-} = {}) {
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-    return { ok: false, error: 'missing_api_key' };
-  }
-  if (typeof fetchFn !== 'function') return { ok: false, error: 'fetch_unavailable' };
-  if (!String(systemPrompt || '').trim() || !String(userPrompt || '').trim()) {
-    return { ok: false, error: 'empty_prompt' };
-  }
-
-  const chosenModel = String(model || modelFromEnv(env)).trim();
+  chosenModel,
+  fetchFn,
+  sleepFn,
+  maxQuickRetries,
+  timeoutMs,
+}) {
   const url = `${GEMINI_BASE_URL}/models/${encodeURIComponent(chosenModel)}:generateContent`;
   const attempts = Math.max(1, maxQuickRetries + 1);
   let lastFailure = { ok: false, error: 'retry_exhausted' };
@@ -182,13 +193,90 @@ async function callGemini({
     }
 
     if (lastFailure?.ok) break;
-    if (attempt + 1 < attempts && lastFailure?.status && RETRYABLE_STATUS.has(lastFailure.status)) {
+    // Ein 404 ("Modell nicht (mehr) verfügbar") ist NICHT retry-würdig – hier
+    // hilft nur ein anderes Modell (siehe callGemini-Fallback-Kette), kein
+    // erneuter Versuch mit demselben Modellnamen.
+    if (
+      attempt + 1 < attempts &&
+      lastFailure?.status &&
+      RETRYABLE_STATUS.has(lastFailure.status)
+    ) {
       await sleepFn(2_000);
       continue;
     }
     break;
   }
 
+  return lastFailure;
+}
+
+/**
+ * Führt einen generateContent-Aufruf durch. Nutzt zuerst das gewünschte
+ * Modell (Parameter `model` > SECURITY_GEMINI_MODEL > DEFAULT_GEMINI_MODEL);
+ * lehnt Google es mit 404 ("no longer available"/nicht gefunden) ab, werden
+ * automatisch die restlichen Modelle aus MODEL_FALLBACK_CHAIN durchprobiert
+ * – innerhalb DIESES Aufrufs, ohne auf den nächsten Batch-Retry zu warten.
+ * Andere Fehler (429/5xx/400/Netzwerk) brechen die Modell-Kaskade sofort ab,
+ * damit ein echter Ausfall nicht unnötig mehrfach abgefragt wird.
+ */
+async function callGemini({
+  apiKey,
+  systemPrompt,
+  userPrompt,
+  model,
+  env,
+  fetchFn = globalThis.fetch,
+  sleepFn = sleep,
+  maxQuickRetries = 1,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+} = {}) {
+  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+    return { ok: false, error: 'missing_api_key' };
+  }
+  if (typeof fetchFn !== 'function') return { ok: false, error: 'fetch_unavailable' };
+  if (!String(systemPrompt || '').trim() || !String(userPrompt || '').trim()) {
+    return { ok: false, error: 'empty_prompt' };
+  }
+
+  const primaryModel = String(model || modelFromEnv(env)).trim();
+  // Reihenfolge: erst das gewünschte Modell, danach die restliche Fallback-
+  // Kette (dedupliziert, Reihenfolge bleibt erhalten).
+  const modelsToTry = [primaryModel, ...MODEL_FALLBACK_CHAIN].filter(
+    (m, index, arr) => m && arr.indexOf(m) === index
+  );
+
+  let lastFailure = { ok: false, error: 'retry_exhausted' };
+  const triedModels = [];
+
+  for (const chosenModel of modelsToTry) {
+    triedModels.push(chosenModel);
+    const result = await callGeminiForModel({
+      apiKey,
+      systemPrompt,
+      userPrompt,
+      chosenModel,
+      fetchFn,
+      sleepFn,
+      maxQuickRetries,
+      timeoutMs,
+    });
+
+    if (result.ok) {
+      if (triedModels.length > 1) {
+        result.fallbackFrom = primaryModel;
+        result.triedModels = triedModels;
+      }
+      return result;
+    }
+
+    lastFailure = result;
+    // Nur bei "Modell existiert nicht (mehr)" auf das nächste Modell
+    // ausweichen – bei anderen Fehlern (Rate-Limit, Netzwerk, Server) würde
+    // ein Modellwechsel das eigentliche Problem nur verschleiern.
+    if (result.status !== MODEL_NOT_FOUND_STATUS) break;
+  }
+
+  if (triedModels.length > 1) lastFailure.triedModels = triedModels;
   return lastFailure;
 }
 
@@ -292,6 +380,7 @@ function extractResponseText(data) {
 
 module.exports = {
   DEFAULT_GEMINI_MODEL,
+  MODEL_FALLBACK_CHAIN,
   GEMINI_BASE_URL,
   RESPONSE_SCHEMA,
   estimateTokens,

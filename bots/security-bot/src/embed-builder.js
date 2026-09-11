@@ -41,6 +41,8 @@ function buildHelpContainer({ lang, commands }) {
     '',
     `**${commands.set_language}**\n${t('helpLanguage', lang)}`,
     '',
+    `**${commands.security_check_now}**\n${t('helpCheckNow', lang)}`,
+    '',
     `**${commands.help}**\n${t('helpHelp', lang)}`,
   ];
 

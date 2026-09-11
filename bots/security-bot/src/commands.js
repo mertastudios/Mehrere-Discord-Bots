@@ -6,7 +6,12 @@
  *   /set_prompt                 – Formular für KI-Anweisungen (Regeln/Strenge/Maßnahmen)
  *   /set_log_channel [channel]  – Log-Kanal für Moderations-Hinweise & API-Fehler
  *   /set_language               – Botsprache dauerhaft ändern (10 Sprachen)
+ *   /security_check_now         – Sofort-Analyse der gesammelten Nachrichten anstoßen
  *   /help                       – Übersicht
+ *
+ * Alle Commands werden GLOBAL registriert (siehe registerCommands weiter
+ * unten) – neue Commands wie /security_check_now landen dadurch automatisch
+ * auf JEDEM bisherigen Server, ohne dass Admins den Bot neu einladen müssen.
  */
 
 const {
@@ -34,6 +39,7 @@ const ALL_COMMAND_NAMES = [
   'set_prompt',
   'set_log_channel',
   'set_language',
+  'security_check_now',
   'help',
 ];
 
@@ -116,6 +122,12 @@ function defineCommands() {
           .setRequired(true)
           .addChoices(...languageChoices)
       ),
+
+    new SlashCommandBuilder()
+      .setName('security_check_now')
+      .setDescription('Startet sofort eine KI-Prüfung der gesammelten Nachrichten (nur Admins)')
+      .setDescriptionLocalizations(pick('descCheckNow'))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
     new SlashCommandBuilder()
       .setName('help')
@@ -673,10 +685,68 @@ async function handleHelp(ctx, interaction) {
     set_prompt: commandMention(ctx, 'set_prompt', interaction.guildId),
     set_log_channel: commandMention(ctx, 'set_log_channel', interaction.guildId),
     set_language: commandMention(ctx, 'set_language', interaction.guildId),
+    security_check_now: commandMention(ctx, 'security_check_now', interaction.guildId),
     help: commandMention(ctx, 'help', interaction.guildId),
   };
   const container = buildHelpContainer({ lang, commands });
   return interaction.reply(componentsV2Payload([container], { ephemeral: false }));
+}
+
+/**
+ * /security_check_now – wertet die aktuell gesammelten Nachrichten SOFORT
+ * aus (Buffer + evtl. hängende Retry-Batches), ohne auf das Token-Limit oder
+ * den Mitternachts-Flush zu warten. Praktisch, um nach einer Konfigurations-
+ * änderung (z. B. neuer API-Key oder Modell) sofort zu testen, ob die
+ * Analyse wieder funktioniert.
+ */
+async function handleCheckNow(ctx, interaction) {
+  if (!interaction.inGuild()) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('errGuildOnly', 'en'))], { ephemeral: true })
+    );
+  }
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
+  if (!cfg.geminiApiKey) {
+    return interaction.reply(
+      componentsV2Payload([smallContainer(null, t('checkNowNoKey', lang))], { ephemeral: true })
+    );
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  // Lazy require: vermeidet einen zyklischen Require zwischen commands.js
+  // und moderator.js (moderator.js benötigt commands.js nicht, aber so
+  // bleibt die Abhängigkeitsrichtung eindeutig und Tests können den
+  // Moderator weiterhin per require.cache austauschen).
+  const { runCheckNow } = require('./moderator');
+  const result = await runCheckNow(ctx, interaction.guildId);
+
+  if (result.empty) {
+    return interaction.editReply(
+      componentsV2Payload([smallContainer(null, t('checkNowEmpty', lang))])
+    );
+  }
+
+  if (result.remaining > 0) {
+    return interaction.editReply(
+      componentsV2Payload([
+        smallContainer(
+          null,
+          t('checkNowPartial', lang, {
+            count: result.analyzed + result.remaining,
+            remaining: result.remaining,
+          })
+        ),
+      ])
+    );
+  }
+
+  return interaction.editReply(
+    componentsV2Payload([smallContainer(null, t('checkNowDone', lang, { count: result.analyzed }))])
+  );
 }
 
 /**
@@ -692,6 +762,8 @@ async function handleChatInput(ctx, interaction) {
       return handleSetLogChannel(ctx, interaction);
     case 'set_language':
       return handleSetLanguage(ctx, interaction);
+    case 'security_check_now':
+      return handleCheckNow(ctx, interaction);
     case 'help':
       return handleHelp(ctx, interaction);
     default:

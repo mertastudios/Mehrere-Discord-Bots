@@ -57,6 +57,16 @@ const BACKOFF_SCHEDULE_MS = [
 const runningByGuild = new Set();
 const rerunRequested = new Set();
 
+// /security_check_now wartet höchstens 10s (40 × 250ms) darauf, dass ein
+// bereits laufender Dispatch (z. B. vom Scheduler) fertig wird, bevor der
+// Befehl selbst verarbeitet bzw. sein Ergebnis meldet.
+const CHECK_NOW_POLL_MS = 250;
+const CHECK_NOW_MAX_WAIT_TICKS = 40;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function nextRetryDelay(retryCount) {
   const index = Math.max(0, Number(retryCount) - 1);
   return BACKOFF_SCHEDULE_MS[Math.min(index, BACKOFF_SCHEDULE_MS.length - 1)];
@@ -127,6 +137,52 @@ function flushBuffer(ctx, guildId) {
   void ctx.store.flush();
   void processGuild(ctx, guildId);
   return batch;
+}
+
+/**
+ * /security_check_now – wertet ALLE aktuell wartenden Nachrichten einer Gilde
+ * SOFORT aus: Der offene Buffer wird (auch unterhalb des Token-Limits) zu
+ * einem Batch gemacht, UND alle bereits wartenden Retry-Batches (Backoff
+ * nach einem vorherigen API-Fehler) werden sofort fällig gestellt – Admins
+ * müssen also nicht bis zum nächsten geplanten Retry (der bei anhaltenden
+ * Fehlern Stunden entfernt sein kann) warten, um eine Konfigurationsänderung
+ * (z. B. neuer Key oder neues Modell) zu testen.
+ *
+ * Wartet (im Gegensatz zu flushBuffer/processGuild) auf den tatsächlichen
+ * Abschluss des Laufs, damit der Slash-Command ein verlässliches Ergebnis
+ * melden kann.
+ */
+async function runCheckNow(ctx, guildId) {
+  const gid = String(guildId);
+  const beforePending = ctx.store.countPendingMessages(gid);
+  if (beforePending === 0) {
+    return { empty: true, analyzed: 0, remaining: 0 };
+  }
+
+  ctx.store.buildBatchFromBuffer(gid);
+  const batches = ctx.store.getBatches(gid);
+  if (batches.length) {
+    for (const batch of batches) batch.nextRetryAt = 0;
+    ctx.store.setBatches(gid, batches);
+  }
+  void ctx.store.flush();
+
+  // Läuft bereits ein Dispatch (z. B. vom 30s-Scheduler angestoßen), merkt
+  // processGuild() nur einen Folgelauf vor und kehrt sofort zurück. Kurz
+  // abwarten, damit /security_check_now nicht mit veraltetem Ergebnis endet.
+  for (let tick = 0; runningByGuild.has(gid) && tick < CHECK_NOW_MAX_WAIT_TICKS; tick++) {
+    await sleep(CHECK_NOW_POLL_MS);
+  }
+
+  await processGuild(ctx, gid);
+
+  for (let tick = 0; runningByGuild.has(gid) && tick < CHECK_NOW_MAX_WAIT_TICKS; tick++) {
+    await sleep(CHECK_NOW_POLL_MS);
+  }
+
+  const remaining = ctx.store.countPendingMessages(gid);
+  const analyzed = Math.max(0, beforePending - remaining);
+  return { empty: false, analyzed, remaining };
 }
 
 async function processSingleBatch(ctx, guildId, batch) {
@@ -464,6 +520,7 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
 module.exports = {
   processGuild,
   flushBuffer,
+  runCheckNow,
   applyResults,
   personalMessageText,
   nextRetryDelay,

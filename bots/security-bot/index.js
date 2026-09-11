@@ -7,15 +7,20 @@
  *    Token-Budget für eine Gemini-Anfrage erreicht ist – zusätzlich wird der
  *    Verlauf täglich um 0 Uhr (Serversprache-Zeitzone) ausgewertet.
  *  - Sendet System-Prompt + Admin-Prompt (/set_prompt) + sauber formatierten
- *    Chat-Verlauf (IDs ab 1, mentions aufgelöst) an das günstigste Gemini-
- *    Modell (gemini-3.5-flash-lite).
+ *    Chat-Verlauf (IDs ab 1, mentions aufgelöst) an Gemini – standardmäßig an
+ *    den von Google gepflegten Alias `gemini-flash-lite-latest` (zeigt immer
+ *    auf die aktuell günstigste Flash-Lite-Generation; lehnt Google ein
+ *    Modell mit 404 ab, wird automatisch das nächste aus einer Fallback-Kette
+ *    versucht – siehe src/gemini.js).
  *  - Gemini entscheidet über Warnungen / Timeouts (1m–1w) mit persönlicher
  *    Nachricht; der Bot antwortet auf die schwerwiegendste Verstoßnachricht.
  *  - Fehlgeschlagene Analysen werden NICHT verworfen: Retry-Queue mit Backoff,
  *    meanwhile läuft das Sammeln weiter. Log-Kanal informiert über alles.
+ *    /security_check_now stellt alle wartenden Nachrichten sofort fällig.
  *
  *  Commands (alle nur für Administratoren):
- *  /set_gemini_api_key · /set_prompt · /set_log_channel · /set_language · /help
+ *  /set_gemini_api_key · /set_prompt · /set_log_channel · /set_language ·
+ *  /security_check_now · /help
  * ============================================================================
  */
 
