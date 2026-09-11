@@ -91,14 +91,6 @@ function buildModerationLogContainer({ lang, moderation }) {
   return container;
 }
 
-/** Log-Kanal-Hinweis: Gemini hat niemanden moderiert, aber im Chat geantwortet. */
-function buildChatReplyLogContainer({ lang, reply, channelMention }) {
-  return smallContainer(
-    t('logChatReply', lang),
-    `${channelMention ? `${channelMention}\n` : ''}${clip(reply, 1500)}`
-  );
-}
-
 /** Log-Kanal-Hinweis: API-Fehler, Batch bleibt erhalten. */
 function buildApiErrorContainer({ lang, count, error, attempt, nextRetry }) {
   const container = new ContainerBuilder();
@@ -142,7 +134,6 @@ module.exports = {
   clip,
   buildHelpContainer,
   buildModerationLogContainer,
-  buildChatReplyLogContainer,
   buildApiErrorContainer,
   buildNoKeyContainer,
   buildDropContainer,

@@ -5,7 +5,8 @@
  *  Ablauf:
  *  - Sammelt Textnachrichten echter Nutzer (Admins sind immun), bis das
  *    Token-Budget für eine Gemini-Anfrage erreicht ist – zusätzlich wird der
- *    Verlauf täglich um 0 Uhr (Serversprache-Zeitzone) ausgewertet.
+ *    Verlauf ALLE 2 STUNDEN (Serversprache-Zeitzone, Raster 0/2/4…22 Uhr)
+ *    ausgewertet, damit Verwarnungen nicht bis zum nächsten Tag liegen bleiben.
  *  - Sendet System-Prompt + Admin-Prompt (/set_prompt) + sauber formatierten
  *    Chat-Verlauf (IDs ab 1, mentions aufgelöst) an Gemini – standardmäßig an
  *    den von Google gepflegten Alias `gemini-flash-lite-latest` (zeigt immer
@@ -14,6 +15,7 @@
  *    versucht – siehe src/gemini.js).
  *  - Gemini entscheidet über Warnungen / Timeouts (1m–1w) mit persönlicher
  *    Nachricht; der Bot antwortet auf die schwerwiegendste Verstoßnachricht.
+ *    Ohne Verstoß schreibt der Bot NICHTS in den Chat (kein Small-Talk).
  *  - Fehlgeschlagene Analysen werden NICHT verworfen: Retry-Queue mit Backoff,
  *    meanwhile läuft das Sammeln weiter. Log-Kanal informiert über alles.
  *    /security_check_now stellt alle wartenden Nachrichten sofort fällig.

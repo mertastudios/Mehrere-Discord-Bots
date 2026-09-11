@@ -31,6 +31,7 @@ const {
   extractResponseText,
   modelFromEnv,
   DEFAULT_GEMINI_MODEL,
+  RESPONSE_SCHEMA,
 } = require('../bots/security-bot/src/gemini');
 const {
   buildSystemPrompt,
@@ -54,7 +55,14 @@ const {
   nextRetryDelay,
   BACKOFF_SCHEDULE_MS,
 } = require('../bots/security-bot/src/moderator');
-const { tickOnce, dayKeyInTz } = require('../bots/security-bot/src/scheduler');
+const {
+  tickOnce,
+  dayKeyInTz,
+  hourInTz,
+  slotKeyInTz,
+  oldestBufferedAt,
+  FLUSH_INTERVAL_HOURS,
+} = require('../bots/security-bot/src/scheduler');
 const { maskApiKey } = require('../bots/security-bot/src/mask');
 
 const noopLogger = { info: () => {}, warn: () => {}, error: () => {} };
@@ -612,14 +620,14 @@ test('Security Bot: validateApiKey & JSON-Parsing der Modell-Antwort', async () 
   assert.equal(bad.fatal, true);
   assert.match(bad.error, /API key not valid/);
 
-  // Parsing: normal, fenced, array, invalide Dauern, chat_reply
+  // Parsing: normal, fenced, array, invalide Dauern
   const parsed = parseModerationJson('{"moderations":[{"message_id":3,"action":"timeout","duration":"7x","primary":true,"reason":"r","personal_message":"m"},{"message_id":"4","action":"warn","duration":"1h","primary":false,"reason":"r2","personal_message":"m2"}],"chat_reply":"Nice chat"}');
   assert.equal(parsed.ok, true);
   assert.equal(parsed.moderations.length, 2);
   assert.equal(parsed.moderations[0].duration, '1h', 'ungültige Dauer fällt auf 1h zurück');
   assert.equal(parsed.moderations[1].action, 'warn');
   assert.equal(parsed.moderations[1].duration, null, 'warn hat keine Dauer');
-  assert.equal(parsed.chat_reply, 'Nice chat');
+  assert.equal(parsed.chat_reply, undefined, 'chat_reply existiert nicht mehr und wird ignoriert');
 
   const fenced = parseModerationJson('```json\n{"moderations":[]}\n```');
   assert.equal(fenced.ok, true);
@@ -819,7 +827,7 @@ test('Security Bot: maximal 1 Timeout pro Person – weitere Timeouts werden zu 
   }
 });
 
-test('Security Bot: chat_reply wird im Channel gesendet & geloggt', async () => {
+test('Security Bot: ohne Verstoß bleibt der Bot komplett still (kein Small-Talk)', async () => {
   const w = makeWorld();
   const store = await makeStore();
   store.setApiKey('g1', 'AIza-pipeline-key-123456');
@@ -834,16 +842,54 @@ test('Security Bot: chat_reply wird im Channel gesendet & geloggt', async () => 
     client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
   };
 
+  // Selbst wenn das Modell (entgegen Schema & Prompt) Small-Talk liefert,
+  // darf davon NICHTS im Chat landen – ein Sicherheitsbot moderiert nur.
   const origFetch = globalThis.fetch;
-  globalThis.fetch = async () => geminiJsonResponse({ moderations: [], chat_reply: 'Mach’s gut Max, bis später!' });
+  globalThis.fetch = async () =>
+    geminiJsonResponse({
+      moderations: [],
+      chat_reply: 'Hey zusammen! Hier ist alles entspannt, genießt euren Tag auf dem Server! 👋',
+    });
   try {
     assert.equal(await processGuild(ctx, 'g1'), true);
-    assert.equal(w.channel.sent.length, 1, 'Chat-Antwort im Kanal');
-    assert.equal(w.channel.sent[0].content, 'Mach’s gut Max, bis später!');
-    assert.equal(w.logChannel.sent.length, 1, 'Chat-Antwort im Log-Kanal vermerkt');
+    assert.equal(w.channel.sent.length, 0, 'kein einziger Post im Kanal');
+    assert.equal(w.replies.length, 0, 'keine Antwort auf eine Nachricht');
+    assert.equal(w.logChannel.sent.length, 0, 'auch nichts im Log-Kanal');
     assert.equal(store.countPenaltiesSince('g1', '111111111111111111', 20), 0, 'keine Strafe vermerkt');
+    assert.equal(store.getBatches('g1').length, 0, 'Batch trotzdem sauber abgeschlossen');
   } finally {
     globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: RESPONSE_SCHEMA & Prompt lassen gar keine Chat-Antwort mehr zu', () => {
+  // Das Schema kennt nur noch "moderations" – Gemini kann strukturell keinen
+  // Small-Talk mehr zurückgeben.
+  assert.deepEqual(Object.keys(RESPONSE_SCHEMA.properties), ['moderations']);
+  assert.equal(RESPONSE_SCHEMA.properties.chat_reply, undefined);
+
+  const sp = buildSystemPrompt({
+    guildName: 'Kekse Server',
+    lang: 'de',
+    participants: [{ authorId: 'u1', authorName: 'Max' }],
+    penaltyByUser: new Map(),
+  });
+  assert.ok(!sp.includes('chat_reply'), 'System-Prompt erwähnt chat_reply nicht mehr');
+  assert.ok(sp.includes('MODERIEREN, NICHT CHATTEN'), 'klare Ansage: kein Chatten');
+  assert.ok(sp.includes('{"moderations":[]}'), 'leeres Array als Nichts-zu-tun-Antwort');
+
+  const up = buildUserPrompt({ adminPrompt: 'Regeln', logText: 'Verlauf' });
+  assert.ok(!up.includes('chat_reply'));
+  assert.ok(up.includes('{"moderations":[]}'), 'User-Prompt wiederholt die Stille-Regel');
+
+  // Auch die Standard-Prompts aller Sprachen dürfen nicht mehr zum Plaudern einladen
+  for (const lang of Object.keys(LANGS)) {
+    assert.ok(
+      !/locker im Chat antworten|casually in chat|brièvement dans le chat|brevemente en el chat|de boa no chat|ответить в чате|チャットで軽く短く返信|채팅으로 답하기|聊天中轻松地简短回复|leggerezza in chat/.test(
+        t('defaultPrompt', lang)
+      ),
+      `defaultPrompt (${lang}) lädt nicht mehr zum Chatten ein`
+    );
   }
 });
 
@@ -1132,40 +1178,113 @@ test('Security Bot: flushBuffer baut Batch und startet Analyse', async () => {
 });
 
 // ============================================================================
-// 9. Scheduler: 0-Uhr-Flush & Retry-Tick
+// 9. Scheduler: 2-Stunden-Flush & Retry-Tick
 // ============================================================================
 
-test('Security Bot: Mitternachts-Flush wertet auch kleine Verläufe aus', async () => {
+test('Security Bot: 2-Stunden-Flush wertet auch kleine Verläufe aus', async () => {
   const w = makeWorld();
   const store = await makeStore();
   store.setApiKey('g1', 'AIza-scheduler-key-123456');
-  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'kurz vor Mitternacht', discordMessageId: 'm1', sentAt: Date.now() });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'kurz vor dem Flush', discordMessageId: 'm1', sentAt: Date.now() });
 
   const ctx = {
     store,
     logger: noopLogger,
     env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
     client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
-    schedulerState: { lastDayByGuild: new Map([['g1', '2000-01-01']]), lastPrune: Date.now() }, // "gestern"
+    // Der zuletzt gesehene Slot liegt in der Vergangenheit -> neuer Slot angebrochen
+    schedulerState: { lastSlotByGuild: new Map([['g1', '2000-01-01#0']]), lastPrune: Date.now() },
   };
 
   const origFetch = globalThis.fetch;
   globalThis.fetch = async () => geminiJsonResponse({ moderations: [] });
   try {
     const flushed = tickOnce(ctx);
-    assert.equal(flushed, 1, 'genau ein 0-Uhr-Flush');
-    assert.equal(store.getBuffer('g1').length, 0, 'Buffer wurde um 0 Uhr geleert');
+    assert.equal(flushed, 1, 'genau ein 2-Stunden-Flush');
+    assert.equal(store.getBuffer('g1').length, 0, 'Buffer wurde im neuen Slot geleert');
     await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(store.getBatches('g1').length, 0, 'kleiner Verlauf wurde analysiert');
 
-    // Zweiter Tick am selben Tag: kein erneuter Flush
+    // Zweiter Tick im selben Slot: kein erneuter Flush
     const flushedAgain = tickOnce(ctx);
     assert.equal(flushedAgain, 0);
 
     // Zeitzonen-Umschaltung: 23:59 UTC ist in Berlin schon der nächste Tag
     assert.equal(dayKeyInTz(new Date('2026-09-10T23:59:00Z'), 'Europe/Berlin'), '2026-09-11');
     assert.equal(dayKeyInTz(new Date('2026-09-10T12:00:00Z'), 'Europe/Berlin'), '2026-09-10');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: Slot-Raster deckt 0 Uhr und jede zweite Stunde ab', () => {
+  assert.equal(FLUSH_INTERVAL_HOURS, 2, 'Flush-Intervall beträgt 2 Stunden');
+
+  // Stunden korrekt in der Gilden-Zeitzone (Berlin = UTC+2 im September)
+  assert.equal(hourInTz(new Date('2026-09-11T00:30:00Z'), 'Europe/Berlin'), 2);
+  assert.equal(hourInTz(new Date('2026-09-10T22:30:00Z'), 'Europe/Berlin'), 0, 'Mitternacht ist Stunde 0');
+
+  const tz = 'Europe/Berlin';
+  // Mitternacht Berlin = Slot 0 des neuen Tages -> der alte 0-Uhr-Flush bleibt erhalten
+  assert.equal(slotKeyInTz(new Date('2026-09-10T22:05:00Z'), tz), '2026-09-11#0');
+  // 23:59 Berlin (= 21:59 UTC) liegt noch im letzten Slot des Vortags
+  assert.equal(slotKeyInTz(new Date('2026-09-10T21:59:00Z'), tz), '2026-09-10#11');
+
+  // Über 24 Stunden entstehen genau 12 Slots, und der Schlüssel wechselt
+  // spätestens alle 2 Stunden.
+  const slots = new Set();
+  for (let h = 0; h < 24; h++) {
+    slots.add(slotKeyInTz(new Date(Date.UTC(2026, 0, 15, h) - 60 * 60 * 1000), tz));
+  }
+  assert.equal(slots.size, 12, '12 Auswertungen pro Tag statt nur einer');
+});
+
+test('Security Bot: verpasster Slot nach Neustart wird sofort nachgeholt', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-scheduler-restart-123456');
+
+  const now = Date.now();
+  // Nachricht liegt schon 3 Stunden im Buffer – der Slot-Wechsel wurde also
+  // während eines Neustarts/Deploys verpasst.
+  store.addBufferMessage('g1', {
+    channelId: 'c1',
+    channelName: 'allgemein',
+    authorId: '111111111111111111',
+    authorName: 'Max',
+    content: 'liegt schon ewig im Buffer',
+    discordMessageId: 'm1',
+    sentAt: now - 3 * 60 * 60 * 1000,
+  });
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+    // Frischer Prozess: schedulerState ist leer, es gibt keinen "letzten Slot"
+    schedulerState: null,
+  };
+
+  assert.equal(oldestBufferedAt(ctx, 'g1'), now - 3 * 60 * 60 * 1000);
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => geminiJsonResponse({ moderations: [] });
+  try {
+    assert.equal(tickOnce(ctx, now), 1, 'überfälliger Buffer wird sofort ausgewertet');
+    assert.equal(store.getBuffer('g1').length, 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.getBatches('g1').length, 0);
+
+    // Frische Nachricht im selben Slot -> kein sofortiger Flush mehr
+    store.addBufferMessage('g1', {
+      channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111',
+      authorName: 'Max', content: 'ganz frisch', discordMessageId: 'm2', sentAt: now,
+    });
+    assert.equal(tickOnce(ctx, now), 0, 'frischer Buffer wartet auf seinen Slot');
+    assert.equal(store.getBuffer('g1').length, 1);
   } finally {
     globalThis.fetch = origFetch;
   }
