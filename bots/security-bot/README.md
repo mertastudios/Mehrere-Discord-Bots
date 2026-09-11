@@ -1,8 +1,12 @@
 # 🛡️ Security Bot
 
 Ein vollautomatischer **KI-Sicherheitsbot** für Discord, angetrieben von **Google Gemini** –
-mit dem günstigsten Gemini-Modell (`gemini-3.5-flash-lite`, 0,10 $ / 1 Mio. Input-Tokens,
-kostenloser Free-Tier verfügbar).
+standardmäßig über den von Google gepflegten Alias `gemini-flash-lite-latest`
+(zeigt immer auf die aktuell günstigste, verfügbare Flash-Lite-Generation; kostenloser
+Free-Tier verfügbar). Wird ein Modell von Google mit „nicht mehr verfügbar" (404)
+abgelehnt, weicht der Bot **automatisch** auf das nächste Modell einer Fallback-Kette
+aus – ein einzelnes abgeschaltetes Modell blockiert die Moderation also nie wieder
+tagelang.
 
 Der Bot verhält sich wie ein zuverlässiger **OP-Moderator**: Er sammelt diskret alle
 Textnachrichten echter Nutzer, bis genug Tokens für eine Analyse beisammen sind (oder
@@ -17,9 +21,13 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 - **Gemini-Powered Context-Moderation**: Gemini bekommt den Chat-Verlauf **mit Kontext**
   (chronologisch, nach Kanälen gruppiert) und entscheidet selbstständig – auch mehrere
   Nutzer gleichzeitig.
-- **Günstigstes Modell**: `gemini-3.5-flash-lite` (überschreibbar), gesteuertes JSON-
-  Antwortformat via Structured Output, Thinking & Safety-Filter bewusst deaktiviert
-  (ein Moderationsbot muss Toxizität ja lesen dürfen).
+- **Selbstaktualisierendes Standardmodell**: `gemini-flash-lite-latest` (überschreibbar
+  per `SECURITY_GEMINI_MODEL`) – ein von Google gepflegter Alias, der bei künftigen
+  Modell-Ablösungen (z. B. 2.5 → 3.x) automatisch mitzieht, ohne dass ein Code-Deploy
+  nötig ist. Lehnt Google ein Modell trotzdem mit 404 ab, probiert der Bot **innerhalb
+  desselben Aufrufs** automatisch die nächsten Modelle einer Fallback-Kette durch.
+  Gesteuertes JSON-Antwortformat via Structured Output, Thinking & Safety-Filter
+  bewusst deaktiviert (ein Moderationsbot muss Toxizität ja lesen dürfen).
 - **Nichts geht verloren**: Bei API-Fehlern oder Rate-Limits bleibt der gesammelte
   Verlauf **vollständig erhalten**, neue Nachrichten sammeln sich derweil weiter, und
   der Bot wiederholt die Analyse mit wachsendem Abstand (2min → 5min → 15min → … → max. 6h).
@@ -63,6 +71,7 @@ begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendst
 | `/set_prompt` | Öffnet ein **Formular** für die KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der Standardtext (oder dein letzter Text) ist bereits eingetragen. Leer absenden = zurücksetzen auf Standard. |
 | `/set_log_channel [channel]` | Setzt den Log-Kanal, in den der Bot Moderations-Hinweise, API-Fehler und Meldungen sendet. Ohne Kanal-Angabe wird der Log-Kanal entfernt. |
 | `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die 0-Uhr-Zeitzone & die Standardsprache der KI-Antworten). |
+| `/security_check_now` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf das Token-Limit oder Mitternacht zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Praktisch, um nach einer Konfigurationsänderung direkt zu testen. |
 | `/help` | Übersicht aller Befehle mit klickbaren Mentions. |
 
 ---
@@ -141,8 +150,10 @@ SECURITY_BOT_GUILD_ID=
 TURSO_DATABASE_URL=
 TURSO_AUTH_TOKEN=
 
-# Optional: anderes Gemini-Modell (Standard: gemini-3.5-flash-lite)
-# SECURITY_GEMINI_MODEL=gemini-3.5-flash-lite
+# Optional: anderes Gemini-Modell fest pinnen (Standard: gemini-flash-lite-latest,
+# ein von Google gepflegter Alias, der automatisch immer auf die aktuell günstigste
+# Flash-Lite-Generation zeigt)
+# SECURITY_GEMINI_MODEL=gemini-flash-lite-latest
 
 # Optional: Token-Budget pro Analyse (Standard 15000)
 # SECURITY_GEMINI_MAX_INPUT_TOKENS=15000

@@ -49,6 +49,7 @@ const {
 const {
   processGuild,
   flushBuffer,
+  runCheckNow,
   personalMessageText,
   nextRetryDelay,
   BACKOFF_SCHEDULE_MS,
@@ -84,13 +85,14 @@ test('Security Bot: Modul-Export & Intents', () => {
 // 2. Commands
 // ============================================================================
 
-test('Security Bot: genau 5 Commands, alle nur für Admins', () => {
+test('Security Bot: genau 6 Commands, alle nur für Admins', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 5);
+  assert.equal(cmds.length, 6);
 
   const names = cmds.map((c) => c.name);
   assert.deepEqual([...names].sort(), [
     'help',
+    'security_check_now',
     'set_gemini_api_key',
     'set_language',
     'set_log_channel',
@@ -128,6 +130,11 @@ test('Security Bot: genau 5 Commands, alle nur für Admins', () => {
   // /set_language hat 10 Sprach-Auswahlen
   const langCmd = cmds.find((c) => c.name === 'set_language');
   assert.equal(langCmd.options[0].choices.length, 10, '10 Sprachen stehen zur Auswahl');
+
+  // /security_check_now hat KEINE Optionen (nur ein Trigger)
+  const checkNowCmd = cmds.find((c) => c.name === 'security_check_now');
+  assert.ok(checkNowCmd, '/security_check_now existiert');
+  assert.equal(checkNowCmd.options?.length || 0, 0);
 
   // Guild-Payload identisch (kein DM-Command mehr)
   assert.deepEqual(guildCommandJson().map((c) => c.name), ALL_COMMAND_NAMES);
@@ -1328,4 +1335,200 @@ test('Security Bot: /set_log_channel & /set_language & /help', async () => {
   // commandMention-Fallback ohne IDs
   assert.equal(commandMention({ commandIds: {} }, 'help'), '/help');
   assert.equal(commandMention({ commandIds: { help: '42' } }, 'help'), '</help:42>');
+});
+
+// ============================================================================
+// 8. /security_check_now – Sofort-Prüfung
+// ============================================================================
+
+test('Security Bot: runCheckNow meldet "leer" ohne wartende Nachrichten', async () => {
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-checknow-key-123456');
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map() } },
+  };
+
+  const result = await runCheckNow(ctx, 'g1');
+  assert.deepEqual(result, { empty: true, analyzed: 0, remaining: 0 });
+});
+
+test('Security Bot: runCheckNow flusht den Buffer sofort und stellt Retry-Batches sofort fällig', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-checknow-key-654321');
+  store.setLogChannelId('g1', 'clog');
+
+  // Ein offener Buffer UNTERHALB des Token-Limits: würde ohne /security_check_now
+  // noch lange nicht automatisch analysiert werden.
+  store.addBufferMessage('g1', {
+    channelId: 'c1',
+    channelName: 'allgemein',
+    authorId: '111111111111111111',
+    authorName: 'Max',
+    content: 'kurze Testnachricht',
+    discordMessageId: 'm1',
+    sentAt: Date.now(),
+  });
+
+  // Zusätzlich ein bereits fehlgeschlagener Batch mit fernem nextRetryAt
+  // (z. B. wegen eines vorherigen "Modell nicht verfügbar"-Fehlers) –
+  // /security_check_now muss ihn SOFORT erneut versuchen, nicht erst in Stunden.
+  store.addBufferMessage('g1', {
+    channelId: 'c1',
+    channelName: 'allgemein',
+    authorId: '222222222222222222',
+    authorName: 'Anna',
+    content: 'wartende Nachricht aus fehlgeschlagenem Batch',
+    discordMessageId: 'm2',
+    sentAt: Date.now() - 5000,
+  });
+  const stuckBatch = store.buildBatchFromBuffer('g1');
+  stuckBatch.retryCount = 3;
+  stuckBatch.nextRetryAt = Date.now() + 6 * 60 * 60 * 1000; // 6h in der Zukunft
+  store.setBatches('g1', [stuckBatch]);
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const apiCalls = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    apiCalls.push({ url, body: JSON.parse(options.body) });
+    return geminiJsonResponse({ moderations: [], chat_reply: '' });
+  };
+
+  try {
+    const result = await runCheckNow(ctx, 'g1');
+    assert.equal(result.empty, false);
+    assert.equal(result.remaining, 0, 'nichts bleibt hängen');
+    assert.equal(result.analyzed, 2, 'beide Nachrichten wurden ausgewertet');
+    assert.equal(apiCalls.length, 1, 'genau eine Gemini-Analyse für den kombinierten Batch');
+    assert.equal(store.getBatches('g1').length, 0, 'Batch ist abgeschlossen');
+    assert.equal(store.getBuffer('g1').length, 0, 'Buffer wurde geleert');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: /security_check_now – kein Key, leer & erfolgreicher Lauf', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  // Ohne API-Key -> sofortige ephemere Fehlermeldung, kein Gemini-Aufruf
+  let noKeyPayload = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'security_check_now',
+    reply: async (p) => { noKeyPayload = p; },
+  }));
+  assert.ok(JSON.stringify(noKeyPayload).includes('set_gemini_api_key'));
+
+  store.setApiKey('g1', 'AIza-checknow-cmd-123456');
+
+  // Mit Key, aber ohne gesammelte Nachrichten -> "nichts zu prüfen"
+  let emptyPayload = null;
+  await handleChatInput(ctx, adminInteraction({
+    commandName: 'security_check_now',
+    deferReply: async () => {},
+    editReply: async (p) => { emptyPayload = p; },
+  }));
+  assert.ok(JSON.stringify(emptyPayload).toLowerCase().includes('ℹ️') || JSON.stringify(emptyPayload).includes('nichts zu prüfen'));
+
+  // Mit gesammelten Nachrichten -> Analyse läuft synchron durch, Erfolg gemeldet
+  store.addBufferMessage('g1', {
+    channelId: 'c1',
+    channelName: 'allgemein',
+    authorId: '111111111111111111',
+    authorName: 'Max',
+    content: 'ganz normale Nachricht',
+    discordMessageId: 'm1',
+    sentAt: Date.now(),
+  });
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => geminiJsonResponse({ moderations: [], chat_reply: '' });
+
+  let donePayload = null;
+  try {
+    await handleChatInput(ctx, adminInteraction({
+      commandName: 'security_check_now',
+      deferReply: async () => {},
+      editReply: async (p) => { donePayload = p; },
+    }));
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+  assert.ok(JSON.stringify(donePayload).includes('✅'), 'Erfolgsmeldung enthält Häkchen');
+  assert.equal(store.getBatches('g1').length, 0);
+});
+
+// ============================================================================
+// 9. Gemini-Modell-Fallback (404 "no longer available")
+// ============================================================================
+
+test('Security Bot: callGemini springt bei 404 automatisch zum nächsten Modell', async () => {
+  const calls = [];
+  const fetchFn = async (url) => {
+    calls.push(url);
+    if (url.includes('/models/gemini-2.5-flash-lite:generateContent')) {
+      return {
+        ok: false,
+        status: 404,
+        text: async () => JSON.stringify({
+          error: { message: 'This model models/gemini-2.5-flash-lite is no longer available to new users.' },
+        }),
+      };
+    }
+    return geminiJsonResponse({ moderations: [] });
+  };
+
+  const res = await callGemini({
+    apiKey: 'AIza-fallback-test',
+    systemPrompt: 'SYSTEM',
+    userPrompt: 'USER',
+    model: 'gemini-2.5-flash-lite',
+    fetchFn,
+    sleepFn: async () => {},
+  });
+
+  assert.equal(res.ok, true, 'Fallback-Modell liefert Erfolg');
+  assert.notEqual(res.model, 'gemini-2.5-flash-lite');
+  assert.equal(res.fallbackFrom, 'gemini-2.5-flash-lite');
+  assert.ok(Array.isArray(res.triedModels) && res.triedModels.length >= 2);
+  assert.ok(calls.some((u) => u.includes('/models/gemini-2.5-flash-lite:generateContent')));
+});
+
+test('Security Bot: callGemini gibt bei 429/5xx/Netzwerkfehlern NICHT auf ein anderes Modell aus', async () => {
+  const calls = [];
+  const fetchFn = async (url) => {
+    calls.push(url);
+    return { ok: false, status: 429, text: async () => '{"error":{"message":"rate limited"}}' };
+  };
+
+  const res = await callGemini({
+    apiKey: 'AIza-no-fallback-test',
+    systemPrompt: 'SYSTEM',
+    userPrompt: 'USER',
+    model: 'gemini-flash-lite-latest',
+    fetchFn,
+    sleepFn: async () => {},
+    maxQuickRetries: 0,
+  });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 429);
+  // Nur EIN Modell wurde angefragt – 429 ist kein Grund, das Modell zu wechseln.
+  assert.ok(calls.every((u) => u.includes('/models/gemini-flash-lite-latest:generateContent')));
 });
