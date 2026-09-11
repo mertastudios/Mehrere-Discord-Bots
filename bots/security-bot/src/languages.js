@@ -116,60 +116,6 @@ const STRINGS = {
     descLanguage: 'Sprache des Bots dauerhaft ändern',
     descHelp: 'Zeigt alle Befehle und Funktionen',
 
-    descApiKey: 'Set the Google Gemini API key for this server',
-    descPrompt: 'Set AI instructions via form (rules, strictness, measures)',
-    descLogChannel: 'Set the log channel for moderation notices & API errors',
-    descLanguage: 'Change the bot language permanently',
-    descHelp: 'Shows all commands and features',
-
-    descApiKey: 'Définir la clé API Google Gemini pour ce serveur',
-    descPrompt: 'Définir les instructions IA (règles, sévérité, mesures)',
-    descLogChannel: 'Définir le salon de journal (avis de modération, erreurs API)',
-    descLanguage: 'Changer définitivement la langue du bot',
-    descHelp: 'Affiche toutes les commandes et fonctions',
-
-    descApiKey: 'Configura la clave API de Google Gemini para este servidor',
-    descPrompt: 'Define las instrucciones de IA (reglas, rigor, medidas)',
-    descLogChannel: 'Configura el canal de registro para avisos y errores de API',
-    descLanguage: 'Cambia el idioma del bot de forma permanente',
-    descHelp: 'Muestra todos los comandos y funciones',
-
-    descApiKey: 'Define a chave de API do Google Gemini para este servidor',
-    descPrompt: 'Define as instruções da IA (regras, rigor, medidas)',
-    descLogChannel: 'Define o canal de registro para avisos e erros de API',
-    descLanguage: 'Muda o idioma do bot permanentemente',
-    descHelp: 'Mostra todos os comandos e funções',
-
-    descApiKey: 'Задать API-ключ Google Gemini для этого сервера',
-    descPrompt: 'Задать инструкции для ИИ (правила, строгость, меры)',
-    descLogChannel: 'Задать канал журнала для уведомлений и ошибок API',
-    descLanguage: 'Навсегда изменить язык бота',
-    descHelp: 'Показывает все команды и функции',
-
-    descApiKey: 'このサーバーのGoogle Gemini APIキーを設定',
-    descPrompt: 'フォームでAIの指示を設定（ルール・厳しさ・措置）',
-    descLogChannel: 'モデレーション通知のログチャンネルを設定',
-    descLanguage: 'ボットの言語を永久に変更',
-    descHelp: 'すべてのコマンドと機能を表示',
-
-    descApiKey: '이 서버의 Google Gemini API 키 설정',
-    descPrompt: '양식으로 AI 지시사항 설정 (규칙·엄격함·조치)',
-    descLogChannel: '검열 알림의 로그 채널 설정',
-    descLanguage: '봇 언어를 영구적으로 변경',
-    descHelp: '모든 명령어와 기능 표시',
-
-    descApiKey: '设置此服务器的 Google Gemini API 密钥',
-    descPrompt: '通过表单设置 AI 指令（规则、严格度、措施）',
-    descLogChannel: '设置审核通知的日志频道',
-    descLanguage: '永久更改机器人语言',
-    descHelp: '显示所有命令与功能',
-
-    descApiKey: 'Imposta la chiave API Google Gemini per questo server',
-    descPrompt: 'Imposta le istruzioni IA (regole, severità, misure)',
-    descLogChannel: 'Imposta il canale di log per avvisi ed errori API',
-    descLanguage: 'Cambia permanentemente la lingua del bot',
-    descHelp: 'Mostra tutti i comandi e le funzioni',
-
     helpTitle: '🛡️ Security Bot – KI-Moderation mit Gemini',
     helpDesc: 'Dieser Bot sammelt **Textnachrichten echter Nutzer** (Admins sind immun), bis das Token-Limit für eine Gemini-Analyse voll ist – zusätzlich wird der Verlauf **jede Nacht um 0 Uhr** ausgewertet. Gemini erhält den System-Prompt, eure Server-Regeln und den sauber formatierten Chat-Verlauf und entscheidet über Warnungen & Timeouts. Bei API-Fehlern geht **nichts verloren**: Es wird so lange wiederholt, bis es klappt.',
     helpApiKey: 'Hinterlegt den Google Gemini API-Key für diesen Server. Muss vor der Überwachung einmal gesetzt werden.',
@@ -205,19 +151,32 @@ const STRINGS = {
 
 === REGELN ===
 - Keine Beleidigungen, Hass, Diskriminierung oder extreme Toxizität
-- Kein Spam, keine Werbe-Nachrichten, keine provokante Provokation anderer
-- Respektvoller Umgang miteinander – auch bei Meinungsverschiedenheiten
+- Keine sexistischen, rassistischen, homophoben oder transphoben Aussagen
+- Kein Spam, keine Werbung, kein Account-/Nitro-Handel, keine verdächtigen Links
+- Respektvoller Umgang – auch bei Meinungsverschiedenheiten
 - Keine gefährlichen oder illegalen Inhalte
 
-=== STRENGE ===
-- Kleinigkeiten und normalen Spaß NICHT bestrafen – der Chat soll lebendig bleiben
-- Erst bei echten, klaren Verstößen eingreifen
-- Wiederholte oder schwere Verstöße härter behandeln
+=== STRENGE (weder zu lasch noch zu streng) ===
+- Freundschaftliche Frotzeleien, Sarkasmus unter Freunden und Selbstironie NIEMALS bestrafen
+- Nur über andere zu sprechen (z. B. Streamer oder Gegner) ist KEIN Verstoß
+- Eine frühere Strafe allein ist KEIN Grund für eine neue Strafe
+- Erst bei echten, klaren, eindeutigen Verstößen eingreifen
+- Im Zweifel: lieber eine Warnung als ein Timeout
+
+=== ESKALATION (Warnungen zuerst) ===
+- Erster Verstoß: immer Warnung (warn), kein Timeout
+- Timeout erst nach wiederholten Warnungen (Strafenregister) oder bei schweren Verstößen
+- Pro Person höchstens EIN Timeout pro Analyse – weitere Verstöße derselben Person als warn
+- Der schwerwiegendste Verstoß ist primary=true und bekommt die längste (oder gleichlängste) Dauer
 
 === MASSNAHMEN ===
-- Leichte Verstöße: Warnung mit freundlichem Hinweis
-- Schwere oder wiederholte Verstöße: Timeout passend zur Schwere (1m bis 1w)
-- Bei keinem Verstoß: moderieren lassen und höchstens kurz und locker im Chat antworten`,
+- Leichte Verstöße: warn mit freundlichem Hinweis
+- Klare Beleidigung oder Provokation: warn, bei Wiederholung timeout 5m–10m
+- Wiederholter Verstoß trotz Warnung: timeout 10m–1h
+- Diskriminierung, Hate Speech, Drohungen: timeout 1d–1w
+- Gefährliche Inhalte, Phishing-/Betrugs-Links: timeout 1w
+- Spam/Werbung: erstes Mal warn, Wiederholung timeout 1h
+- Kein Verstoß: niemanden moderieren, höchstens kurz und locker im Chat antworten`,
   },
 
   en: {
@@ -239,6 +198,12 @@ const STRINGS = {
     logChannelRemoved: '🗑️ **Log channel removed.** No more notices will be sent.',
 
     langChanged: '✅ Language changed: {name}',
+
+    descApiKey: 'Set the Google Gemini API key for this server',
+    descPrompt: 'Set AI instructions via form (rules, strictness, measures)',
+    descLogChannel: 'Set the log channel for moderation notices & API errors',
+    descLanguage: 'Change the bot language permanently',
+    descHelp: 'Shows all commands and features',
 
     helpTitle: '🛡️ Security Bot – AI Moderation with Gemini',
     helpDesc: 'This bot collects **text messages from real users** (admins are immune) until the token limit for one Gemini analysis is full – in addition, the history is analyzed **every night at midnight**. Gemini receives the system prompt, your server rules and a cleanly formatted chat history, then decides on warnings & timeouts. If the API fails, **nothing is lost**: retries continue until it succeeds.',
@@ -275,19 +240,32 @@ const STRINGS = {
 
 === RULES ===
 - No insults, hate, discrimination or extreme toxicity
-- No spam, no advertising, no deliberately provoking others
+- No sexist, racist, homophobic or transphobic statements
+- No spam, no advertising, no account/Nitro trading, no suspicious links
 - Treat each other with respect – even when disagreeing
 - No dangerous or illegal content
 
-=== STRICTNESS ===
-- Do NOT punish trivia and normal banter – the chat should stay alive
-- Only step in on real, clear violations
-- Treat repeated or severe violations more harshly
+=== STRICTNESS (neither too lenient nor too strict) ===
+- NEVER punish friendly banter, sarcasm among friends or self-deprecating jokes
+- Merely talking ABOUT others (e.g. streamers or opponents) is NOT a violation
+- A previous penalty alone is NOT a reason for a new penalty
+- Only step in on real, clear, unambiguous violations
+- When in doubt: prefer a warning over a timeout
+
+=== ESCALATION (warnings first) ===
+- First violation: always a warning (warn), no timeout
+- Timeout only after repeated warnings (penalty register) or for severe violations
+- At most ONE timeout per person per analysis – further violations of the same person as warn
+- The most severe violation is primary=true and gets the longest (or equal) duration
 
 === MEASURES ===
-- Minor violations: warning with a friendly hint
-- Severe or repeated violations: timeout matching the severity (1m to 1w)
-- When nobody violates anything: leave everyone alone and at most reply casually in the chat`,
+- Minor violations: warn with a friendly hint
+- Clear insult or provocation: warn, on repetition timeout 5m–10m
+- Repeated violation despite warning: timeout 10m–1h
+- Discrimination, hate speech, threats: timeout 1d–1w
+- Dangerous content, phishing/scam links: timeout 1w
+- Spam/advertising: first time warn, repetition timeout 1h
+- No violation: don't moderate anyone, at most reply briefly and casually in chat`,
   },
 
   fr: {
@@ -305,6 +283,13 @@ const STRINGS = {
     logChannelSet: '✅ **Salon de journal défini :** {channel}\nLe bot y publiera les avis de modération, les erreurs API et autres rapports.',
     logChannelRemoved: '🗑️ **Salon de journal supprimé.** Plus aucun avis ne sera envoyé.',
     langChanged: '✅ Langue modifiée : {name}',
+
+    descApiKey: 'Définir la clé API Google Gemini pour ce serveur',
+    descPrompt: 'Définir les instructions IA (règles, sévérité, mesures)',
+    descLogChannel: 'Définir le salon de journal (avis de modération, erreurs API)',
+    descLanguage: 'Changer définitivement la langue du bot',
+    descHelp: 'Affiche toutes les commandes et fonctions',
+
     helpTitle: '🛡️ Security Bot – Modération IA avec Gemini',
     helpDesc: 'Ce bot collecte les **messages texte des vrais utilisateurs** (les admins sont immunisés) jusqu’à la limite de tokens pour une analyse Gemini – en plus, l’historique est analysé **chaque nuit à minuit**. Gemini reçoit le prompt système, vos règles et un historique bien formaté, puis décide des avertissements et timeouts. En cas d’erreur API, **rien n’est perdu** : les tentatives continuent jusqu’au succès.',
     helpApiKey: 'Enregistre la clé API Google Gemini pour ce serveur. À définir une fois avant de démarrer la surveillance.',
@@ -332,23 +317,36 @@ const STRINGS = {
     logDropDesc: '{count} messages n’ont pas pu être analysés pendant plus de 30 jours (échec API persistant) et ont été supprimés par hygiène des données.',
     joinTitle: '👋 Security Bot est arrivé !',
     joinDesc: 'Merci pour l’invitation ! Pour commencer :\n\n1️⃣ `/set_gemini_api_key` – ajoutez une clé Google Gemini ([création gratuite](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – définissez les règles et la strictesse de l’IA (texte par défaut prérempli)\n3️⃣ `/set_log_channel` – choisissez un salon de journal\n\nEnsuite, l’IA surveille automatiquement tous les messages texte. **Toutes les commandes sont réservées aux administrateurs.**',
-    defaultPrompt: `Modulez ce serveur comme une équipe d’OP juste, aimable mais ferme.
+    defaultPrompt: `Modère ce serveur comme une équipe d’OP juste, aimable mais ferme.
 
 === RÈGLES ===
 - Pas d’insultes, de haine, de discrimination ni de toxicité extrême
-- Pas de spam, pas de publicité, pas de provocation délibérée
+- Pas de propos sexistes, racistes, homophobes ou transphobes
+- Pas de spam, de publicité, de revente de comptes/Nitro, pas de liens suspects
 - Respect mutuel, même en cas de désaccord
 - Aucun contenu dangereux ou illégal
 
-=== STRICTESSE ===
-- Ne punissez PAS les broutilles et l’humour normal – le chat doit rester vivant
-- N’intervenez qu’en cas de vraies violations claires
-- Traitez plus durement les violations répétées ou graves
+=== SÉVÉRITÉ (ni trop laxiste ni trop stricte) ===
+- Ne JAMAIS punir les taquineries amicales, le sarcasme entre amis ou l’autodérision
+- Parler D’autres (p. ex. streamers ou adversaires) n’est PAS une infraction
+- Une sanction passée ne justifie PAS à elle seule une nouvelle sanction
+- N’intervenir qu’en cas de violations réelles, claires et sans ambiguïté
+- En cas de doute : préférer un avertissement à un timeout
+
+=== ESCALADE (avertissements d’abord) ===
+- Première infraction : toujours un avertissement (warn), pas de timeout
+- Timeout seulement après avertissements répétés (registre) ou pour violations graves
+- Au plus UN timeout par personne et par analyse – les autres infractions de la même personne en warn
+- L’infraction la plus grave est primary=true et reçoit la durée la plus longue (ou égale)
 
 === MESURES ===
-- Violations légères : avertissement avec un conseil amical
-- Violations graves ou répétées : timeout adapté (1m à 1w)
-- Si personne ne fait rien de mal : laissez tranquille et répondez au maximum brièvement dans le chat`,
+- Infractions légères : warn avec un conseil amical
+- Insulte ou provocation claire : warn, en cas de répétition timeout 5m–10m
+- Infraction répétée malgré avertissement : timeout 10m–1h
+- Discrimination, discours de haine, menaces : timeout 1d–1w
+- Contenus dangereux, liens de phishing/arnaque : timeout 1w
+- Spam/publicité : première fois warn, répétition timeout 1h
+- Aucune infraction : ne modérer personne, au maximum répondre brièvement dans le chat`,
   },
 
   es: {
@@ -366,6 +364,13 @@ const STRINGS = {
     logChannelSet: '✅ **Canal de registro establecido:** {channel}\nEl bot publicará allí avisos de moderación, errores de API y otros informes.',
     logChannelRemoved: '🗑️ **Canal de registro eliminado.** Ya no se enviarán avisos.',
     langChanged: '✅ Idioma cambiado: {name}',
+
+    descApiKey: 'Configura la clave API de Google Gemini para este servidor',
+    descPrompt: 'Define las instrucciones de IA (reglas, rigor, medidas)',
+    descLogChannel: 'Configura el canal de registro para avisos y errores de API',
+    descLanguage: 'Cambia el idioma del bot de forma permanente',
+    descHelp: 'Muestra todos los comandos y funciones',
+
     helpTitle: '🛡️ Security Bot – Moderación IA con Gemini',
     helpDesc: 'Este bot recopila **mensajes de texto de usuarios reales** (los admins son inmunes) hasta llenar el límite de tokens para un análisis de Gemini; además, el historial se analiza **cada noche a medianoche**. Gemini recibe el prompt del sistema, las reglas del servidor y un historial bien formateado, y decide advertencias y timeouts. Si la API falla, **no se pierde nada**: se reintenta hasta lograrlo.',
     helpApiKey: 'Guarda la clave API de Google Gemini para este servidor. Debe configurarse una vez antes de empezar la vigilancia.',
@@ -397,19 +402,32 @@ const STRINGS = {
 
 === REGLAS ===
 - Sin insultos, odio, discriminación ni toxicidad extrema
-- Sin spam, sin publicidad, sin provocar a otros a propósito
+- Sin comentarios sexistas, racistas, homófobos ni tránsfobos
+- Sin spam, publicidad, venta de cuentas/Nitro ni enlaces sospechosos
 - Respeto mutuo, incluso en desacuerdos
 - Nada de contenido peligroso o ilegal
 
-=== RIGOR ===
-- NO castigues minucias ni bromas normales – el chat debe mantenerse vivo
-- Intervén solo ante infracciones reales y claras
-- Trata con más dureza las infracciones repetidas o graves
+=== RIGOR (ni laxo ni estricto en exceso) ===
+- NUNCA castigar bromas amistosas, sarcasmo entre amigos ni autocrítica
+- Hablar SOBRE otros (p. ej. streamers o rivales) NO es una infracción
+- Una sanción previa por sí sola NO justifica una nueva sanción
+- Intervenir solo ante infracciones reales, claras e inequívocas
+- En caso de duda: preferir una advertencia a un timeout
+
+=== ESCALADA (advertencias primero) ===
+- Primera infracción: siempre una advertencia (warn), sin timeout
+- Timeout solo tras advertencias repetidas (registro) o en infracciones graves
+- Como máximo UN timeout por persona y análisis – el resto de infracciones de esa persona como warn
+- La infracción más grave es primary=true y recibe la duración más larga (o igual)
 
 === MEDIDAS ===
-- Infracciones leves: advertencia con un consejo amistoso
-- Infracciones graves o repetidas: timeout acorde (1m a 1w)
-- Si nadie hace nada malo: no moderar y como mucho responder tranquilo en el chat`,
+- Infracciones leves: warn con un consejo amable
+- Insulto o provocación clara: warn, en repetición timeout 5m–10m
+- Infracción repetida pese a la advertencia: timeout 10m–1h
+- Discriminación, discurso de odio, amenazas: timeout 1d–1w
+- Contenido peligroso, enlaces de phishing/estafa: timeout 1w
+- Spam/publicidad: primera vez warn, repetición timeout 1h
+- Sin infracción: no moderar a nadie, como mucho responder brevemente en el chat`,
   },
 
   pt: {
@@ -427,6 +445,13 @@ const STRINGS = {
     logChannelSet: '✅ **Canal de registro definido:** {channel}\nO bot publicará lá avisos de moderação, erros de API e outros relatórios.',
     logChannelRemoved: '🗑️ **Canal de registro removido.** Nenhum aviso será mais enviado.',
     langChanged: '✅ Idioma alterado: {name}',
+
+    descApiKey: 'Define a chave de API do Google Gemini para este servidor',
+    descPrompt: 'Define as instruções da IA (regras, rigor, medidas)',
+    descLogChannel: 'Define o canal de registro para avisos e erros de API',
+    descLanguage: 'Muda o idioma do bot permanentemente',
+    descHelp: 'Mostra todos os comandos e funções',
+
     helpTitle: '🛡️ Security Bot – Moderação por IA com Gemini',
     helpDesc: 'Este bot coleta **mensagens de texto de usuários reais** (admins são imunes) até encher o limite de tokens para uma análise do Gemini – além disso, o histórico é analisado **todas as noites à meia-noite**. O Gemini recebe o prompt do sistema, as regras do servidor e um histórico bem formatado e decide avisos e timeouts. Se a API falhar, **nada se perde**: as tentativas continuam até dar certo.',
     helpApiKey: 'Salva a chave de API do Google Gemini para este servidor. Precisa ser definida uma vez antes do monitoramento começar.',
@@ -458,19 +483,32 @@ const STRINGS = {
 
 === REGRAS ===
 - Sem insultos, ódio, discriminação ou toxicidade extrema
-- Sem spam, sem publicidade, sem provocar os outros de propósito
-- Respeito mútuo, mesmo em discordâncias
+- Sem declarações sexistas, racistas, homofóbicas ou transfóbicas
+- Sem spam, publicidade, venda de contas/Nitro ou links suspeitos
+- Respeito mútuo, mesmo em divergências
 - Nada de conteúdo perigoso ou ilegal
 
-=== RIGOR ===
-- NÃO puna bobagens e brincadeiras normais – o chat deve continuar vivo
-- Só interfira em violações reais e claras
-- Trate violações repetidas ou graves com mais rigor
+=== RIGOR (nem frouxo nem rígido demais) ===
+- NUNCA punir brincadeiras amigáveis, sarcasmo entre amigos ou autodepreciação
+- Falar SOBRE outros (ex.: streamers ou adversários) NÃO é infração
+- Uma punição anterior por si só NÃO justifica uma nova punição
+- Intervir apenas em infrações reais, claras e inequívocas
+- Na dúvida: prefira um aviso a um timeout
+
+=== ESCALADA (avisos primeiro) ===
+- Primeira infração: sempre um aviso (warn), sem timeout
+- Timeout só após avisos repetidos (registro) ou em infrações graves
+- No máximo UM timeout por pessoa por análise – demais infrações da mesma pessoa como warn
+- A infração mais grave é primary=true e recebe a maior duração (ou igual)
 
 === MEDIDAS ===
-- Violações leves: aviso com uma dica amigável
-- Violações graves ou repetidas: timeout de acordo com a gravidade (1m a 1w)
-- Se ninguém fizer nada de errado: não modere e, no máximo, responda de boa no chat`,
+- Infrações leves: warn com uma dica amigável
+- Insulto ou provocação clara: warn, em repetição timeout 5m–10m
+- Infração repetida apesar do aviso: timeout 10m–1h
+- Discriminação, discurso de ódio, ameaças: timeout 1d–1w
+- Conteúdo perigoso, links de phishing/golpe: timeout 1w
+- Spam/publicidade: primeira vez warn, repetição timeout 1h
+- Sem infração: não moderar ninguém, no máximo responder de boa no chat`,
   },
 
   ru: {
@@ -488,6 +526,13 @@ const STRINGS = {
     logChannelSet: '✅ **Канал журнала установлен:** {channel}\nТам бот будет публиковать уведомления о модерации, ошибки API и другие отчёты.',
     logChannelRemoved: '🗑️ **Канал журнала удалён.** Уведомления больше не отправляются.',
     langChanged: '✅ Язык изменён: {name}',
+
+    descApiKey: 'Задать API-ключ Google Gemini для этого сервера',
+    descPrompt: 'Задать инструкции для ИИ (правила, строгость, меры)',
+    descLogChannel: 'Задать канал журнала для уведомлений и ошибок API',
+    descLanguage: 'Навсегда изменить язык бота',
+    descHelp: 'Показывает все команды и функции',
+
     helpTitle: '🛡️ Security Bot – ИИ-модерация с Gemini',
     helpDesc: 'Бот собирает **текстовые сообщения реальных пользователей** (админы неприкосновенны), пока не заполнится лимит токенов для анализа Gemini – кроме того, история анализируется **каждую ночь в полночь**. Gemini получает системный промпт, правила сервера и аккуратно оформленную историю чата, после чего решает, кого предупредить или выдать тайм-аут. При сбое API **ничего не теряется**: попытки повторяются до успеха.',
     helpApiKey: 'Сохраняет API-ключ Google Gemini для этого сервера. Должен быть задан один раз перед началом наблюдения.',
@@ -519,19 +564,32 @@ const STRINGS = {
 
 === ПРАВИЛА ===
 - Никаких оскорблений, ненависти, дискриминации или крайней токсичности
-- Никакого спама, рекламы и намеренных провокаций
+- Никаких сексистских, расистских, гомофобных или трансфобных высказываний
+- Никакого спама, рекламы, продажи аккаунтов/Nitro и подозрительных ссылок
 - Взаимное уважение – даже в спорах
 - Никакого опасного или незаконного контента
 
-=== СТРОГОСТЬ ===
-- Мелочи и обычные шутки НЕ наказывать – чат должен оставаться живым
-- Вмешивайся только при настоящих явных нарушениях
-- Повторные или серьёзные нарушения наказывай строже
+=== СТРОГОСТЬ (не слишком мягко и не слишком строго) ===
+- НИКОГДА не наказывай дружеские подколы, сарказм между друзьями и самоиронию
+- Говорить О других (например, о стримерах или соперниках) – НЕ нарушение
+- Прежнее наказание само по себе НЕ повод для нового наказания
+- Вмешивайся только при настоящих, ясных, однозначных нарушениях
+- Сомневаешься – лучше предупреждение, чем тайм-аут
+
+=== ЭСКАЛАЦИЯ (сначала предупреждения) ===
+- Первое нарушение: всегда предупреждение (warn), без тайм-аута
+- Тайм-аут только после повторных предупреждений (реестр) или при тяжёлых нарушениях
+- Не более ОДНОГО тайм-аута на человека за анализ – остальные нарушения того же человека как warn
+- Самое тяжёлое нарушение – primary=true и получает самую длинную (или равную) длительность
 
 === МЕРЫ ===
-- Лёгкие нарушения: предупреждение с дружелюбным советом
-- Серьёзные или повторные нарушения: тайм-аут по тяжести (от 1m до 1w)
-- Если никто ничего не нарушил: не модерировать и максимум коротко ответить в чате`,
+- Лёгкие нарушения: warn с дружелюбным советом
+- Явное оскорбление или провокация: warn, при повторе timeout 5m–10m
+- Повторное нарушение несмотря на предупреждение: timeout 10m–1h
+- Дискриминация, язык вражды, угрозы: timeout 1d–1w
+- Опасный контент, фишинг/мошеннические ссылки: timeout 1w
+- Спам/реклама: первый раз warn, повтор timeout 1h
+- Нет нарушений: никого не наказывать, максимум коротко ответить в чате`,
   },
 
   ja: {
@@ -549,6 +607,13 @@ const STRINGS = {
     logChannelSet: '✅ **ログチャンネルを設定しました：** {channel}\nモデレーションのお知らせやAPIエラーなどはここに送られます。',
     logChannelRemoved: '🗑️ **ログチャンネルを削除しました。** お知らせは送信されなくなります。',
     langChanged: '✅ 言語を変更しました：{name}',
+
+    descApiKey: 'このサーバーのGoogle Gemini APIキーを設定',
+    descPrompt: 'フォームでAIの指示を設定（ルール・厳しさ・措置）',
+    descLogChannel: 'モデレーション通知のログチャンネルを設定',
+    descLanguage: 'ボットの言語を永久に変更',
+    descHelp: 'すべてのコマンドと機能を表示',
+
     helpTitle: '🛡️ Security Bot – GeminiによるAIモデレーション',
     helpDesc: 'このボットは、Geminiで分析するためのトークン上限に達するまで**実際のユーザーのテキストメッセージ**を収集します（管理者は対象外）。さらに、履歴は**毎日午前0時**にも分析されます。Geminiはシステムプロンプト・サーバーのルール・整形されたチャット履歴を受け取り、警告やタイムアウトを決定します。APIエラー時も**何も失われません**：成功するまで再試行を続けます。',
     helpApiKey: 'このサーバーのGoogle Gemini APIキーを保存します。監視開始前に一度設定してください。',
@@ -580,19 +645,32 @@ const STRINGS = {
 
 === ルール ===
 - 侮辱、ヘイト、差別、極端な毒性は禁止
-- スパム、宣伝、故意の挑発は禁止
+- 性差別的・人種差別的・同性愛嫌悪的・トランス嫌悪的な発言は禁止
+- スパム、宣伝、アカウント/Nitroの売買、不審なリンクは禁止
 - 意見が違っても互いに尊重する
 - 危険または違法なコンテンツは禁止
 
-=== 厳しさ ===
-- 些細なことや普通の冗談は罰しない – チャットは活気を保つ
-- 明確な実際の違反にのみ介入する
-- 繰り返しや重大な違反はより厳しく対応する
+=== 厳しさ（甘すぎず厳しすぎず） ===
+- 友人間の冗談、皮肉、自虐ネタは決して罰しない
+- 他人について語るだけ（例：配信者や対戦相手）は違反ではない
+- 過去の処罰だけでは新しい処罰の理由にならない
+- 明確で疑いのない実際の違反にのみ介入する
+- 迷ったらタイムアウトより警告を選ぶ
+
+=== エスカレーション（まず警告） ===
+- 初回の違反：必ず警告（warn）、タイムアウトなし
+- タイムアウトは繰り返しの警告後（記録）または重大な違反のみ
+- 1人につき1分析で最大1回のタイムアウト。同じ人の他の違反はwarn
+- 最も重大な違反をprimary=trueとし、最長（または同等）の時間を与える
 
 === 措置 ===
-- 軽微な違反：親しみやすい注意で警告
-- 重大または繰り返しの違反：重さに応じたタイムアウト（1m〜1w）
-- 誰も違反していない場合：モデレートせず、せいぜいチャットで気軽に短く返信`,
+- 軽微な違反：親しみやすい注意つきのwarn
+- 明確な侮辱や挑発：warn、繰り返しならtimeout 5m〜10m
+- 警告にもかかわらず繰り返す違反：timeout 10m〜1h
+- 差別、ヘイトスピーチ、脅迫：timeout 1d〜1w
+- 危険なコンテンツ、フィッシング/詐欺リンク：timeout 1w
+- スパム/宣伝：初回はwarn、繰り返しならtimeout 1h
+- 違反なし：誰も罰せず、せいぜいチャットで軽く短く返信`,
   },
 
   ko: {
@@ -610,6 +688,13 @@ const STRINGS = {
     logChannelSet: '✅ **로그 채널이 설정되었습니다:** {channel}\n검열 알림, API 오류 등이 이곳에 전송됩니다.',
     logChannelRemoved: '🗑️ **로그 채널이 제거되었습니다.** 더 이상 알림을 보내지 않습니다.',
     langChanged: '✅ 언어가 변경되었습니다: {name}',
+
+    descApiKey: '이 서버의 Google Gemini API 키 설정',
+    descPrompt: '양식으로 AI 지시사항 설정 (규칙·엄격함·조치)',
+    descLogChannel: '검열 알림의 로그 채널 설정',
+    descLanguage: '봇 언어를 영구적으로 변경',
+    descHelp: '모든 명령어와 기능 표시',
+
     helpTitle: '🛡️ Security Bot – Gemini AI 검열',
     helpDesc: '이 봇은 Gemini 분석 토큰 한도가 채워질 때까지 **실제 사용자의 텍스트 메시지**를 수집합니다(관리자는 면역). 또한 매일 자정에 기록을 분석합니다. Gemini는 시스템 프롬프트, 서버 규칙, 정리된 채팅 기록을 받아 경고와 타임아웃을 결정합니다. API 오류가 발생해도 **아무것도 사라지지 않습니다**: 성공할 때까지 재시도합니다.',
     helpApiKey: '이 서버의 Google Gemini API 키를 저장합니다. 모니터링 시작 전 한 번 설정해야 합니다.',
@@ -641,19 +726,32 @@ const STRINGS = {
 
 === 규칙 ===
 - 모욕, 혐오, 차별, 극단적 독성 금지
-- 스팸, 광고, 고의적 도발 금지
+- 성차별·인종차별·동성애 혐오·트랜스젠더 혐오 발언 금지
+- 스팸, 광고, 계정/Nitro 거래, 수상한 링크 금지
 - 의견이 달라도 서로 존중하기
 - 위험하거나 불법적인 콘텐츠 금지
 
-=== 엄격함 ===
-- 사소한 일이나 평범한 농담은 처벌하지 마세요 – 채팅은 활기차야 합니다
-- 실제 명백한 위반에만 개입하세요
-- 반복되거나 심각한 위반은 더 엄격하게 다루세요
+=== 엄격함 (너무 느슨하지도, 너무 엄하지도 않게) ===
+- 친구 사이의 장난, 농담, 자조적인 말은 절대 처벌하지 않기
+- 다른 사람에 대해 말하는 것(예: 스트리머나 상대)은 위반이 아님
+- 과거 처벌만으로는 새로운 처벌의 이유가 되지 않음
+- 실제로 명확하고 분명한 위반에만 개입하기
+- 애매하면 타임아웃보다 경고를 선택하기
+
+=== 에스컬레이션 (경고 우선) ===
+- 첫 위반: 항상 경고(warn), 타임아웃 없음
+- 타임아웃은 반복된 경고 후(기록) 또는 중대한 위반일 때만
+- 1인당 분석당 최대 1회 타임아웃. 같은 사람의 다른 위반은 warn
+- 가장 중대한 위반을 primary=true로 하고 가장 긴(또는 동일한) 시간을 부여
 
 === 조치 ===
-- 가벼운 위반: 친절한 안내와 함께 경고
-- 심각하거나 반복된 위반: 심각도에 맞는 타임아웃 (1m~1w)
-- 아무도 잘못하지 않았다면: 검열하지 말고 최대한 가볍게 채팅으로 답하세요`,
+- 가벼운 위반: 친절한 안내와 함께 warn
+- 명백한 모욕이나 도발: warn, 반복 시 timeout 5m~10m
+- 경고에도 반복된 위반: timeout 10m~1h
+- 차별, 혐오 발언, 위협: timeout 1d~1w
+- 위험한 콘텐츠, 피싱/사기 링크: timeout 1w
+- 스팸/광고: 처음엔 warn, 반복 시 timeout 1h
+- 위반 없음: 누구도 처벌하지 말고 최대한 가볍게 채팅으로 답하기`,
   },
 
   zh: {
@@ -671,6 +769,13 @@ const STRINGS = {
     logChannelSet: '✅ **日志频道已设置：** {channel}\n机器人将在此发布审核通知、API 错误等报告。',
     logChannelRemoved: '🗑️ **日志频道已移除。** 不再发送通知。',
     langChanged: '✅ 语言已更改：{name}',
+
+    descApiKey: '设置此服务器的 Google Gemini API 密钥',
+    descPrompt: '通过表单设置 AI 指令（规则、严格度、措施）',
+    descLogChannel: '设置审核通知的日志频道',
+    descLanguage: '永久更改机器人语言',
+    descHelp: '显示所有命令与功能',
+
     helpTitle: '🛡️ Security Bot – Gemini AI 审核',
     helpDesc: '此机器人收集**真实用户的文本消息**（管理员免疫），直到达到一次 Gemini 分析的令牌上限——此外，**每晚 0 点**也会分析历史记录。Gemini 会收到系统提示词、服务器规则和格式良好的聊天记录，然后决定警告与禁言。API 出错时**不会丢失任何内容**：会不断重试直到成功。',
     helpApiKey: '保存此服务器的 Google Gemini API 密钥。开始监控前必须设置一次。',
@@ -702,19 +807,32 @@ const STRINGS = {
 
 === 规则 ===
 - 禁止侮辱、仇恨、歧视或极端恶毒言论
-- 禁止刷屏、广告和故意挑衅
+- 禁止性别歧视、种族歧视、恐同或跨性别歧视言论
+- 禁止刷屏、广告、账号/Nitro 交易和可疑链接
 - 即使意见不合也要互相尊重
 - 禁止危险或非法内容
 
-=== 严格程度 ===
-- 不要处罚小事和正常玩笑——聊天应保持活跃
-- 只在真正明显的违规时介入
-- 对重复或严重违规更严厉处理
+=== 严格程度（既不过松也不过严） ===
+- 绝不处罚朋友间的玩笑、讽刺和自嘲
+- 只是谈论他人（例如主播或对手）并不违规
+- 过往处罚本身不构成新的处罚理由
+- 只在真实、明确、无歧义的违规时介入
+- 有疑问时：宁选警告，不选禁言
+
+=== 升级规则（警告优先） ===
+- 首次违规：一律警告（warn），不禁言
+- 只有在多次警告之后（记录）或严重违规时才禁言
+- 每人每次分析最多一次禁言；同一人的其他违规改为 warn
+- 最严重的违规标记为 primary=true，并给予最长（或相同）的时长
 
 === 措施 ===
-- 轻微违规：友好提示的警告
-- 严重或重复违规：按严重程度禁言（1m 到 1w）
-- 没有人违规时：不要审核，最多在聊天中轻松地简短回复`,
+- 轻微违规：友好提示的 warn
+- 明确的侮辱或挑衅：warn，重复时 timeout 5m–10m
+- 警告后仍重复违规：timeout 10m–1h
+- 歧视、仇恨言论、威胁：timeout 1d–1w
+- 危险内容、钓鱼/诈骗链接：timeout 1w
+- 刷屏/广告：首次 warn，重复时 timeout 1h
+- 没有违规：不处罚任何人，最多在聊天中轻松地简短回复`,
   },
 
   it: {
@@ -732,6 +850,13 @@ const STRINGS = {
     logChannelSet: '✅ **Canale di log impostato:** {channel}\nIl bot pubblicherà lì avvisi di moderazione, errori API e altri rapporti.',
     logChannelRemoved: '🗑️ **Canale di log rimosso.** Non verranno più inviati avvisi.',
     langChanged: '✅ Lingua cambiata: {name}',
+
+    descApiKey: 'Imposta la chiave API Google Gemini per questo server',
+    descPrompt: 'Imposta le istruzioni IA (regole, severità, misure)',
+    descLogChannel: 'Imposta il canale di log per avvisi ed errori API',
+    descLanguage: 'Cambia permanentemente la lingua del bot',
+    descHelp: 'Mostra tutti i comandi e le funzioni',
+
     helpTitle: '🛡️ Security Bot – Moderazione IA con Gemini',
     helpDesc: 'Questo bot raccoglie i **messaggi di testo degli utenti reali** (gli admin sono immuni) fino al limite di token per un’analisi Gemini – in aggiunta, la cronologia viene analizzata **ogni notte a mezzanotte**. Gemini riceve il prompt di sistema, le regole del server e una cronologia ben formattata, poi decide avvisi e timeout. Se l’API fallisce, **non si perde nulla**: i tentativi continuano finché non riesce.',
     helpApiKey: 'Salva la chiave API Google Gemini per questo server. Va impostata una volta prima di avviare il controllo.',
@@ -763,19 +888,32 @@ const STRINGS = {
 
 === REGOLE ===
 - Niente insulti, odio, discriminazione o tossicità estrema
-- Niente spam, pubblicità o provocazioni deliberate
+- Niente affermazioni sessiste, razziste, omofobe o transfobiche
+- Niente spam, pubblicità, vendita di account/Nitro o link sospetti
 - Rispetto reciproco, anche quando si è in disaccordo
 - Niente contenuti pericolosi o illegali
 
-=== SEVERITÀ ===
-- NON punire minuzie e battute normali – la chat deve restare viva
-- Intervenire solo su violazioni reali e chiare
-- Tratta con più severità le violazioni ripetute o gravi
+=== SEVERITÀ (né troppo morbida né troppo rigida) ===
+- NON punire mai prese in giro amichevoli, sarcasmo tra amici o autoironia
+- Parlare DI altri (es. streamer o avversari) NON è una violazione
+- Una sanzione passata da sola NON giustifica una nuova sanzione
+- Intervenire solo su violazioni reali, chiare e inequivocabili
+- Nel dubbio: preferire un avviso a un timeout
+
+=== ESCALATION (avvisi prima) ===
+- Prima violazione: sempre un avviso (warn), nessun timeout
+- Timeout solo dopo avvisi ripetuti (registro) o per violazioni gravi
+- Al massimo UN timeout per persona per analisi – le altre violazioni della stessa persona come warn
+- La violazione più grave è primary=true e riceve la durata più lunga (o uguale)
 
 === MISURE ===
-- Violazioni leggere: avviso con un consiglio amichevole
-- Violazioni gravi o ripetute: timeout proporzionato (da 1m a 1w)
-- Se nessuno sbaglia: non moderare e al massimo rispondi con leggerezza in chat`,
+- Violazioni lievi: warn con un consiglio amichevole
+- Insulto o provocazione chiara: warn, in caso di ripetizione timeout 5m–10m
+- Violazione ripetuta nonostante l’avviso: timeout 10m–1h
+- Discriminazione, incitamento all’odio, minacce: timeout 1d–1w
+- Contenuti pericolosi, link di phishing/truffa: timeout 1w
+- Spam/pubblicità: prima volta warn, ripetizione timeout 1h
+- Nessuna violazione: non moderare nessuno, al massimo rispondere con leggerezza in chat`,
   },
 };
 

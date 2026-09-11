@@ -286,10 +286,23 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
   const bySeq = new Map(
     messages.filter((m) => m.seq != null && !m.isAdmin).map((m) => [m.seq, m])
   );
-  // Primary zuerst: Die wichtigste Antwort soll als erstes im Chat landen.
+
+  // Sortierung: Primary zuerst, danach nach Timeout-Dauer absteigend. So
+  // antwortet der Bot auf den schwerwiegendsten Verstoß zuerst UND jede Person
+  // erhält ihren längsten Timeout als Ersten (kürzere werden herabgestuft).
+  const durationRank = (m) =>
+    m.action === 'timeout' ? DURATION_SECONDS[m.duration] || 0 : 0;
   const list = [...parsed.moderations]
-    .sort((a, b) => (b.primary === true) - (a.primary === true))
+    .sort(
+      (a, b) =>
+        (b.primary === true) - (a.primary === true) || durationRank(b) - durationRank(a)
+    )
     .slice(0, MAX_MODERATIONS_PER_BATCH);
+
+  // Harte Garantie: höchstens EIN Timeout pro Person pro Analyse. Alle weiteren
+  // Timeout-Wünsche derselben Person werden automatisch zu Warnungen degradiert
+  // – unabhängig davon, was Gemini liefert.
+  const timeoutedUsers = new Set();
 
   for (const mod of list) {
     try {
@@ -309,6 +322,19 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
           smallContainer(null, t('logImmune', lang, { user: `<@${authorId}>` }))
         );
         continue;
+      }
+
+      // Max. 1 Timeout pro Person: weitere Timeouts derselben Person → warn.
+      if (mod.action === 'timeout') {
+        if (timeoutedUsers.has(authorId)) {
+          mod.action = 'warn';
+          mod.duration = null;
+          ctx.logger?.info?.(
+            `[security-bot] Zweiter Timeout für ${authorId} (Gilde ${guildId}) auf Warnung herabgestuft – max. 1 Timeout pro Person.`
+          );
+        } else {
+          timeoutedUsers.add(authorId);
+        }
       }
 
       // 1) Timeout anwenden (falls Gemini sich dafür entschied und es möglich ist)

@@ -548,7 +548,10 @@ test('Security Bot: Gemini-Request (Struktur, Header, günstigstes Modell)', asy
 
   assert.equal(res.ok, true);
   assert.equal(res.model, DEFAULT_GEMINI_MODEL);
-  assert.match(calls[0].url, /models\/gemini-2\.5-flash-lite:generateContent/);
+  assert.ok(
+    calls[0].url.includes(`/models/${DEFAULT_GEMINI_MODEL}:generateContent`),
+    'URL nutzt das Standard-Modell'
+  );
   assert.equal(calls[0].options.headers['x-goog-api-key'], 'AIza-test');
   assert.equal(calls[0].body.systemInstruction.parts[0].text, 'SYSTEM');
   assert.equal(calls[0].body.contents[0].role, 'user');
@@ -755,6 +758,55 @@ test('Security Bot: Pipeline wendet Timeout & Warnung an und antwortet auf den H
     for (const payload of w.logChannel.sent) {
       assert.equal(payload.flags & MessageFlags.IsComponentsV2, MessageFlags.IsComponentsV2);
     }
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: maximal 1 Timeout pro Person – weitere Timeouts werden zu Warnungen', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-pipeline-key-123456');
+  store.setLogChannelId('g1', 'clog');
+
+  // Zwei Verstöße DERSELBEN Person (Max) – Gemini will beide als Timeout.
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'Beleidigung A', discordMessageId: 'm1', sentAt: Date.now() - 2000 });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'Beleidigung B', discordMessageId: 'm2', sentAt: Date.now() - 1000 });
+  store.buildBatchFromBuffer('g1');
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    geminiJsonResponse({
+      moderations: [
+        { message_id: 1, action: 'timeout', duration: '1h', primary: true, reason: 'Schwerer Verstoß', personal_message: '{USER}, 1 Stunde Pause.' },
+        { message_id: 2, action: 'timeout', duration: '5m', primary: false, reason: 'Zweiter Verstoß', personal_message: '{USER}, nochmal aufgefallen.' },
+      ],
+      chat_reply: '',
+    });
+  try {
+    assert.equal(await processGuild(ctx, 'g1'), true);
+
+    const max = w.membersCache.get('111111111111111111');
+    assert.equal(max.timeouts.length, 1, 'nur EIN Timeout trotz zwei Timeout-Wünschen');
+    assert.equal(max.timeouts[0].ms, 1 * 60 * 60 * 1000, 'der schwerwiegendste (primary) Timeout bleibt');
+
+    // Beide Nachrichten werden beantwortet (Timeout + herabgestufte Warnung)
+    assert.equal(w.replies.length, 2, 'Timeout und herabgestufte Warnung antworten');
+
+    // Strafenregister: 1 Timeout + 1 Warnung für dieselbe Person
+    const pens = [...store._penalties.values()].filter((p) => p.userId === '111111111111111111');
+    assert.equal(pens.length, 2, 'beide Verstöße im Register');
+    assert.deepEqual(pens.map((p) => p.action).sort(), ['timeout', 'warn']);
+    assert.ok(pens.some((p) => p.action === 'warn' && p.duration === null), 'zweiter Verstoß als Warnung ohne Dauer');
+
+    assert.equal(w.logChannel.sent.length, 2, 'beide Moderationen im Log-Kanal');
   } finally {
     globalThis.fetch = origFetch;
   }
