@@ -33,6 +33,77 @@ function fmtUtc(ms) {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 }
 
+function oneLine(value, max = 180) {
+  if (value == null) return '';
+  return String(value).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function quote(value, max = 180) {
+  const text = oneLine(value, max).replace(/"/g, '\\"');
+  return text ? `"${text}"` : 'unbekannt';
+}
+
+function identityMetaOf(obj) {
+  const meta = obj?.authorMeta || obj?.author || obj || {};
+  return {
+    displayName: oneLine(meta.displayName || obj?.authorName || obj?.name, 100),
+    serverNickname: oneLine(meta.serverNickname || meta.nickname || meta.nick, 100),
+    globalName: oneLine(meta.globalName || meta.global_name, 100),
+    username: oneLine(meta.username || meta.userName, 100),
+  };
+}
+
+function aliasLineForMessage(m) {
+  if (!m?.authorMeta) return null;
+  const meta = identityMetaOf(m);
+  const parts = [];
+  if (meta.displayName) parts.push(`server_display=${quote(meta.displayName, 100)}`);
+  if (meta.serverNickname) parts.push(`server_nick=${quote(meta.serverNickname, 100)}`);
+  if (meta.globalName) parts.push(`global_name=${quote(meta.globalName, 100)}`);
+  if (meta.username) parts.push(`username=${quote(meta.username, 100)}`);
+  if (!parts.length) return null;
+  return `  ↳ Namen/Aliase: ${parts.join('; ')}`;
+}
+
+function aliasSuffixForParticipant(p) {
+  const meta = identityMetaOf(p);
+  const parts = [];
+  if (meta.displayName && meta.displayName !== p.authorName) parts.push(`server_display=${quote(meta.displayName, 100)}`);
+  if (meta.serverNickname && meta.serverNickname !== p.authorName) parts.push(`server_nick=${quote(meta.serverNickname, 100)}`);
+  if (meta.globalName && meta.globalName !== p.authorName) parts.push(`global_name=${quote(meta.globalName, 100)}`);
+  if (meta.username && meta.username !== p.authorName) parts.push(`username=${quote(meta.username, 100)}`);
+  return parts.length ? `; Aliase: ${parts.join('; ')}` : '';
+}
+
+function identityInline(meta, fallbackName = 'Unbekannt') {
+  const m = identityMetaOf({ authorMeta: meta, authorName: fallbackName });
+  const id = oneLine(meta?.id || meta?.authorId || '', 40);
+  const base = m.displayName || m.serverNickname || m.globalName || m.username || fallbackName;
+  const extras = [];
+  if (id) extras.push(`user_id=${id}`);
+  if (m.serverNickname && m.serverNickname !== base) extras.push(`server_nick=${quote(m.serverNickname, 80)}`);
+  if (m.globalName && m.globalName !== base) extras.push(`global_name=${quote(m.globalName, 80)}`);
+  if (m.username && m.username !== base) extras.push(`username=${quote(m.username, 80)}`);
+  return `${base}${extras.length ? ` (${extras.join('; ')})` : ''}`;
+}
+
+function replyLineForMessage(m) {
+  const r = m?.replyMeta;
+  if (!r) return null;
+  const parts = [];
+  if (r.messageId) parts.push(`message_id=${oneLine(r.messageId, 40)}`);
+  if (r.channelId && r.channelId !== m.channelId) parts.push(`kanal_id=${oneLine(r.channelId, 40)}`);
+  if (r.author) parts.push(`autor=${identityInline(r.author, 'Unbekannt')}`);
+  if (r.content) parts.push(`text=${quote(r.content, 260)}`);
+  return `  ↳ Antwort auf: ${parts.join('; ') || 'unbekannte Referenz'}`;
+}
+
+function mentionsLineForMessage(m) {
+  const mentions = Array.isArray(m?.mentionsMeta) ? m.mentionsMeta : [];
+  if (!mentions.length) return null;
+  return `  ↳ Erwähnt/Zielpersonen: ${mentions.map((x) => identityInline(x, 'Unbekannt')).join('; ')}`;
+}
+
 /**
  * Strafenregister: Für jeden Teilnehmer des Verlaufs sichtbar machen, wie oft
  * er in den letzten 20 Tagen moderiert wurde. Gemini soll Eskalationen dann
@@ -41,17 +112,20 @@ function fmtUtc(ms) {
 function buildPenaltyRegister({ participants, penaltyByUser, now = Date.now() }) {
   const lines = [];
   for (const p of participants) {
+    const name = oneLine(p.authorName, 100) || 'Unbekannt';
+    const userId = oneLine(p.authorId, 40) || 'unbekannt';
     if (p.isAdmin) {
-      lines.push(`- ${p.authorName} (user_id=${p.authorId}): IMMUN (Administrator) – nur Kontext, NIEMALS moderieren`);
+      lines.push(`- ${name} (user_id=${userId}): IMMUN (Administrator) – nur Kontext, NIEMALS moderieren${aliasSuffixForParticipant(p)}`);
       continue;
     }
     const entry = penaltyByUser.get(p.authorId);
     if (!entry || entry.count === 0) {
-      lines.push(`- ${p.authorName} (user_id=${p.authorId}): sauber – keine Moderationen in den letzten 20 Tagen`);
+      lines.push(`- ${name} (user_id=${userId}): sauber – keine Moderationen in den letzten 20 Tagen${aliasSuffixForParticipant(p)}`);
     } else {
       lines.push(
-        `- ${p.authorName} (user_id=${p.authorId}): ${entry.count} Moderation(en) in den letzten 20 Tagen` +
-          (entry.lastAt ? `, zuletzt ${fmtUtc(entry.lastAt)}` : '')
+        `- ${name} (user_id=${userId}): ${entry.count} Moderation(en) in den letzten 20 Tagen` +
+          (entry.lastAt ? `, zuletzt ${fmtUtc(entry.lastAt)}` : '') +
+          aliasSuffixForParticipant(p)
       );
     }
   }
@@ -124,7 +198,14 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     'Der Verlauf ist nach Kanälen gruppiert und chronologisch sortiert. Jede moderierbare',
     'Nachricht hat eine eindeutige ID ab 1 und sieht so aus:',
     '  [ID] YYYY-MM-DD HH:MM UTC · Anzeigename (user_id=...):',
+    '  ↳ Namen/Aliase: server_display="..."; server_nick="..."; global_name="..."; username="..."',
+    '  ↳ Antwort auf: message_id=...; autor=...; text="..."',
+    '  ↳ Erwähnt/Zielpersonen: Anzeigename (user_id=...; server_nick="..."; global_name="..."; username="...")',
     '  | Nachrichtentext (mehrzeilig = mehrere | -Zeilen)',
+    'Die ↳-Zeilen sind Zusatzkontext, keine eigenen Nachrichten. Nutze sie, um Reply-Ketten,',
+    'Zielpersonen, echte Server-Nicknames, globale Anzeigenamen und Usernames zusammenzuführen.',
+    'Wenn jemand z.B. über einen Spitznamen, globalen Namen oder als Reply angesprochen wird,',
+    'gehört das zum selben realen Discord-Nutzer, sobald die user_id übereinstimmt.',
     'Nachrichten von Administratoren stehen OHNE ID im Verlauf und sind so markiert:',
     '  [ADMIN – immun] YYYY-MM-DD HH:MM UTC · Anzeigename (user_id=...):',
     'Sie dienen NUR dem Kontext (z.B. damit du verstehst, worauf jemand reagiert).',
@@ -140,11 +221,37 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     ...forcedBlock,
 
     '== DEINE ENTSCHEIDUNG ==',
-    'Bewerte fair und mit Kontext. In den meisten Chats macht NIEMAND etwas Schlimmes –',
-    'Witze unter Freunden, Sarkasmus, Selbstironie und Zitate sind KEINE Verstöße.',
-    'Auch wer ÜBER andere spricht (z. B. über Streamer oder Gegner) greift niemanden an.',
-    'Eine frühere Strafe im Register allein ist KEIN Grund für eine neue Strafe: Es zählt',
-    'nur das Verhalten in diesem Verlauf. Bestrafe nur echte, klare, eindeutige Verstöße.',
+    'Bewerte fair, aber NICHT isoliert Satz für Satz. Lies immer den gesamten Verlauf:',
+    'Was war vorher? Wer antwortet wem? Wer wird erwähnt? Wiederholen mehrere Personen',
+    'dieselbe Spitze gegen dieselbe Zielperson? Reagiert die Zielperson gar nicht, wird',
+    'sie weiter gepingt oder wird ein privater Konflikt öffentlich in den Chat gezogen?',
+    'Witze unter Freunden, Sarkasmus, Selbstironie, Rollenspiel, klare beidseitige Neckerei',
+    'und erkennbare Zitate sind KEINE Verstöße. Schütze harmlose Joke-/Banter-Situationen:',
+    'Wenn Ton und Kontext gegenseitig einvernehmlich wirken und niemand zum Ziel gemacht',
+    'wird, gib lieber {"moderations":[]} zurück.',
+    'Aber: Kontext ist keine Entschuldigung für echtes Nachtreten. Wenn aus mehreren',
+    'Nachrichten ein Muster aus Bloßstellen, wiederholtem Pingen, Beleidigen, Drohen,',
+    'Diskriminieren oder öffentlichem Fertigmachen entsteht, dann moderiere die konkrete',
+    'schwerste Nachricht – auch wenn jede einzelne Zeile allein vielleicht wie ein Joke',
+    'aussehen könnte. Eine frühere Strafe im Register allein ist KEIN Grund für eine neue',
+    'Strafe: Es zählt das Verhalten in diesem Verlauf.',
+
+    '== MOBBING, DOGPILING & NACHTRETEN ERKENNEN ==',
+    '- Achte besonders auf Zielpersonen: gleiche user_id, Server-Nick, global_name, username,',
+    '  Reply-Ziel oder wiederholte Mention derselben Person verbinden einzelne Aussagen.',
+    '- Wiederholtes Anpingen/Ansprechen einer Person, die nicht antwortet oder sichtbar',
+    '  ausweicht, ist Belästigung – besonders bei Druck wie "antworte", Beleidigungen,',
+    '  Herabsetzungen oder wenn andere schon sagen, dass das Pingen aufhören soll.',
+    '- Dogpiling liegt vor, wenn mehrere Personen nacheinander dieselbe Person angreifen,',
+    '  nach einem Timeout/Drama nachtreten, "RIP"-/Todessprüche über ein reales Mitglied',
+    '  machen, Gerüchte/Privatstreit öffentlich ausschlachten oder die Person lächerlich',
+    '  machen. Dafür darfst und sollst du mehrere Täter im selben Batch moderieren.',
+    '- Unterscheide hart zwischen Mobbing und harmlosem Insider: Ein einzelnes "rip" über',
+    '  ein Spiel/Match/Meme ist meist kein Verstoß; "RIP <Name>" über ein reales Mitglied',
+    '  im Kontext von Streit, Timeout, öffentlichem Nachtreten oder wiederholtem Pingen ist',
+    '  dagegen als Belästigung/Mobbing zu bewerten.',
+    '- Moderiere nicht die Zielperson für defensive Antworten, Unsicherheit oder Schweigen.',
+    '  Moderiere die Nachrichten, die Druck, Angriff oder Dogpiling erzeugen.',
     'Im Zweifel: lieber eine Warnung als ein Timeout. Bei mehreren Verstößen darfst du',
     'MEHRERE Personen gleichzeitig moderieren (eine moderation pro betroffener Nachricht).',
 
@@ -178,7 +285,8 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     '     ist – nicht nur "verstößt gegen die Regeln", sondern die echte Begründung',
     '     (z. B. welche Wirkung solche Aussagen auf andere haben).',
     '  3) KONTEXT: Wie wirkt das Verhalten im Gespräch/auf den Kanal (z. B. eskaliert',
-    '     es eine Diskussion, verletzt es eine bestimmte Gruppe, stört es den Ablauf)?',
+    '     es eine Diskussion, verletzt es eine bestimmte Gruppe, stört es den Ablauf',
+    '     oder setzt es eine konkrete Zielperson durch Pings/Replies/Dogpiling unter Druck)?',
     '  4) WARUM genau DIESE Maßnahme (warn bzw. timeout mit dieser Dauer) angemessen',
     '     ist – bei Wiederholungstätern ausdrücklich mit Bezug auf die bisherigen',
     '     Moderationen aus dem Strafenregister (Eskalation nachvollziehbar machen).',
@@ -228,12 +336,14 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
 function buildUserPrompt({ adminPrompt, logText }) {
   return [
     '=== ANWEISUNGEN DES SERVER-ADMINS (Regeln, Strenge & Maßnahmen) ===',
-    'Diese Anweisungen haben HÖCHSTE Priorität. Sie bestimmen Regeln, Strenge, Maßnahmen',
+    'Diese Anweisungen haben hohe Priorität. Sie bestimmen Regeln, Strenge, Maßnahmen',
     'und Eskalation – sie dürfen deine Entscheidungen auch strenger ODER lockerer machen',
-    'als die Standard-Regeln. Befolge sie konsequent. Nur die absoluten Grenzen des',
-    'System-Prompts gelten immer: das Antwortformat (JSON), die Admin-Immunität, kein',
-    'Kick/Ban, höchstens EIN timeout pro Person pro Analyse und das Verbot, ohne',
-    'konkreten Verstoß irgendetwas in den Chat zu schreiben.',
+    'als die Standard-Regeln. Befolge sie konsequent, aber nur innerhalb der System-Grenzen:',
+    'harmlose Jokes/Sarkasmus/einvernehmliche Insider nicht bestrafen, Kontextpflicht',
+    'einhalten und Mobbing/Dogpiling im Gesamtverlauf prüfen. Die weiteren absoluten',
+    'Grenzen gelten immer: Antwortformat (JSON), Admin-Immunität, kein Kick/Ban, höchstens',
+    'EIN timeout pro Person pro Analyse und das Verbot, ohne konkreten Verstoß irgendetwas',
+    'in den Chat zu schreiben.',
     '<<<',
     String(adminPrompt || '').trim(),
     '>>>',
@@ -242,7 +352,9 @@ function buildUserPrompt({ adminPrompt, logText }) {
     String(logText || '').trim(),
 
     '=== AUFGABE ===',
-    'Analysiere den gesamten Verlauf mit Kontext und antworte NUR mit dem geforderten JSON.',
+    'Analysiere den gesamten Verlauf mit Kontext, Reply-Ketten, Mention-Zielen und Namens-/Nickname-Daten.',
+    'Achte besonders auf Mobbing, Dogpiling, wiederholtes Pingen und Nachtreten, ohne harmlose',
+    'Jokes/Sarkasmus/Insider zu bestrafen. Antworte NUR mit dem geforderten JSON.',
     'Denke daran: primary=true für GENAU EINE moderation (der schwerwiegendste Verstoß),',
     '{USER} als Platzhalter in jeder personal_message – und jede personal_message muss',
     'ausführlich begründet sein (4-8 Sätze: Inhalt, Regel, Kontext, Maßnahme, Hinweis).',
@@ -254,7 +366,8 @@ function buildUserPrompt({ adminPrompt, logText }) {
 
 /**
  * Formatiert die gesammelten Nachrichten für Gemini.
- * `messages`: [{ seq, channelName, sentAt, authorName, authorId, content, isAdmin }]
+ * `messages`: [{ seq, channelName, sentAt, authorName, authorId, content, isAdmin,
+ *                authorMeta, replyMeta, mentionsMeta }]
  * Admin-Nachrichten (isAdmin / seq=null) erscheinen ohne ID als [ADMIN – immun].
  * (chronologisch sortiert; Gruppierung nach Kanal passiert hier)
  */
@@ -272,7 +385,15 @@ function buildChatLog(messages) {
     const lines = [`########## KANAL: #${name} (kanal_id=${channelId}) ##########`];
     for (const m of msgs) {
       const tag = m.isAdmin || m.seq == null ? '[ADMIN – immun]' : `[${m.seq}]`;
-      lines.push(`${tag} ${fmtUtc(m.sentAt)} · ${m.authorName} (user_id=${m.authorId}):`);
+      const authorName = oneLine(m.authorName, 100) || 'Unbekannt';
+      const authorId = oneLine(m.authorId, 40) || 'unbekannt';
+      lines.push(`${tag} ${fmtUtc(m.sentAt)} · ${authorName} (user_id=${authorId}):`);
+      const aliasLine = aliasLineForMessage(m);
+      const replyLine = replyLineForMessage(m);
+      const mentionsLine = mentionsLineForMessage(m);
+      if (aliasLine) lines.push(aliasLine);
+      if (replyLine) lines.push(replyLine);
+      if (mentionsLine) lines.push(mentionsLine);
       for (const row of String(m.content).split('\n')) {
         lines.push(`| ${row}`);
       }

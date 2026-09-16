@@ -103,6 +103,25 @@ function extractErrorText(payload, res) {
   return `HTTP ${res?.status || '?'}`;
 }
 
+function retryAfterMsFromResponse(res, payload) {
+  const header = res?.headers?.get?.('retry-after');
+  if (header) {
+    const seconds = Number.parseFloat(header);
+    if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    const dateMs = Date.parse(header);
+    if (Number.isFinite(dateMs)) return Math.max(0, dateMs - Date.now());
+  }
+  const details = payload?.error?.details || payload?.details || [];
+  for (const detail of Array.isArray(details) ? details : []) {
+    const retryDelay = detail?.retryDelay || detail?.['retryDelay'];
+    if (typeof retryDelay === 'string') {
+      const seconds = Number.parseFloat(retryDelay.replace(/s$/i, ''));
+      if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    }
+  }
+  return undefined;
+}
+
 function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
   const generationConfig = {
     temperature: 0.35,
@@ -188,10 +207,18 @@ async function callGeminiForModel({
 
       const errText = await res.text().catch(() => '');
       let detail = errText;
+      let payload = null;
       try {
-        detail = extractErrorText(JSON.parse(errText), res);
+        payload = JSON.parse(errText);
+        detail = extractErrorText(payload, res);
       } catch {}
-      lastFailure = { ok: false, status: res.status, error: `api_error_${res.status}`, message: String(detail).slice(0, 500) };
+      lastFailure = {
+        ok: false,
+        status: res.status,
+        error: `api_error_${res.status}`,
+        message: String(detail).slice(0, 500),
+        retryAfterMs: retryAfterMsFromResponse(res, payload),
+      };
 
       // 400 = vermutlich ein optionales Feld abgelehnt -> einmal ohne Extras versuchen.
       if (res.status === 400 && withExtras) continue;

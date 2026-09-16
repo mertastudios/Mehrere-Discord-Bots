@@ -3,21 +3,23 @@
  *
  * - Sammelt NUR Textnachrichten von echten Nutzern (keine Bots, keine
  *   Webhooks, keine Systemnachrichten).
- * - Mitglieder mit Administrator-Berechtigung sind IMMUN und werden nie
- *   gesammelt oder moderiert.
+ * - Mitglieder mit Administrator-Berechtigung sind IMMUN: Sie werden als Kontext
+ *   gesammelt, bekommen aber keine moderierbare ID und werden nie bestraft.
  * - Bilder/Anhänge werden bewusst NICHT analysiert – der Bot moderiert Text.
  *   Enthält eine Nachricht einen Anhang plus Text, wird nur der Text gesammelt
  *   und mit einem Hinweis markiert, damit die KI nicht blind urteilt.
  * - Discord-Formate (Mentions, Rollen, Kanäle, Emojis, Timestamps, Markdown)
  *   werden in lesbaren Klartext für Gemini umgewandelt.
- * - Sobald das Token-Budget für eine Gemini-Anfrage voll ist, wird der Buffer
- *   als Batch mit IDs ab 1 verpackt und die Analyse angestoßen. Unabhängig
- *   davon wertet der Scheduler den Buffer alle 2 Stunden aus (scheduler.js).
+ * - Sobald das harte Token-Budget oder die adaptive Batch-Policy anschlägt
+ *   (Risikosignal, Mention-Druck/Dogpiling, kurze Ruhephase, max. Buffer-Alter),
+ *   wird der Buffer als Batch mit IDs ab 1 verpackt und die Analyse angestoßen.
+ *   Der Scheduler behält zusätzlich den 2-Stunden-Flush als Sicherheitsnetz.
  */
 
 const { PermissionFlagsBits } = require('discord.js');
 const { estimateTokens } = require('./gemini');
 const { MAX_BUFFER_MESSAGES } = require('./store');
+const { shouldFlushBuffer } = require('./batch-policy');
 
 const ATTACHMENT_NOTE = ' [Anhang war beigelegt – wird nicht geprüft]';
 
@@ -41,16 +43,112 @@ function escapeDiscordMarkdown(text) {
 
 /** Auflösbare Anzeigename eines Nutzers (Member-Cache, sonst Fetch, sonst Fallback). */
 async function displayNameOf(guild, userId, fallbackName) {
-  if (!guild) return fallbackName || `Nutzer ${userId}`;
+  const identity = await identityOf(guild, userId, { fallbackName });
+  return identity.displayName || identity.serverNickname || identity.globalName || identity.username || fallbackName || `Nutzer ${userId}`;
+}
+
+function cleanName(value, max = 100) {
+  if (value == null) return null;
+  const out = String(value).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return out ? out.slice(0, max) : null;
+}
+
+function identityFromMemberOrUser(member, user, fallbackId, fallbackName) {
+  const u = user || member?.user || null;
+  const id = cleanName(u?.id || member?.id || fallbackId, 40);
+  const serverNickname = cleanName(member?.nickname || null);
+  const displayName = cleanName(member?.displayName || serverNickname || u?.globalName || u?.username || fallbackName || (id ? `Nutzer ${id}` : null));
+  return {
+    id,
+    displayName,
+    serverNickname,
+    globalName: cleanName(u?.globalName || u?.global_name || null),
+    username: cleanName(u?.username || fallbackName || null),
+  };
+}
+
+/** Vollständige öffentliche Discord-Identität: Server-Name/Nick + globaler Name + Username. */
+async function identityOf(guild, userId, { user = null, member = null, fallbackName = null } = {}) {
+  let resolvedMember = member || null;
+  const id = String(userId || user?.id || member?.id || '').trim();
   try {
-    let member = guild.members?.cache?.get?.(userId) || null;
-    if (!member?.displayName && typeof guild.members?.fetch === 'function') {
-      member = await guild.members.fetch(userId).catch(() => null);
+    if (!resolvedMember && guild && id) {
+      resolvedMember = guild.members?.cache?.get?.(id) || null;
+      if (!resolvedMember?.displayName && typeof guild.members?.fetch === 'function') {
+        resolvedMember = await guild.members.fetch(id).catch(() => resolvedMember || null);
+      }
     }
-    return member?.displayName || member?.user?.username || fallbackName || `Nutzer ${userId}`;
-  } catch {
-    return fallbackName || `Nutzer ${userId}`;
+  } catch {}
+  return identityFromMemberOrUser(resolvedMember, user, id, fallbackName);
+}
+
+function valuesOfCollection(collection) {
+  if (!collection) return [];
+  if (typeof collection.values === 'function') return [...collection.values()];
+  if (Array.isArray(collection)) return collection;
+  if (typeof collection === 'object') return Object.values(collection);
+  return [];
+}
+
+async function mentionIdentitiesOf(msg) {
+  const guild = msg.guild;
+  const byId = new Map();
+
+  const add = async (id, user = null, member = null, fallbackName = null) => {
+    if (!id || byId.has(String(id))) return;
+    const identity = await identityOf(guild, id, { user, member, fallbackName });
+    if (identity?.id) byId.set(identity.id, identity);
+  };
+
+  for (const member of valuesOfCollection(msg.mentions?.members)) {
+    await add(member?.id || member?.user?.id, member?.user, member, member?.displayName);
   }
+  for (const user of valuesOfCollection(msg.mentions?.users)) {
+    await add(user?.id, user, null, user?.globalName || user?.username);
+  }
+  for (const match of String(msg.content || '').matchAll(/<@!?(\d{15,21})>/g)) {
+    await add(match[1]);
+  }
+
+  return [...byId.values()].slice(0, 20);
+}
+
+async function replyMetaOf(msg) {
+  const ref = msg.reference || null;
+  const messageId = ref?.messageId || ref?.message_id || null;
+  if (!messageId) return null;
+
+  const meta = {
+    messageId: String(messageId),
+    channelId: String(ref.channelId || ref.channel_id || msg.channelId || msg.channel?.id || ''),
+    guildId: String(ref.guildId || ref.guild_id || msg.guildId || msg.guild?.id || ''),
+    author: null,
+    content: null,
+    createdAt: null,
+  };
+
+  // Wenn Discord die Referenz schon mitsendet/gecached hat, nutzen wir sie;
+  // sonst versuchen wir einen einzelnen Fetch. Scheitert er, bleiben zumindest
+  // IDs erhalten, damit Gemini Reply-Ketten erkennt.
+  let referenced = ref.cachedMessage || msg.reference?.cachedMessage || null;
+  const sameChannel = !meta.channelId || meta.channelId === String(msg.channelId || msg.channel?.id || '');
+  if (!referenced && sameChannel && typeof msg.channel?.messages?.fetch === 'function') {
+    referenced = await msg.channel.messages.fetch(String(messageId)).catch(() => null);
+  }
+
+  if (referenced) {
+    const author = referenced.author || null;
+    meta.author = await identityOf(msg.guild, author?.id || referenced.member?.id, {
+      user: author,
+      member: referenced.member,
+      fallbackName: referenced.member?.displayName || author?.globalName || author?.username,
+    });
+    const refText = referenced.content ? await humanizeContent(referenced, referenced.content) : '';
+    meta.content = refText ? refText.slice(0, 500) : null;
+    meta.createdAt = Number(referenced.createdTimestamp) || null;
+  }
+
+  return meta;
 }
 
 /**
@@ -144,7 +242,16 @@ async function handleIncoming({ ctx, msg }) {
     const { collect, isAdmin } = await classifyMessage({ ctx, msg });
     if (!collect) return;
 
-    const text = await humanizeContent(msg, msg.content);
+    const [text, authorMeta, mentionsMeta, replyMeta] = await Promise.all([
+      humanizeContent(msg, msg.content),
+      identityOf(msg.guild, msg.author.id, {
+        user: msg.author,
+        member: msg.member,
+        fallbackName: msg.member?.displayName || msg.author.globalName || msg.author.username,
+      }),
+      mentionIdentitiesOf(msg),
+      replyMetaOf(msg),
+    ]);
     if (!text) return;
 
     const payload = {
@@ -152,7 +259,10 @@ async function handleIncoming({ ctx, msg }) {
       channelId: String(msg.channelId || msg.channel?.id || ''),
       channelName: msg.channel?.name || 'unbekannt',
       authorId: String(msg.author.id),
-      authorName: msg.member?.displayName || msg.author.globalName || msg.author.username || 'Unbekannt',
+      authorName: authorMeta?.displayName || msg.member?.displayName || msg.author.globalName || msg.author.username || 'Unbekannt',
+      authorMeta,
+      mentionsMeta,
+      replyMeta,
       content: text,
       discordMessageId: msg.id,
       sentAt: Number(msg.createdTimestamp) || Date.now(),
@@ -167,12 +277,25 @@ async function handleIncoming({ ctx, msg }) {
     }
 
     const budget = maxInputTokens(ctx.env);
+    const buffer = ctx.store.getBuffer(guildId);
     const bufferTokens = ctx.store.getBufferTokenEstimate(guildId, estimateTokens);
-    const bufferCount = ctx.store.getBuffer(guildId).length;
+    const bufferCount = buffer.length;
+    const policy = shouldFlushBuffer({
+      buffer,
+      env: ctx.env,
+      estimateTokensFn: estimateTokens,
+      newestMessage: payload,
+    });
 
-    if (bufferTokens >= budget || bufferCount >= MAX_BUFFER_MESSAGES) {
+    if (bufferTokens >= budget || bufferCount >= MAX_BUFFER_MESSAGES || policy.flush) {
       const batch = ctx.store.buildBatchFromBuffer(guildId);
-      if (batch) void dispatchBatch(ctx, guildId);
+      if (batch) {
+        ctx.logger?.info?.(
+          `[security-bot] Schneller Analyse-Flush für Gilde ${guildId}: ` +
+            `${bufferCount} Nachrichten, ~${bufferTokens} Tokens, Grund=${policy.reason || 'hard_limit'}`
+        );
+        void dispatchBatch(ctx, guildId);
+      }
     }
   } catch (err) {
     ctx.logger?.warn?.('[security-bot] Fehler beim Sammeln einer Nachricht:', err?.message || err);
@@ -191,6 +314,9 @@ module.exports = {
   classifyMessage,
   humanizeContent,
   displayNameOf,
+  identityOf,
+  mentionIdentitiesOf,
+  replyMetaOf,
   escapeDiscordMarkdown,
   maxInputTokens,
   ATTACHMENT_NOTE,
