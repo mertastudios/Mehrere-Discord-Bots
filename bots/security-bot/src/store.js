@@ -24,6 +24,52 @@ function parseJsonCol(val, fallback = null) {
   }
 }
 
+function cleanString(value, max = 200) {
+  if (value == null) return null;
+  const out = String(value).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return out ? out.slice(0, max) : null;
+}
+
+function normalizeIdentityMeta(raw, fallbackId = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  const meta = {
+    id: cleanString(raw.id || fallbackId, 40),
+    displayName: cleanString(raw.displayName || raw.authorName || raw.name, 100),
+    serverNickname: cleanString(raw.serverNickname || raw.nickname || raw.nick, 100),
+    globalName: cleanString(raw.globalName || raw.global_name, 100),
+    username: cleanString(raw.username || raw.userName, 100),
+  };
+  if (!meta.id && fallbackId) meta.id = String(fallbackId);
+  return Object.values(meta).some(Boolean) ? meta : null;
+}
+
+function normalizeMentionsMeta(raw) {
+  const source = Array.isArray(raw) ? raw : [];
+  const seen = new Set();
+  const out = [];
+  for (const item of source) {
+    const meta = normalizeIdentityMeta(item, item?.id);
+    if (!meta?.id || seen.has(meta.id)) continue;
+    seen.add(meta.id);
+    out.push(meta);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function normalizeReplyMeta(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const meta = {
+    messageId: cleanString(raw.messageId || raw.message_id, 40),
+    channelId: cleanString(raw.channelId || raw.channel_id, 40),
+    guildId: cleanString(raw.guildId || raw.guild_id, 40),
+    author: normalizeIdentityMeta(raw.author, raw.authorId || raw.author_id),
+    content: cleanString(raw.content, 500),
+    createdAt: Number(raw.createdAt || raw.created_at) || null,
+  };
+  return Object.values(meta).some(Boolean) ? meta : null;
+}
+
 // ---------- Limits ----------
 const MAX_CONTENT_CHARS = 1500;     // Pro Nachricht gekürzt (Discord-Caps reichen eh)
 const MAX_BUFFER_MESSAGES = 500;    // Sicherheitsobergrenze pro Buffer
@@ -145,11 +191,23 @@ function createSecurityStore({ logger, env } = {}) {
       content TEXT NOT NULL,
       discord_message_id TEXT,
       sent_at INTEGER NOT NULL,
-      is_admin INTEGER DEFAULT 0
+      is_admin INTEGER DEFAULT 0,
+      author_meta TEXT,
+      reply_meta TEXT,
+      mentions_meta TEXT
     );`);
-    // Migration für bestehende Tabellen (Spalte is_admin nachrüsten)
+    // Migration für bestehende Tabellen (Spalte is_admin + Kontext-Metadaten nachrüsten)
     try {
       await db.execute('ALTER TABLE secgem_messages ADD COLUMN is_admin INTEGER DEFAULT 0');
+    } catch {}
+    try {
+      await db.execute('ALTER TABLE secgem_messages ADD COLUMN author_meta TEXT');
+    } catch {}
+    try {
+      await db.execute('ALTER TABLE secgem_messages ADD COLUMN reply_meta TEXT');
+    } catch {}
+    try {
+      await db.execute('ALTER TABLE secgem_messages ADD COLUMN mentions_meta TEXT');
     } catch {}
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_secgem_msg_guild ON secgem_messages(guild_id, batch_id);`);
     await db.execute(`CREATE TABLE IF NOT EXISTS secgem_penalties (
@@ -211,6 +269,9 @@ function createSecurityStore({ logger, env } = {}) {
         discordMessageId: row.discord_message_id ? String(row.discord_message_id) : null,
         sentAt: Number(row.sent_at) || Date.now(),
         isAdmin: Boolean(Number(row.is_admin) || 0),
+        authorMeta: normalizeIdentityMeta(parseJsonCol(row.author_meta, null), row.author_id),
+        replyMeta: normalizeReplyMeta(parseJsonCol(row.reply_meta, null)),
+        mentionsMeta: normalizeMentionsMeta(parseJsonCol(row.mentions_meta, [])),
       };
       messages.set(rec.key, rec);
       if (rec.batchId) {
@@ -297,6 +358,9 @@ function createSecurityStore({ logger, env } = {}) {
       if (data.messages && typeof data.messages === 'object') {
         for (const rec of Object.values(data.messages)) {
           if (!rec?.guildId || typeof rec.content !== 'string') continue;
+          rec.authorMeta = normalizeIdentityMeta(rec.authorMeta, rec.authorId);
+          rec.replyMeta = normalizeReplyMeta(rec.replyMeta);
+          rec.mentionsMeta = normalizeMentionsMeta(rec.mentionsMeta);
           messages.set(String(rec.key), rec);
           if (rec.batchId) {
             const mapKey = `${rec.guildId}:${rec.batchId}`;
@@ -470,6 +534,9 @@ function createSecurityStore({ logger, env } = {}) {
       discordMessageId: data.discordMessageId ? String(data.discordMessageId) : null,
       sentAt: Number(data.sentAt) || Date.now(),
       isAdmin: Boolean(data.isAdmin),
+      authorMeta: normalizeIdentityMeta(data.authorMeta, data.authorId),
+      replyMeta: normalizeReplyMeta(data.replyMeta),
+      mentionsMeta: normalizeMentionsMeta(data.mentionsMeta),
     };
     buffer.push(rec);
     messages.set(rec.key, rec);
@@ -482,7 +549,19 @@ function createSecurityStore({ logger, env } = {}) {
   }
 
   function getBufferTokenEstimate(guildId, estimateTokensFn) {
-    return getBuffer(guildId).reduce((sum, m) => sum + estimateTokensFn(m.content), 0);
+    const estimate = typeof estimateTokensFn === 'function'
+      ? estimateTokensFn
+      : (text) => Math.ceil(String(text || '').length / 3);
+    return getBuffer(guildId).reduce((sum, m) => {
+      const metaText = [
+        m.content,
+        m.authorName,
+        m.authorMeta ? JSON.stringify(m.authorMeta) : '',
+        m.replyMeta ? JSON.stringify(m.replyMeta) : '',
+        Array.isArray(m.mentionsMeta) && m.mentionsMeta.length ? JSON.stringify(m.mentionsMeta) : '',
+      ].filter(Boolean).join('\n');
+      return sum + estimate(metaText);
+    }, 0);
   }
 
   /**
@@ -766,16 +845,23 @@ function createSecurityStore({ logger, env } = {}) {
           if (!m) continue;
           statements.push({
             sql: `INSERT INTO secgem_messages (key, guild_id, batch_id, seq, ord, channel_id, channel_name,
-                    author_id, author_name, content, discord_message_id, sent_at, is_admin)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    author_id, author_name, content, discord_message_id, sent_at, is_admin,
+                    author_meta, reply_meta, mentions_meta)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT(key) DO UPDATE SET
                     batch_id=excluded.batch_id,
                     seq=excluded.seq,
-                    content=excluded.content`,
+                    content=excluded.content,
+                    author_meta=excluded.author_meta,
+                    reply_meta=excluded.reply_meta,
+                    mentions_meta=excluded.mentions_meta`,
             args: [
               m.key, m.guildId, m.batchId, m.seq, m.ord, m.channelId, m.channelName,
               m.authorId, m.authorName, m.content, m.discordMessageId, m.sentAt,
               m.isAdmin ? 1 : 0,
+              m.authorMeta ? JSON.stringify(m.authorMeta) : null,
+              m.replyMeta ? JSON.stringify(m.replyMeta) : null,
+              Array.isArray(m.mentionsMeta) && m.mentionsMeta.length ? JSON.stringify(m.mentionsMeta) : null,
             ],
           });
         }

@@ -64,6 +64,16 @@ const {
   FLUSH_INTERVAL_HOURS,
 } = require('../bots/security-bot/src/scheduler');
 const {
+  shouldFlushBuffer,
+  riskSignalsForMessage,
+  mentionPressureSignal,
+} = require('../bots/security-bot/src/batch-policy');
+const {
+  reserveGeminiSlot,
+  noteGemini429,
+  rateLimitConfig,
+} = require('../bots/security-bot/src/rate-limit');
+const {
   handleMessageDelete,
   wasLastChannelMessage,
   clearWebhookCache,
@@ -297,6 +307,29 @@ test('Security Bot: Buffer → Batch (IDs ab 1, chronologisch, Limits)', async (
   assert.equal(store.addBufferMessage('g1', { channelId: 'c1', authorId: 'u1', authorName: 'x', content: 'überlauf' }), null);
 });
 
+test('Security Bot: Store übernimmt Rich-Context-Metadaten in Batch-Nachrichten', async () => {
+  const store = await makeStore();
+  store.addBufferMessage('g1', {
+    channelId: 'c1',
+    channelName: 'allgemein',
+    authorId: 'u1',
+    authorName: 'PaySafe',
+    authorMeta: { id: 'u1', displayName: 'PaySafe', serverNickname: 'PaySafe | Merta', globalName: 'Pay', username: 'paysafePrivat' },
+    mentionsMeta: [{ id: 'u2', displayName: '[Lvl 1] 𝔣', serverNickname: '[Lvl 1] 𝔣', globalName: '𝔣', username: 'ykkfat1' }],
+    replyMeta: { messageId: 'r1', channelId: 'c1', author: { id: 'u2', displayName: '[Lvl 1] 𝔣', username: 'ykkfat1' }, content: 'hör bitte auf' },
+    content: 'antwort bitte',
+    discordMessageId: 'm1',
+  });
+
+  const tokenEstimate = store.getBufferTokenEstimate('g1', estimateTokens);
+  assert.ok(tokenEstimate > estimateTokens('antwort bitte'), 'Rich-Context fließt in die Token-Schätzung ein');
+  const batch = store.buildBatchFromBuffer('g1');
+  const [msg] = store.getBatchMessages('g1', batch.id);
+  assert.equal(msg.authorMeta.serverNickname, 'PaySafe | Merta');
+  assert.equal(msg.mentionsMeta[0].username, 'ykkfat1');
+  assert.equal(msg.replyMeta.messageId, 'r1');
+});
+
 test('Security Bot: Strafenregister (20-Tage-Fenster) & Prune & Guild-Delete', async () => {
   const store = await makeStore();
   const now = Date.now();
@@ -510,6 +543,71 @@ test('Security Bot: Discord-Formate werden für die KI aufgelöst', async () => 
   assert.ok(withAtt.includes('[Anhang war beigelegt'), 'Anhang-Hinweis vorhanden');
 });
 
+test('Security Bot: Collector speichert Nicknames, Mentions und Reply-Verlauf für Gemini', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-rich-context-123456');
+
+  const target = w.membersCache.get('222222222222222222');
+  target.displayName = '[Lvl 1] 𝔣';
+  target.nickname = '[Lvl 1] 𝔣';
+  target.user.globalName = '𝔣';
+  target.user.username = 'ykkfat1';
+
+  const author = w.membersCache.get('111111111111111111');
+  author.displayName = 'PaySafe';
+  author.nickname = 'PaySafe | Merta';
+  author.user.globalName = 'Pay';
+  author.user.username = 'paysafePrivat';
+
+  w.messageMocks.set('orig', {
+    id: 'orig',
+    guild: w.guild,
+    guildId: 'g1',
+    channelId: 'c1',
+    channel: w.channel,
+    author: { id: '222222222222222222', bot: false, username: 'ykkfat1', globalName: '𝔣' },
+    member: target,
+    content: 'Bitte hört auf mich zu pingen',
+    attachments: new Map(),
+    createdTimestamp: Date.now() - 1000,
+  });
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => (k === 'SECURITY_STORE_DISABLE_FILE_BACKUP' ? 'true' : fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+  };
+
+  await handleIncoming({
+    ctx,
+    msg: w.msg({
+      id: 'm-rich',
+      author: { id: '111111111111111111', bot: false, username: 'paysafePrivat', globalName: 'Pay' },
+      member: author,
+      content: 'Kannst du bitte antworten <@222222222222222222>?',
+      mentions: {
+        users: new Map([['222222222222222222', { id: '222222222222222222', username: 'ykkfat1', globalName: '𝔣' }]]),
+        members: new Map([['222222222222222222', target]]),
+      },
+      reference: { messageId: 'orig', channelId: 'c1', guildId: 'g1' },
+    }),
+  });
+
+  const rec = store.getBuffer('g1')[0];
+  assert.equal(rec.authorName, 'PaySafe');
+  assert.equal(rec.authorMeta.serverNickname, 'PaySafe | Merta');
+  assert.equal(rec.authorMeta.globalName, 'Pay');
+  assert.equal(rec.authorMeta.username, 'paysafePrivat');
+  assert.equal(rec.mentionsMeta[0].id, '222222222222222222');
+  assert.equal(rec.mentionsMeta[0].serverNickname, '[Lvl 1] 𝔣');
+  assert.equal(rec.mentionsMeta[0].username, 'ykkfat1');
+  assert.equal(rec.replyMeta.messageId, 'orig');
+  assert.equal(rec.replyMeta.author.username, 'ykkfat1');
+  assert.ok(rec.replyMeta.content.includes('Bitte hört auf'), 'Reply-Text wurde gespeichert');
+});
+
 test('Security Bot: handleIncoming sammelt nur mit Key & stößt Batch bei Token-Limit aus', async () => {
   const w = makeWorld();
   const store = await makeStore();
@@ -701,6 +799,10 @@ test('Security Bot: System-Prompt enthält Register, Format & {USER}-Regel', () 
   assert.ok(sp.includes('Administratoren'), 'Admin-Immunität erklärt');
   assert.ok(sp.includes('moderations'), 'JSON-Format erklärt');
   assert.ok(sp.includes('Deutsch'), 'Antwortsprache vorgegeben');
+  assert.ok(sp.includes('MOBBING, DOGPILING'), 'Mobbing/Dogpiling wird explizit geprüft');
+  assert.ok(sp.includes('Witze unter Freunden'), 'Joke-/Sarkasmus-Schutz bleibt erhalten');
+  assert.ok(/wiederholte[ms]? (Anpingen|Pingen)/i.test(sp), 'wiederholte Mentions/Pings werden als Kontext genannt');
+  assert.ok(sp.includes('server_nick'), 'Nickname-/Namensfelder werden erklärt');
   assert.ok(sp.includes('AUSFÜHRLICH'), 'personal_message muss ausführlich begründet werden');
   assert.ok(!sp.includes('ZWINGENDE MODERATION'), 'ohne forceUser keine Zwangsdirektive');
 });
@@ -743,6 +845,40 @@ test('Security Bot: Chat-Verlauf ist nach Kanälen gruppiert mit IDs ab 1', () =
   const up = buildUserPrompt({ adminPrompt: 'SEI STRENG', logText: log });
   assert.ok(up.includes('SEI STRENG'), 'Admin-Prompt ist enthalten');
   assert.ok(up.includes('AUFGABE'), 'Arbeitsauftrag am Ende');
+});
+
+test('Security Bot: Chat-Verlauf enthält Reply-Kontext, Zielpersonen und echte Namensfelder', () => {
+  const base = Date.parse('2026-09-16T18:00:00Z');
+  const log = buildChatLog([
+    {
+      seq: 1,
+      ord: base,
+      channelId: 'c1',
+      channelName: 'allgemein',
+      sentAt: base,
+      authorName: 'PaySafe',
+      authorId: 'u-pay',
+      authorMeta: { id: 'u-pay', displayName: 'PaySafe', serverNickname: 'PaySafe | Merta', globalName: 'Pay', username: 'paysafePrivat' },
+      mentionsMeta: [{ id: 'u-target', displayName: '[Lvl 1] 𝔣', serverNickname: '[Lvl 1] 𝔣', globalName: '𝔣', username: 'ykkfat1' }],
+      replyMeta: {
+        messageId: 'orig-1',
+        channelId: 'c1',
+        author: { id: 'u-target', displayName: '[Lvl 1] 𝔣', serverNickname: '[Lvl 1] 𝔣', globalName: '𝔣', username: 'ykkfat1' },
+        content: 'Bitte nicht weiter pingen.',
+        createdAt: base - 1000,
+      },
+      content: '@[Lvl 1] 𝔣 antwort bitte',
+    },
+  ]);
+
+  assert.ok(log.includes('Namen/Aliase'), 'Alias-Zeile vorhanden');
+  assert.ok(log.includes('server_nick="PaySafe | Merta"'), 'Server-Nickname des Autors');
+  assert.ok(log.includes('global_name="Pay"'), 'globaler Anzeigename des Autors');
+  assert.ok(log.includes('username="paysafePrivat"'), 'Username des Autors');
+  assert.ok(log.includes('Antwort auf: message_id=orig-1'), 'Reply-Referenz wird gesendet');
+  assert.ok(log.includes('text="Bitte nicht weiter pingen."'), 'Reply-Textauszug wird gesendet');
+  assert.ok(log.includes('Erwähnt/Zielpersonen: [Lvl 1] 𝔣 (user_id=u-target'), 'Mention-Ziel mit user_id sichtbar');
+  assert.ok(log.includes('username="ykkfat1"'), 'private/globale Namensdaten des Ziels sichtbar');
 });
 
 // ============================================================================
@@ -1234,7 +1370,98 @@ test('Security Bot: flushBuffer baut Batch und startet Analyse', async () => {
 // 9. Scheduler: 2-Stunden-Flush & Retry-Tick
 // ============================================================================
 
-test('Security Bot: 2-Stunden-Flush wertet auch kleine Verläufe aus', async () => {
+test('Security Bot: Adaptive Batch-Policy erkennt Risiko, Dogpiling und kurze Wartezeiten', () => {
+  const now = Date.parse('2026-09-16T18:00:00Z');
+  const env = (k, fb = '') => ({
+    SECURITY_GEMINI_SOFT_MAX_MESSAGES: '50',
+    SECURITY_GEMINI_SOFT_INPUT_TOKENS: '999999',
+    SECURITY_GEMINI_MAX_BUFFER_AGE_MS: '300000',
+    SECURITY_GEMINI_QUIET_FLUSH_MS: '60000',
+    SECURITY_GEMINI_QUIET_MIN_MESSAGES: '3',
+  }[k] || fb);
+
+  assert.ok(riskSignalsForMessage({ content: 'Fatima.rip' }).includes('death_or_rip_language'));
+  assert.equal(shouldFlushBuffer({ buffer: [{ content: 'harmloser Witz', sentAt: now }], env, now }).flush, false, 'ein harmloser Joke triggert nicht sofort');
+  assert.equal(shouldFlushBuffer({ buffer: [{ content: 'Fatima.rip', sentAt: now }], env, now }).urgent, true, 'RIP/Todessprache triggert schnelle Analyse');
+
+  const dogpile = [
+    { authorId: 'u1', sentAt: now - 20_000, content: 'ping 1', mentionsMeta: [{ id: 'victim', displayName: 'Ziel' }] },
+    { authorId: 'u2', sentAt: now - 10_000, content: 'ping 2', mentionsMeta: [{ id: 'victim', displayName: 'Ziel' }] },
+  ];
+  assert.equal(mentionPressureSignal(dogpile, now, { mentionWindowMs: 600_000, mentionRepeatLimit: 3, multiAuthorMentionLimit: 2 })?.reason, 'multi_author_mentions');
+  assert.equal(shouldFlushBuffer({ buffer: dogpile, env, now }).urgent, true, 'mehrere Autoren gegen dasselbe Ziel flushen sofort');
+
+  const quiet = [
+    { content: 'a', sentAt: now - 120_000 },
+    { content: 'b', sentAt: now - 110_000 },
+    { content: 'c', sentAt: now - 100_000 },
+  ];
+  assert.match(shouldFlushBuffer({ buffer: quiet, env, now }).reason, /quiet_window/, 'kleine ruhige Verläufe warten nicht stundenlang');
+});
+
+test('Security Bot: Lokaler Gemini-Rate-Limiter respektiert RPM und Retry-After', () => {
+  const now = Date.parse('2026-09-16T18:00:00Z');
+  const ctx = { env: (k, fb = '') => ({ SECURITY_GEMINI_RPM_LIMIT: '2', SECURITY_GEMINI_RPD_LIMIT: '100', SECURITY_GEMINI_RPD_RESERVE: '0' }[k] || fb) };
+  const key = 'AIza-rate-limit-key';
+
+  assert.equal(rateLimitConfig(ctx.env).rpmLimit, 2);
+  assert.equal(reserveGeminiSlot({ ctx, apiKey: key, now }).allowed, true);
+  assert.equal(reserveGeminiSlot({ ctx, apiKey: key, now: now + 1 }).allowed, true);
+  const denied = reserveGeminiSlot({ ctx, apiKey: key, now: now + 2 });
+  assert.equal(denied.allowed, false, 'dritter Request innerhalb einer Minute wird lokal zurückgestellt');
+  assert.ok(denied.waitMs > 0 && denied.waitMs <= 60_000);
+
+  const ctxTpm = { env: (k, fb = '') => ({ SECURITY_GEMINI_RPM_LIMIT: '99', SECURITY_GEMINI_TPM_LIMIT: '1000', SECURITY_GEMINI_RPD_LIMIT: '1000', SECURITY_GEMINI_RPD_RESERVE: '0' }[k] || fb) };
+  assert.equal(reserveGeminiSlot({ ctx: ctxTpm, apiKey: key, now, estimatedTokens: 800 }).allowed, true);
+  const tpmDenied = reserveGeminiSlot({ ctx: ctxTpm, apiKey: key, now: now + 1, estimatedTokens: 300 });
+  assert.equal(tpmDenied.allowed, false, 'TPM-Budget wird lokal respektiert');
+  assert.ok(tpmDenied.waitMs > 0 && tpmDenied.waitMs <= 60_000);
+
+  const ctx429 = { env: (k, fb = '') => ({ SECURITY_GEMINI_RPM_LIMIT: '99', SECURITY_GEMINI_RPD_LIMIT: '1000', SECURITY_GEMINI_RPD_RESERVE: '0' }[k] || fb) };
+  assert.equal(reserveGeminiSlot({ ctx: ctx429, apiKey: key, now }).allowed, true);
+  noteGemini429({ ctx: ctx429, apiKey: key, now, retryAfterMs: 12_000 });
+  const after429 = reserveGeminiSlot({ ctx: ctx429, apiKey: key, now: now + 1000 });
+  assert.equal(after429.allowed, false, 'Retry-After erzeugt lokalen Cooldown');
+  assert.ok(after429.waitMs >= 10_000);
+});
+
+test('Security Bot: Scheduler flusht kleine Verläufe adaptiv vor dem 2-Stunden-Slot', async () => {
+  const w = makeWorld();
+  const store = await makeStore();
+  store.setApiKey('g1', 'AIza-scheduler-fast-123456');
+  const now = Date.now();
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '111111111111111111', authorName: 'Max', content: 'erste Nachricht', discordMessageId: 'm1', sentAt: now - 120_000 });
+  store.addBufferMessage('g1', { channelId: 'c1', channelName: 'allgemein', authorId: '222222222222222222', authorName: 'Anna', content: 'zweite Nachricht', discordMessageId: 'm2', sentAt: now - 110_000 });
+
+  const ctx = {
+    store,
+    logger: noopLogger,
+    env: (k, fb = '') => ({
+      SECURITY_STORE_DISABLE_FILE_BACKUP: 'true',
+      SECURITY_GEMINI_QUIET_FLUSH_MS: '60000',
+      SECURITY_GEMINI_QUIET_MIN_MESSAGES: '2',
+      SECURITY_GEMINI_SOFT_MAX_MESSAGES: '50',
+      SECURITY_GEMINI_SOFT_INPUT_TOKENS: '999999',
+    }[k] || fb),
+    client: { user: { id: 'bot1' }, guilds: { cache: new Map([['g1', w.guild]]) } },
+    schedulerState: { lastSlotByGuild: new Map([['g1', slotKeyInTz(new Date(now), 'Europe/Berlin')]]), lastPrune: now },
+  };
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => geminiJsonResponse({ moderations: [] });
+  try {
+    const flushed = tickOnce(ctx, now);
+    assert.equal(flushed, 1, 'adaptiver Flush trotz gleichem 2-Stunden-Slot');
+    assert.equal(store.getBuffer('g1').length, 0, 'Buffer wurde geleert');
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store.getBatches('g1').length, 0, 'Batch wurde analysiert und abgeschlossen');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('Security Bot: 2-Stunden-Flush bleibt als Sicherheitsnetz erhalten', async () => {
   const w = makeWorld();
   const store = await makeStore();
   store.setApiKey('g1', 'AIza-scheduler-key-123456');
@@ -1861,7 +2088,12 @@ test('Security Bot: callGemini gibt bei 429/5xx/Netzwerkfehlern NICHT auf ein an
   const calls = [];
   const fetchFn = async (url) => {
     calls.push(url);
-    return { ok: false, status: 429, text: async () => '{"error":{"message":"rate limited"}}' };
+    return {
+      ok: false,
+      status: 429,
+      headers: { get: (name) => (String(name).toLowerCase() === 'retry-after' ? '3' : null) },
+      text: async () => '{"error":{"message":"rate limited"}}',
+    };
   };
 
   const res = await callGemini({
@@ -1876,6 +2108,7 @@ test('Security Bot: callGemini gibt bei 429/5xx/Netzwerkfehlern NICHT auf ein an
 
   assert.equal(res.ok, false);
   assert.equal(res.status, 429);
+  assert.equal(res.retryAfterMs, 3000, 'Retry-After wird für den lokalen Cooldown ausgelesen');
   // Nur EIN Modell wurde angefragt – 429 ist kein Grund, das Modell zu wechseln.
   assert.ok(calls.every((u) => u.includes('/models/gemini-flash-lite-latest:generateContent')));
 });

@@ -3,27 +3,30 @@
  *
  * - Alle 30 Sekunden: Prüft pro Gilde, ob fällige Retry-Batches vorhanden sind
  *   (Backoff der fehlgeschlagenen Gemini-Analysen) und stößt sie an.
- * - Regelmäßiger Flush ALLE 2 STUNDEN (Zeitzone der Serversprache, ausgerichtet
- *   auf volle Slots: 0, 2, 4, … 22 Uhr): Auch wenn das Token-Limit lange nicht
- *   erreicht wird (toter Server, wenige Nutzer), bekommt jeder Verlauf
- *   spätestens nach 2 Stunden seine Analyse. Früher lief das nur einmal
- *   täglich um 0 Uhr – Nutzer bekamen ihre Verwarnung dadurch teils erst am
- *   nächsten Tag. Der 0-Uhr-Lauf ist im 2-Stunden-Raster weiterhin enthalten.
+ * - Adaptiver Flush: Kleine Verläufe werden nach kurzer Ruhephase/Maximalalter
+ *   analysiert, und Risikosignale (z. B. Beleidigung, RIP-/Todessprache,
+ *   wiederholte Mentions/Dogpiling) starten deutlich schneller eine Prüfung.
+ * - 2-Stunden-Sicherheitsnetz (Zeitzone der Serversprache, volle Slots 0, 2, 4,
+ *   … 22 Uhr): Falls weder Token-Limit noch adaptive Policy anschlagen, wird der
+ *   offene Buffer trotzdem regelmäßig analysiert. Der 0-Uhr-Lauf ist weiterhin
+ *   enthalten.
  * - Neustart-Sicherheit: Wurde ein Slot verpasst (Render-Restart, Deploy), löst
- *   ein Buffer, dessen älteste Nachricht bereits älter als 2 Stunden ist, den
- *   Flush direkt beim nächsten Tick aus – ohne auf den nächsten Slot zu warten.
+ *   ein alter Buffer den Flush direkt beim nächsten Tick aus – ohne auf den
+ *   nächsten Slot zu warten.
  * - Stündlich: Alte Strafen/Batches aufräumen + Store flushen.
  */
 
 const { tzFor } = require('./languages');
 const { flushBuffer, processGuild } = require('./moderator');
+const { estimateTokens } = require('./gemini');
+const { shouldFlushBuffer } = require('./batch-policy');
 const { buildDropContainer } = require('./embed-builder');
 const { sendLogNotice } = require('./notices');
 
 const TICK_MS = 30_000;
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
-// Regelmäßige Auswertung des offenen Buffers: alle 2 Stunden.
+// Sicherheitsnetz: regelmäßige Auswertung des offenen Buffers alle 2 Stunden.
 const FLUSH_INTERVAL_HOURS = 2;
 const FLUSH_INTERVAL_MS = FLUSH_INTERVAL_HOURS * 60 * 60 * 1000;
 
@@ -89,7 +92,7 @@ function tickOnce(ctx, now = Date.now()) {
   for (const cfg of ctx.store.getAllGuilds()) {
     const gid = cfg.guildId;
 
-    // 1) 2-Stunden-Flush: Ist ein neuer Slot angebrochen (Gilden-Zeitzone)?
+    // 1) Adaptiver Flush + 2-Stunden-Sicherheitsnetz (Gilden-Zeitzone)
     const tz = tzFor(cfg.lang || 'de');
     const slot = slotKeyInTz(now, tz);
     const lastSlot = state.lastSlotByGuild.get(gid);
@@ -101,12 +104,23 @@ function tickOnce(ctx, now = Date.now()) {
     const oldest = oldestBufferedAt(ctx, gid);
     const overdue = oldest != null && now - oldest >= FLUSH_INTERVAL_MS;
 
-    if ((lastSlot && lastSlot !== slot) || overdue) {
+    const buffer = ctx.store.getBuffer?.(gid) || [];
+    const fastPolicy = shouldFlushBuffer({
+      buffer,
+      env: ctx.env,
+      estimateTokensFn: estimateTokens,
+      now,
+    });
+
+    if ((lastSlot && lastSlot !== slot) || overdue || fastPolicy.flush) {
       const batch = flushBuffer(ctx, gid);
       if (batch) {
         flushedGuilds++;
+        const reason = fastPolicy.flush
+          ? `schneller Flush (${fastPolicy.reason})`
+          : `${FLUSH_INTERVAL_HOURS}h-Flush`;
         ctx.logger?.info?.(
-          `[security-bot] ${FLUSH_INTERVAL_HOURS}h-Flush für Gilde ${gid} (${tz}, Slot ${slot}` +
+          `[security-bot] ${reason} für Gilde ${gid} (${tz}, Slot ${slot}` +
             `${overdue && lastSlot === slot ? ', überfälliger Buffer nach Neustart' : ''}): ` +
             `Batch ${batch.id} mit ${batch.size} Nachrichten gestartet.`
         );

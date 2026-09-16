@@ -10,7 +10,7 @@
  *  Die Sprache steuert:
  *  - Alle Bot-Antworten & Log-Hinweise
  *  - Den Standardtext für /set_prompt (Formular-Vorbelegung)
- *  - Die Zeitzone für die 2-stündliche Auswertung des Chat-Verlaufs
+ *  - Die Zeitzone für adaptive Auswertung und 2-Stunden-Sicherheits-Flush
  * ============================================================================
  */
 
@@ -96,7 +96,7 @@ const STRINGS = {
     errGuildOnly: '🔒 Dieser Befehl funktioniert nur in einem Server.',
     errNoPermission: '🔒 Nur Server-Administratoren können diesen Befehl nutzen.',
 
-    apiKeySet: '✅ **Gemini API-Key gespeichert** ({key}).\nDie KI-Überwachung ist ab jetzt aktiv – gesammelte Nachrichten werden analysiert, sobald das Token-Limit erreicht ist, spätestens aber alle 2 Stunden.',
+    apiKeySet: '✅ **Gemini API-Key gespeichert** ({key}).\nDie KI-Überwachung ist ab jetzt aktiv – gesammelte Nachrichten werden jetzt deutlich häufiger analysiert: bei Risikosignalen sofort, bei kleinen Verläufen nach kurzer Wartezeit und weiterhin spätestens per 2-Stunden-Sicherheits-Flush.',
     apiKeyInvalid: '❌ **Google hat den API-Key abgelehnt** ({error}). Der Key wurde **nicht** gespeichert. Erstelle einen Schlüssel auf [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ Der bestehende API-Key wurde unverändert beibehalten.',
     apiKeyRemoved: '🗑️ **Gemini API-Key gelöscht.** Es werden keine Nachrichten mehr gesammelt oder analysiert.',
@@ -125,13 +125,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = Anti-Delete einschalten, false = ausschalten',
 
     helpTitle: '🛡️ Security Bot – KI-Moderation mit Gemini',
-    helpDesc: 'Dieser Bot sammelt **Textnachrichten echter Nutzer** (Admins sind immun), bis das Token-Limit für eine Gemini-Analyse voll ist – zusätzlich wird der Verlauf **alle 2 Stunden** ausgewertet. Gemini erhält den System-Prompt, eure Server-Regeln und den sauber formatierten Chat-Verlauf und entscheidet über Warnungen & Timeouts. Bei API-Fehlern geht **nichts verloren**: Es wird so lange wiederholt, bis es klappt.',
+    helpDesc: 'Dieser Bot sammelt **Textnachrichten echter Nutzer** (Admins sind immun) und wertet sie mit Gemini jetzt **adaptiv** aus: sofort bei Risikosignalen wie Beleidigung, Dogpiling oder wiederholten Mentions, bei kleineren Verläufen nach kurzer Wartezeit und zusätzlich spätestens per 2-Stunden-Sicherheits-Flush. Gemini erhält System-Prompt, eure Server-Regeln, Reply-/Mention-Kontext und echte Server-/Global-/Usernamen und entscheidet über Warnungen & Timeouts. Bei API-Fehlern geht **nichts verloren**: Es wird so lange wiederholt, bis es klappt.',
     helpApiKey: 'Hinterlegt den Google Gemini API-Key für diesen Server. Muss vor der Überwachung einmal gesetzt werden.',
     helpPrompt: 'Öffnet ein Formular mit euren KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der letzte gespeicherte Text ist bereits eingetragen.',
     helpLogChannel: 'Setzt den Log-Kanal für Moderations-Hinweise, API-Fehler und Meldungen. Ohne Kanal-Angabe wird der Log-Kanal entfernt.',
-    helpLanguage: 'Ändert die Sprache des Bots dauerhaft (steuert auch die Zeitzone der 2-Stunden-Auswertung & die Standardsprache der KI).',
+    helpLanguage: 'Ändert die Sprache des Bots dauerhaft (steuert auch die Zeitzone des Sicherheits-Flushs & die Standardsprache der KI).',
     helpHelp: 'Zeigt diese Übersicht.',
-    helpCheckNow: 'Wertet die bisher gesammelten Nachrichten sofort aus, ohne auf das Token-Limit oder die nächste 2-Stunden-Auswertung zu warten. Mit der Option `user` lässt sich ein Nutzer wählen, der bei dieser Prüfung zwingend moderiert werden soll.',
+    helpCheckNow: 'Wertet die bisher gesammelten Nachrichten sofort aus, ohne auf den adaptiven Auto-Flush zu warten. Mit der Option `user` lässt sich ein Nutzer wählen, der bei dieser Prüfung zwingend moderiert werden soll.',
     helpAntiDelete: 'Schaltet Anti-Delete ein oder aus: Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, sendet der Bot sie per Webhook mit exakter Profil-Kopie (Name & Avatar) erneut. Erwähnungen pingen dabei niemanden.',
 
     logModTitle: '🛡️ KI-Moderation',
@@ -172,12 +172,19 @@ const STRINGS = {
 - Respektvoller Umgang – auch bei Meinungsverschiedenheiten
 - Keine gefährlichen oder illegalen Inhalte
 
-=== STRENGE (weder zu lasch noch zu streng) ===
-- Freundschaftliche Frotzeleien, Sarkasmus unter Freunden und Selbstironie NIEMALS bestrafen
-- Nur über andere zu sprechen (z. B. Streamer oder Gegner) ist KEIN Verstoß
+=== STRENGE & KONTEXT (weder zu lasch noch zu streng) ===
+- Freundschaftliche Frotzeleien, Sarkasmus unter Freunden, Selbstironie und einvernehmliche Insider NIEMALS bestrafen
+- Nur über andere zu sprechen (z. B. Streamer, Gegner oder fiktive Rollen) ist KEIN Verstoß
+- Nutze den gesamten Verlauf: Reply-Ketten, Mentions, Server-Nicknames, globale Namen und Usernames zeigen, wer gemeint ist
 - Eine frühere Strafe allein ist KEIN Grund für eine neue Strafe
 - Erst bei echten, klaren, eindeutigen Verstößen eingreifen
 - Im Zweifel: lieber eine Warnung als ein Timeout
+
+=== MOBBING / DOGPILING / NACHTRETEN ===
+- Wiederholtes Pingen/Ansprechen einer Person, die nicht antwortet oder ausweicht, ist Belästigung – besonders bei Druck wie "antworte" oder Beleidigungen
+- Wenn mehrere Personen dieselbe Zielperson öffentlich lächerlich machen, nach einem Timeout/Drama nachtreten oder private Konflikte ausschlachten, ist das Dogpiling/Mobbing
+- "RIP"-/Todessprüche über ein reales Mitglied im Kontext von Streit, Timeout, Mobbing oder wiederholtem Pingen sind nicht als harmloser Joke zu behandeln
+- Moderiere nicht die Zielperson für Schweigen, defensive Antworten oder Unsicherheit; moderiere die Nachrichten, die Druck/Angriff erzeugen
 
 === ESKALATION (Warnungen zuerst) ===
 - Erster Verstoß: immer Warnung (warn), kein Timeout
@@ -200,7 +207,7 @@ const STRINGS = {
     errGuildOnly: '🔒 This command only works inside a server.',
     errNoPermission: '🔒 Only server administrators can use this command.',
 
-    apiKeySet: '✅ **Gemini API key saved** ({key}).\nAI moderation is now active – collected messages are analyzed once the token limit is reached, and at the latest every 2 hours.',
+    apiKeySet: '✅ **Gemini API key saved** ({key}).\nAI moderation is now active – collected messages are analyzed much more often: immediately on risk signals, after a short wait for small conversations, and still at least by the 2-hour safety flush.',
     apiKeyInvalid: '❌ **Google rejected the API key** ({error}). The key was **not** saved. Create one at [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ The existing API key was kept unchanged.',
     apiKeyRemoved: '🗑️ **Gemini API key removed.** Messages are no longer collected or analyzed.',
@@ -229,13 +236,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = turn anti-delete on, false = turn it off',
 
     helpTitle: '🛡️ Security Bot – AI Moderation with Gemini',
-    helpDesc: 'This bot collects **text messages from real users** (admins are immune) until the token limit for one Gemini analysis is full – in addition, the history is analyzed **every 2 hours**. Gemini receives the system prompt, your server rules and a cleanly formatted chat history, then decides on warnings & timeouts. If the API fails, **nothing is lost**: retries continue until it succeeds.',
+    helpDesc: 'This bot collects **text messages from real users** (admins are immune) and analyzes them with Gemini **adaptively**: immediately on risk signals such as insults, dogpiling or repeated mentions, after a short wait for small conversations, and still at least by the 2-hour safety flush. Gemini receives the system prompt, your server rules, reply/mention context and real server/global/user names, then decides on warnings & timeouts. If the API fails, **nothing is lost**: retries continue until it succeeds.',
     helpApiKey: 'Stores the Google Gemini API key for this server. Must be set once before monitoring starts.',
     helpPrompt: 'Opens a form with your AI instructions: server rules, how strictly to moderate and which measures Gemini should use. Your last saved text is already filled in.',
     helpLogChannel: 'Sets the log channel for moderation notices, API errors and reports. Calling it without a channel removes the log channel.',
-    helpLanguage: 'Permanently changes the bot language (also controls the timezone of the 2-hour analysis and the AI default language).',
+    helpLanguage: 'Permanently changes the bot language (also controls the timezone of the safety flush and the AI default language).',
     helpHelp: 'Shows this overview.',
-    helpCheckNow: 'Analyzes the currently collected messages right away, without waiting for the token limit or the next 2-hour run. The `user` option lets you pick a user who must be moderated during this check.',
+    helpCheckNow: 'Analyzes the currently collected messages right away, without waiting for the adaptive auto flush. The `user` option lets you pick a user who must be moderated during this check.',
     helpAntiDelete: 'Turns anti-delete on or off: if someone (not a bot/webhook) deletes their own last message of a channel, the bot resends it via webhook with an exact profile copy (name & avatar). Mentions never ping anyone.',
 
     logModTitle: '🛡️ AI Moderation',
@@ -276,12 +283,19 @@ const STRINGS = {
 - Treat each other with respect – even when disagreeing
 - No dangerous or illegal content
 
-=== STRICTNESS (neither too lenient nor too strict) ===
-- NEVER punish friendly banter, sarcasm among friends or self-deprecating jokes
-- Merely talking ABOUT others (e.g. streamers or opponents) is NOT a violation
+=== STRICTNESS & CONTEXT (neither too lenient nor too strict) ===
+- NEVER punish friendly banter, sarcasm among friends, self-deprecating jokes or clearly mutual inside jokes
+- Merely talking ABOUT others (e.g. streamers, opponents or fictional characters) is NOT a violation
+- Use the full history: reply chains, mentions, server nicknames, global names and usernames show who is being targeted
 - A previous penalty alone is NOT a reason for a new penalty
 - Only step in on real, clear, unambiguous violations
 - When in doubt: prefer a warning over a timeout
+
+=== BULLYING / DOGPILING / PILING ON ===
+- Repeatedly pinging/addressing someone who does not answer or visibly avoids the topic is harassment, especially with pressure like "answer" or insults
+- If several people mock the same target, pile on after a timeout/drama, or drag private conflict into public chat, treat it as dogpiling/bullying
+- "RIP"/death jokes about a real member in the context of conflict, timeout, bullying or repeated pings are not harmless banter
+- Do not moderate the target for silence, defensive replies or uncertainty; moderate the messages creating pressure/attacks
 
 === ESCALATION (warnings first) ===
 - First violation: always a warning (warn), no timeout
@@ -303,7 +317,7 @@ const STRINGS = {
   fr: {
     errGuildOnly: '🔒 Cette commande ne fonctionne que dans un serveur.',
     errNoPermission: '🔒 Seuls les administrateurs du serveur peuvent utiliser cette commande.',
-    apiKeySet: '✅ **Clé API Gemini enregistrée** ({key}).\nLa modération IA est désormais active – les messages collectés sont analysés dès que la limite de tokens est atteinte, et au plus tard toutes les 2 heures.',
+    apiKeySet: '✅ **Clé API Gemini enregistrée** ({key}).\nLa modération IA est désormais active – les messages collectés sont analysés plus souvent : immédiatement en cas de signaux à risque, après une courte attente pour les petits échanges, et au plus tard via le flush de sécurité de 2 heures.',
     apiKeyInvalid: '❌ **Google a refusé la clé API** ({error}). La clé n’a **pas** été enregistrée. Créez-en une sur [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ La clé API existante a été conservée.',
     apiKeyRemoved: '🗑️ **Clé API Gemini supprimée.** Les messages ne sont plus collectés ni analysés.',
@@ -329,11 +343,11 @@ const STRINGS = {
     descAntiDeleteOption: 'true = activer l’anti-suppression, false = désactiver',
 
     helpTitle: '🛡️ Security Bot – Modération IA avec Gemini',
-    helpDesc: 'Ce bot collecte les **messages texte des vrais utilisateurs** (les admins sont immunisés) jusqu’à la limite de tokens pour une analyse Gemini – en plus, l’historique est analysé **toutes les 2 heures**. Gemini reçoit le prompt système, vos règles et un historique bien formaté, puis décide des avertissements et timeouts. En cas d’erreur API, **rien n’est perdu** : les tentatives continuent jusqu’au succès.',
+    helpDesc: 'Ce bot collecte les **messages texte des vrais utilisateurs** (les admins sont immunisés) et les analyse avec Gemini de façon **adaptative** : immédiatement en cas d’insultes, dogpiling ou mentions répétées, après une courte attente pour les petits échanges, et au plus tard via le flush de sécurité de 2 heures. Gemini reçoit le prompt système, vos règles, le contexte des réponses/mentions et les vrais noms serveur/globaux/utilisateur, puis décide des avertissements et timeouts. En cas d’erreur API, **rien n’est perdu** : les tentatives continuent jusqu’au succès.',
     helpApiKey: 'Enregistre la clé API Google Gemini pour ce serveur. À définir une fois avant de démarrer la surveillance.',
     helpPrompt: 'Ouvre un formulaire avec vos instructions IA : règles du serveur, strictesse de modération et mesures à employer. Votre dernier texte est déjà prérempli.',
     helpLogChannel: 'Définit le salon de journal pour les avis de modération et erreurs API. Sans salon, le journal est supprimé.',
-    helpLanguage: 'Change définitivement la langue du bot (contrôle aussi le fuseau horaire de l’analyse toutes les 2 heures et la langue par défaut de l’IA).',
+    helpLanguage: 'Change définitivement la langue du bot (contrôle aussi le fuseau horaire du flush de sécurité et la langue par défaut de l’IA).',
     helpHelp: 'Affiche cet aperçu.',
     helpCheckNow: 'Analyse immédiatement les messages déjà collectés, sans attendre la limite de tokens ni la prochaine analyse bihoraire. L’option `user` permet de choisir un utilisateur qui sera obligatoirement modéré lors de ce contrôle.',
     helpAntiDelete: 'Active ou désactive l’anti-suppression : si quelqu’un (ni bot ni webhook) supprime son propre dernier message d’un salon, le bot le renvoie via webhook avec une copie exacte du profil (nom et avatar). Les mentions ne pingent personne.',
@@ -399,7 +413,7 @@ const STRINGS = {
   es: {
     errGuildOnly: '🔒 Este comando solo funciona dentro de un servidor.',
     errNoPermission: '🔒 Solo los administradores del servidor pueden usar este comando.',
-    apiKeySet: '✅ **Clave API de Gemini guardada** ({key}).\nLa moderación IA ya está activa: los mensajes recopilados se analizan al llegar al límite de tokens y, como máximo, cada 2 horas.',
+    apiKeySet: '✅ **Clave API de Gemini guardada** ({key}).\nLa moderación IA ya está activa: los mensajes recopilados se analizan mucho más a menudo, de inmediato ante señales de riesgo, tras una breve espera en conversaciones pequeñas y, como máximo, con el flush de seguridad de 2 horas.',
     apiKeyInvalid: '❌ **Google rechazó la clave API** ({error}). La clave **no** se guardó. Crea una en [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ La clave API existente se mantuvo sin cambios.',
     apiKeyRemoved: '🗑️ **Clave API de Gemini eliminada.** Ya no se recopilan ni analizan mensajes.',
@@ -425,11 +439,11 @@ const STRINGS = {
     descAntiDeleteOption: 'true = activar anti-borrado, false = desactivar',
 
     helpTitle: '🛡️ Security Bot – Moderación IA con Gemini',
-    helpDesc: 'Este bot recopila **mensajes de texto de usuarios reales** (los admins son inmunes) hasta llenar el límite de tokens para un análisis de Gemini; además, el historial se analiza **cada 2 horas**. Gemini recibe el prompt del sistema, las reglas del servidor y un historial bien formateado, y decide advertencias y timeouts. Si la API falla, **no se pierde nada**: se reintenta hasta lograrlo.',
+    helpDesc: 'Este bot recopila **mensajes de texto de usuarios reales** (los admins son inmunes) y los analiza con Gemini de forma **adaptativa**: de inmediato ante insultos, dogpiling o menciones repetidas, tras una breve espera en conversaciones pequeñas y, como máximo, con el flush de seguridad de 2 horas. Gemini recibe el prompt del sistema, las reglas del servidor, contexto de respuestas/menciones y nombres reales del servidor/globales/usuario, y decide advertencias y timeouts. Si la API falla, **no se pierde nada**: se reintenta hasta lograrlo.',
     helpApiKey: 'Guarda la clave API de Google Gemini para este servidor. Debe configurarse una vez antes de empezar la vigilancia.',
     helpPrompt: 'Abre un formulario con tus instrucciones de IA: reglas del servidor, rigor de moderación y medidas que debe usar Gemini. Tu último texto ya está rellenado.',
     helpLogChannel: 'Establece el canal de registro para avisos de moderación y errores de API. Sin canal, se elimina el registro.',
-    helpLanguage: 'Cambia el idioma del bot de forma permanente (también controla la zona horaria del análisis cada 2 horas y el idioma predeterminado de la IA).',
+    helpLanguage: 'Cambia el idioma del bot de forma permanente (también controla la zona horaria del flush de seguridad y el idioma predeterminado de la IA).',
     helpHelp: 'Muestra este resumen.',
     helpCheckNow: 'Analiza de inmediato los mensajes ya recopilados, sin esperar el límite de tokens ni el próximo análisis bihorario. La opción `user` permite elegir un usuario que será moderado obligatoriamente en esta revisión.',
     helpAntiDelete: 'Activa o desactiva el anti-borrado: si alguien (ni bot ni webhook) elimina su propio último mensaje de un canal, el bot lo reenvía vía webhook con una copia exacta del perfil (nombre y avatar). Las menciones no notifican a nadie.',
@@ -495,7 +509,7 @@ const STRINGS = {
   pt: {
     errGuildOnly: '🔒 Este comando só funciona dentro de um servidor.',
     errNoPermission: '🔒 Apenas administradores do servidor podem usar este comando.',
-    apiKeySet: '✅ **Chave de API do Gemini salva** ({key}).\nA moderação por IA já está ativa – as mensagens coletadas são analisadas ao atingir o limite de tokens e, no máximo, a cada 2 horas.',
+    apiKeySet: '✅ **Chave de API do Gemini salva** ({key}).\nA moderação por IA já está ativa – as mensagens coletadas são analisadas com muito mais frequência: imediatamente em sinais de risco, após uma breve espera em conversas pequenas e, no máximo, pelo flush de segurança de 2 horas.',
     apiKeyInvalid: '❌ **O Google rejeitou a chave de API** ({error}). A chave **não** foi salva. Crie uma em [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ A chave de API existente foi mantida.',
     apiKeyRemoved: '🗑️ **Chave de API do Gemini removida.** As mensagens não são mais coletadas nem analisadas.',
@@ -521,13 +535,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = ativar anti-exclusão, false = desativar',
 
     helpTitle: '🛡️ Security Bot – Moderação por IA com Gemini',
-    helpDesc: 'Este bot coleta **mensagens de texto de usuários reais** (admins são imunes) até encher o limite de tokens para uma análise do Gemini – além disso, o histórico é analisado **a cada 2 horas**. O Gemini recebe o prompt do sistema, as regras do servidor e um histórico bem formatado e decide avisos e timeouts. Se a API falhar, **nada se perde**: as tentativas continuam até dar certo.',
+    helpDesc: 'Este bot coleta **mensagens de texto de usuários reais** (admins são imunes) e os analisa com o Gemini de forma **adaptativa**: imediatamente em insultos, dogpiling ou menções repetidas, após uma breve espera em conversas pequenas e, no máximo, pelo flush de segurança de 2 horas. O Gemini recebe o prompt do sistema, as regras do servidor, contexto de respostas/menções e nomes reais do servidor/globais/usuário, e decide avisos e timeouts. Se a API falhar, **nada se perde**: as tentativas continuam até dar certo.',
     helpApiKey: 'Salva a chave de API do Google Gemini para este servidor. Precisa ser definida uma vez antes do monitoramento começar.',
     helpPrompt: 'Abre um formulário com suas instruções para a IA: regras do servidor, rigor da moderação e medidas que o Gemini deve usar. Seu último texto já vem preenchido.',
     helpLogChannel: 'Define o canal de registro para avisos de moderação e erros de API. Sem canal, o registro é removido.',
-    helpLanguage: 'Muda o idioma do bot permanentemente (também controla o fuso horário da análise a cada 2 horas e o idioma padrão da IA).',
+    helpLanguage: 'Muda o idioma do bot permanentemente (também controla o fuso horário do flush de segurança e o idioma padrão da IA).',
     helpHelp: 'Mostra este resumo.',
-    helpCheckNow: 'Analisa imediatamente as mensagens já coletadas, sem esperar o limite de tokens ou a próxima análise de 2 em 2 horas. A opção `user` permite escolher um usuário que será moderado obrigatoriamente nesta verificação.',
+    helpCheckNow: 'Analisa imediatamente as mensagens já coletadas, sem esperar o flush automático adaptativo. A opção `user` permite escolher um usuário que será moderado obrigatoriamente nesta verificação.',
     helpAntiDelete: 'Ativa ou desativa o anti-exclusão: se alguém (não bot/webhook) apagar a própria última mensagem de um canal, o bot a reenvia via webhook com uma cópia exata do perfil (nome e avatar). Menções nunca notificam ninguém.',
     logModTitle: '🛡️ Moderação por IA',
     logFieldUser: 'Usuário',
@@ -591,7 +605,7 @@ const STRINGS = {
   ru: {
     errGuildOnly: '🔒 Эта команда работает только на сервере.',
     errNoPermission: '🔒 Эту команду могут использовать только администраторы сервера.',
-    apiKeySet: '✅ **API-ключ Gemini сохранён** ({key}).\nИИ-модерация активна – собранные сообщения анализируются по достижении лимита токенов и не реже одного раза в 2 часа.',
+    apiKeySet: '✅ **API-ключ Gemini сохранён** ({key}).\nИИ-модерация активна – собранные сообщения анализируются намного чаще: сразу при риск-сигналах, после короткой паузы в небольших диалогах и не позже защитного 2-часового flush.',
     apiKeyInvalid: '❌ **Google отклонил API-ключ** ({error}). Ключ **не** сохранён. Создайте его на [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ Существующий API-ключ оставлен без изменений.',
     apiKeyRemoved: '🗑️ **API-ключ Gemini удалён.** Сообщения больше не собираются и не анализируются.',
@@ -617,13 +631,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = включить анти-удаление, false = выключить',
 
     helpTitle: '🛡️ Security Bot – ИИ-модерация с Gemini',
-    helpDesc: 'Бот собирает **текстовые сообщения реальных пользователей** (админы неприкосновенны), пока не заполнится лимит токенов для анализа Gemini – кроме того, история анализируется **каждые 2 часа**. Gemini получает системный промпт, правила сервера и аккуратно оформленную историю чата, после чего решает, кого предупредить или выдать тайм-аут. При сбое API **ничего не теряется**: попытки повторяются до успеха.',
+    helpDesc: 'Бот собирает **текстовые сообщения реальных пользователей** (админы неприкосновенны) и анализирует их в Gemini **адаптивно**: сразу при оскорблениях, догпайлинге или повторных упоминаниях, после короткой паузы в небольших диалогах и не позже защитного 2-часового flush. Gemini получает системный промпт, правила сервера, контекст ответов/упоминаний и реальные серверные/глобальные/пользовательские имена, после чего решает, кого предупредить или выдать тайм-аут. При сбое API **ничего не теряется**: попытки повторяются до успеха.',
     helpApiKey: 'Сохраняет API-ключ Google Gemini для этого сервера. Должен быть задан один раз перед началом наблюдения.',
     helpPrompt: 'Открывает форму с вашими инструкциями для ИИ: правила сервера, строгость модерации и меры, которые применяет Gemini. Ваш последний текст уже вставлен.',
     helpLogChannel: 'Задаёт канал журнала для уведомлений о модерации и ошибок API. Без канала журнал удаляется.',
-    helpLanguage: 'Навсегда меняет язык бота (также задаёт часовой пояс анализа каждые 2 часа и язык ИИ по умолчанию).',
+    helpLanguage: 'Навсегда меняет язык бота (также задаёт часовой пояс защитного flush и язык ИИ по умолчанию).',
     helpHelp: 'Показывает этот обзор.',
-    helpCheckNow: 'Немедленно анализирует уже собранные сообщения, не дожидаясь лимита токенов или следующего запуска раз в 2 часа. Опция `user` позволяет выбрать пользователя, который будет обязательно модерирован при этой проверке.',
+    helpCheckNow: 'Немедленно анализирует уже собранные сообщения, не дожидаясь адаптивного авто-flush. Опция `user` позволяет выбрать пользователя, который будет обязательно модерирован при этой проверке.',
     helpAntiDelete: 'Включает или выключает анти-удаление: если кто-то (не бот и не вебхук) удалит своё последнее сообщение в канале, бот отправит его заново вебхуком с точной копией профиля (имя и аватар). Упоминания никого не уведомляют.',
     logModTitle: '🛡️ ИИ-модерация',
     logFieldUser: 'Пользователь',
@@ -687,7 +701,7 @@ const STRINGS = {
   ja: {
     errGuildOnly: '🔒 このコマンドはサーバー内でのみ使用できます。',
     errNoPermission: '🔒 このコマンドを使用できるのはサーバー管理者のみです。',
-    apiKeySet: '✅ **Gemini APIキーを保存しました**（{key}）。\nAIモデレーションが有効になりました。収集したメッセージはトークン上限に達し次第、遅くとも2時間ごとに分析されます。',
+    apiKeySet: '✅ **Gemini APIキーを保存しました**（{key}）。\nAIモデレーションが有効になりました。収集したメッセージは、危険サインがあれば即時、小さな会話は短い待機後、遅くとも2時間のセーフティフラッシュで分析されます。',
     apiKeyInvalid: '❌ **GoogleにAPIキーを拒否されました**（{error}）。キーは保存されて**いません**。[aistudio.google.com](https://aistudio.google.com/apikey) で作成してください。',
     apiKeyKept: 'ℹ️ 既存のAPIキーはそのまま維持されました。',
     apiKeyRemoved: '🗑️ **Gemini APIキーを削除しました。** メッセージの収集と分析を停止します。',
@@ -713,13 +727,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = アンチ削除を有効化、false = 無効化',
 
     helpTitle: '🛡️ Security Bot – GeminiによるAIモデレーション',
-    helpDesc: 'このボットは、Geminiで分析するためのトークン上限に達するまで**実際のユーザーのテキストメッセージ**を収集します（管理者は対象外）。さらに、履歴は**2時間ごと**にも分析されます。Geminiはシステムプロンプト・サーバーのルール・整形されたチャット履歴を受け取り、警告やタイムアウトを決定します。APIエラー時も**何も失われません**：成功するまで再試行を続けます。',
+    helpDesc: 'このボットは**実際のユーザーのテキストメッセージ**を収集し（管理者は対象外）、Geminiで**適応的**に分析します。侮辱・ドッグパイル・繰り返しメンションなどの危険サインは即時、小さな会話は短い待機後、遅くとも2時間のセーフティフラッシュで分析されます。Geminiはシステムプロンプト、サーバールール、返信/メンション文脈、実際のサーバー名・グローバル名・ユーザー名を受け取り、警告やタイムアウトを決定します。APIエラー時も**何も失われません**：成功するまで再試行を続けます。',
     helpApiKey: 'このサーバーのGoogle Gemini APIキーを保存します。監視開始前に一度設定してください。',
     helpPrompt: 'AIへの指示フォームを開きます：サーバーのルール、モデレーションの厳しさ、Geminiが使う措置。最後に保存したテキストが入力済みです。',
     helpLogChannel: 'モデレーションのお知らせやAPIエラー用のログチャンネルを設定します。チャンネルを指定しない場合は削除されます。',
-    helpLanguage: 'ボットの言語を永久に変更します（2時間ごとの分析のタイムゾーンとAIのデフォルト言語にも影響します）。',
+    helpLanguage: 'ボットの言語を永久に変更します（セーフティフラッシュのタイムゾーンとAIのデフォルト言語にも影響します）。',
     helpHelp: 'この概要を表示します。',
-    helpCheckNow: 'トークン上限や次の2時間ごとの分析を待たずに、これまでに収集したメッセージを今すぐ分析します。`user` オプションで必ずモデレートするユーザーを指定できます。',
+    helpCheckNow: '適応的な自動フラッシュを待たずに、これまでに収集したメッセージを今すぐ分析します。`user` オプションで必ずモデレートするユーザーを指定できます。',
     helpAntiDelete: 'アンチ削除のオン／オフ：誰かが（ボット・Webhook以外）自分の最後のメッセージを削除した場合、ボットが正確なプロフィール（名前とアバター）でWebhook経由で再送信します。メンションは通知されません。',
     logModTitle: '🛡️ AIモデレーション',
     logFieldUser: 'ユーザー',
@@ -783,7 +797,7 @@ const STRINGS = {
   ko: {
     errGuildOnly: '🔒 이 명령어는 서버 안에서만 사용할 수 있습니다.',
     errNoPermission: '🔒 서버 관리자만 이 명령어를 사용할 수 있습니다.',
-    apiKeySet: '✅ **Gemini API 키가 저장되었습니다** ({key}).\nAI 검열이 활성화되었습니다. 수집된 메시지는 토큰 한도에 도달하면, 늦어도 2시간마다 분석됩니다.',
+    apiKeySet: '✅ **Gemini API 키가 저장되었습니다** ({key}).\nAI 검열이 활성화되었습니다. 수집된 메시지는 위험 신호가 있으면 즉시, 작은 대화는 짧은 대기 후, 늦어도 2시간 안전 플러시로 분석됩니다.',
     apiKeyInvalid: '❌ **Google이 API 키를 거부했습니다** ({error}). 키는 저장되지 **않았습니다**. [aistudio.google.com](https://aistudio.google.com/apikey)에서 만들어 주세요.',
     apiKeyKept: 'ℹ️ 기존 API 키가 그대로 유지되었습니다.',
     apiKeyRemoved: '🗑️ **Gemini API 키가 삭제되었습니다.** 더 이상 메시지를 수집하거나 분석하지 않습니다.',
@@ -809,13 +823,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = 안티 삭제 켜기, false = 끄기',
 
     helpTitle: '🛡️ Security Bot – Gemini AI 검열',
-    helpDesc: '이 봇은 Gemini 분석 토큰 한도가 채워질 때까지 **실제 사용자의 텍스트 메시지**를 수집합니다(관리자는 면역). 또한 2시간마다 기록을 분석합니다. Gemini는 시스템 프롬프트, 서버 규칙, 정리된 채팅 기록을 받아 경고와 타임아웃을 결정합니다. API 오류가 발생해도 **아무것도 사라지지 않습니다**: 성공할 때까지 재시도합니다.',
+    helpDesc: '이 봇은 **실제 사용자의 텍스트 메시지**를 수집하고(관리자는 면역), Gemini로 **적응형** 분석을 합니다. 모욕, 집단 공격, 반복 멘션 같은 위험 신호는 즉시, 작은 대화는 짧은 대기 후, 늦어도 2시간 안전 플러시로 분석됩니다. Gemini는 시스템 프롬프트, 서버 규칙, 답글/멘션 맥락과 실제 서버/글로벌/사용자 이름을 받아 경고와 타임아웃을 결정합니다. API 오류가 발생해도 **아무것도 사라지지 않습니다**: 성공할 때까지 재시도합니다.',
     helpApiKey: '이 서버의 Google Gemini API 키를 저장합니다. 모니터링 시작 전 한 번 설정해야 합니다.',
     helpPrompt: 'AI 지시사항 양식을 엽니다: 서버 규칙, 검열 엄격함, Gemini가 사용할 조치. 마지막으로 저장한 텍스트가 미리 채워져 있습니다.',
     helpLogChannel: '검열 알림과 API 오류를 위한 로그 채널을 설정합니다. 채널 없이 호출하면 제거됩니다.',
-    helpLanguage: '봇 언어를 영구적으로 변경합니다 (2시간 주기 분석의 시간대와 AI 기본 언어에도 영향).',
+    helpLanguage: '봇 언어를 영구적으로 변경합니다 (안전 플러시 시간대와 AI 기본 언어에도 영향).',
     helpHelp: '이 개요를 표시합니다.',
-    helpCheckNow: '토큰 한도나 다음 2시간 주기 분석을 기다리지 않고 지금까지 수집된 메시지를 즉시 분석합니다. `user` 옵션으로 반드시 모더레이션할 사용자를 지정할 수 있습니다.',
+    helpCheckNow: '적응형 자동 플러시를 기다리지 않고 지금까지 수집된 메시지를 즉시 분석합니다. `user` 옵션으로 반드시 모더레이션할 사용자를 지정할 수 있습니다.',
     helpAntiDelete: '안티 삭제 켜기/끄기: 누군가(봇/웹훅 제외) 자신의 마지막 메시지를 삭제하면 봇이 정확한 프로필(이름과 아바타)로 웹훅을 통해 다시 본냅니다. 멘션은 알림을 본내지 않습니다.',
     logModTitle: '🛡️ AI 검열',
     logFieldUser: '사용자',
@@ -879,7 +893,7 @@ const STRINGS = {
   zh: {
     errGuildOnly: '🔒 此命令只能在服务器内使用。',
     errNoPermission: '🔒 只有服务器管理员才能使用此命令。',
-    apiKeySet: '✅ **Gemini API 密钥已保存**（{key}）。\nAI 审核已启用——收集的消息将在达到令牌上限时分析，最迟每 2 小时分析一次。',
+    apiKeySet: '✅ **Gemini API 密钥已保存**（{key}）。\nAI 审核已启用——收集的消息会更频繁地分析：出现风险信号时立即分析，小型对话短暂等待后分析，并且最迟通过 2 小时安全刷新分析。',
     apiKeyInvalid: '❌ **Google 拒绝了该 API 密钥**（{error}）。密钥**未**保存。请在 [aistudio.google.com](https://aistudio.google.com/apikey) 创建。',
     apiKeyKept: 'ℹ️ 现有 API 密钥保持不变。',
     apiKeyRemoved: '🗑️ **Gemini API 密钥已删除。** 不再收集或分析消息。',
@@ -905,13 +919,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = 开启反删除，false = 关闭',
 
     helpTitle: '🛡️ Security Bot – Gemini AI 审核',
-    helpDesc: '此机器人收集**真实用户的文本消息**（管理员免疫），直到达到一次 Gemini 分析的令牌上限——此外，**每 2 小时**也会分析历史记录。Gemini 会收到系统提示词、服务器规则和格式良好的聊天记录，然后决定警告与禁言。API 出错时**不会丢失任何内容**：会不断重试直到成功。',
+    helpDesc: '此机器人收集**真实用户的文本消息**（管理员免疫），并用 Gemini **自适应**分析：出现侮辱、围攻或重复提及时立即分析，小型对话短暂等待后分析，并且最迟通过 2 小时安全刷新分析。Gemini 会收到系统提示词、服务器规则、回复/提及上下文以及真实的服务器/全局/用户名，然后决定警告与禁言。API 出错时**不会丢失任何内容**：会不断重试直到成功。',
     helpApiKey: '保存此服务器的 Google Gemini API 密钥。开始监控前必须设置一次。',
     helpPrompt: '打开 AI 指令表单：服务器规则、审核严格程度以及 Gemini 应采取的措施。已预填您上次保存的文本。',
     helpLogChannel: '设置用于审核通知和 API 错误的日志频道。不带频道调用则移除日志频道。',
-    helpLanguage: '永久更改机器人语言（同时控制每 2 小时分析的时区和 AI 默认语言）。',
+    helpLanguage: '永久更改机器人语言（同时控制安全刷新的时区和 AI 默认语言）。',
     helpHelp: '显示此概览。',
-    helpCheckNow: '无需等待令牌上限或下一次每 2 小时的分析，立即分析目前已收集的消息。可通过 `user` 选项指定一位必须被审核的用户。',
+    helpCheckNow: '无需等待自适应自动刷新，立即分析目前已收集的消息。可通过 `user` 选项指定一位必须被审核的用户。',
     helpAntiDelete: '开启或关闭反删除：当有人（非机器人/Webhook）删除自己在频道中的最后一条消息时，机器人会通过 Webhook 以完全相同的个人资料（名称和头像）重新发送。提及不会通知任何人。',
     logModTitle: '🛡️ AI 审核',
     logFieldUser: '用户',
@@ -975,7 +989,7 @@ const STRINGS = {
   it: {
     errGuildOnly: '🔒 Questo comando funziona solo dentro un server.',
     errNoPermission: '🔒 Solo gli amministratori del server possono usare questo comando.',
-    apiKeySet: '✅ **Chiave API Gemini salvata** ({key}).\nLa moderazione IA è ora attiva – i messaggi raccolti vengono analizzati al raggiungimento del limite di token e comunque ogni 2 ore.',
+    apiKeySet: '✅ **Chiave API Gemini salvata** ({key}).\nLa moderazione IA è ora attiva – i messaggi raccolti vengono analizzati molto più spesso: subito in presenza di segnali di rischio, dopo una breve attesa per conversazioni piccole e comunque tramite flush di sicurezza di 2 ore.',
     apiKeyInvalid: '❌ **Google ha rifiutato la chiave API** ({error}). La chiave **non** è stata salvata. Creane una su [aistudio.google.com](https://aistudio.google.com/apikey).',
     apiKeyKept: 'ℹ️ La chiave API esistente è stata mantenuta.',
     apiKeyRemoved: '🗑️ **Chiave API Gemini rimossa.** I messaggi non vengono più raccolti né analizzati.',
@@ -1001,13 +1015,13 @@ const STRINGS = {
     descAntiDeleteOption: 'true = attiva anti-eliminazione, false = disattiva',
 
     helpTitle: '🛡️ Security Bot – Moderazione IA con Gemini',
-    helpDesc: 'Questo bot raccoglie i **messaggi di testo degli utenti reali** (gli admin sono immuni) fino al limite di token per un’analisi Gemini – in aggiunta, la cronologia viene analizzata **ogni 2 ore**. Gemini riceve il prompt di sistema, le regole del server e una cronologia ben formattata, poi decide avvisi e timeout. Se l’API fallisce, **non si perde nulla**: i tentativi continuano finché non riesce.',
+    helpDesc: 'Questo bot raccoglie i **messaggi di testo degli utenti reali** (gli admin sono immuni) e li analizza con Gemini in modo **adattivo**: subito per insulti, dogpiling o menzioni ripetute, dopo una breve attesa per conversazioni piccole e comunque tramite flush di sicurezza di 2 ore. Gemini riceve il prompt di sistema, le regole del server, il contesto di risposte/menzioni e i veri nomi server/globali/utente, poi decide avvisi e timeout. Se l’API fallisce, **non si perde nulla**: i tentativi continuano finché non riesce.',
     helpApiKey: 'Salva la chiave API Google Gemini per questo server. Va impostata una volta prima di avviare il controllo.',
     helpPrompt: 'Apre un modulo con le tue istruzioni per l’IA: regole del server, severità della moderazione e misure da usare. L’ultimo testo salvato è già compilato.',
     helpLogChannel: 'Imposta il canale di log per avvisi di moderazione ed errori API. Senza canale, il log viene rimosso.',
-    helpLanguage: 'Cambia permanentemente la lingua del bot (controlla anche il fuso orario dell’analisi ogni 2 ore e la lingua predefinita dell’IA).',
+    helpLanguage: 'Cambia permanentemente la lingua del bot (controlla anche il fuso orario del flush di sicurezza e la lingua predefinita dell’IA).',
     helpHelp: 'Mostra questa panoramica.',
-    helpCheckNow: 'Analizza subito i messaggi già raccolti, senza attendere il limite di token o la prossima analisi ogni 2 ore. L’opzione `user` permette di scegliere un utente che sarà moderato obbligatoriamente in questo controllo.',
+    helpCheckNow: 'Analizza subito i messaggi già raccolti, senza attendere il flush automatico adattivo. L’opzione `user` permette di scegliere un utente che sarà moderato obbligatoriamente in questo controllo.',
     helpAntiDelete: 'Attiva o disattiva l’anti-eliminazione: se qualcuno (non bot/webhook) elimina il proprio ultimo messaggio di un canale, il bot lo reinvia via webhook con una copia esatta del profilo (nome e avatar). Le menzioni non notificano nessuno.',
     logModTitle: '🛡️ Moderazione IA',
     logFieldUser: 'Utente',

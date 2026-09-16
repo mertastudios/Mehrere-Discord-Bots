@@ -38,6 +38,7 @@ const {
 } = require('./embed-builder');
 const { sendLogNotice } = require('./notices');
 const { t, tzFor } = require('./languages');
+const { reserveGeminiSlot, noteGemini429 } = require('./rate-limit');
 
 const MAX_MODERATIONS_PER_BATCH = 10;
 const NO_KEY_RETRY_MS = 6 * 60 * 60 * 1000;
@@ -267,6 +268,7 @@ async function processSingleBatch(ctx, guildId, batch) {
     participantMap.set(m.authorId, {
       authorId: m.authorId,
       authorName: m.authorName,
+      authorMeta: m.authorMeta || prev?.authorMeta || null,
       isAdmin: Boolean(prev?.isAdmin || m.isAdmin),
     });
   }
@@ -287,9 +289,26 @@ async function processSingleBatch(ctx, guildId, batch) {
     logText: buildChatLog(messages),
   });
 
+  const estimatedTokens = Math.ceil((systemPrompt.length + userPrompt.length) / 3);
+  const slot = reserveGeminiSlot({ ctx, apiKey, env: ctx.env, estimatedTokens });
+  if (!slot.allowed) {
+    batch.nextRetryAt = slot.nextAt;
+    batch.lastError = `local_rate_limit_wait_${Math.ceil(slot.waitMs / 1000)}s`;
+    updateBatch(ctx, gid, batch);
+    void ctx.store.flush();
+    ctx.logger?.info?.(
+      `[security-bot] Gemini-Analyse für Gilde ${gid} lokal gedrosselt: ` +
+        `warte ${Math.ceil(slot.waitMs / 1000)}s (Batch ${batch.id}, ` +
+        `RPM=${slot.config.rpmLimit}, TPM=${slot.config.tpmLimit}, ` +
+        `Tagesbudget=${slot.config.dailyAllowance}/${slot.config.rpdLimit}).`
+    );
+    return false;
+  }
+
   ctx.logger?.info?.(
     `[security-bot] Analyse-Start für Gilde ${gid} (${guildName}): ${messages.length} Nachrichten, ` +
-      `~${Math.ceil((systemPrompt.length + userPrompt.length) / 3)} Tokens geschätzt (Batch ${batch.id}, Versuch ${(batch.retryCount || 0) + 1})`
+      `~${estimatedTokens} Tokens geschätzt (Batch ${batch.id}, Versuch ${(batch.retryCount || 0) + 1}, ` +
+      `Rate ${slot.state.dayCount}/${slot.config.dailyAllowance} heute)`
   );
 
   const res = await callGemini({ apiKey, systemPrompt, userPrompt, env: ctx.env });
@@ -298,7 +317,12 @@ async function processSingleBatch(ctx, guildId, batch) {
     const errorText = `${res.error || 'unbekannt'}${res.message ? `: ${clip(res.message, 200)}` : ''}`;
     batch.retryCount = (batch.retryCount || 0) + 1;
     batch.lastError = errorText;
-    batch.nextRetryAt = Date.now() + nextRetryDelay(batch.retryCount);
+    let retryDelay = nextRetryDelay(batch.retryCount);
+    if (res.status === 429) {
+      const cooldown = noteGemini429({ ctx, apiKey, env: ctx.env, retryAfterMs: res.retryAfterMs });
+      retryDelay = Math.max(retryDelay, cooldown.waitMs || 0);
+    }
+    batch.nextRetryAt = Date.now() + retryDelay;
     updateBatch(ctx, gid, batch);
     void ctx.store.flush();
 
