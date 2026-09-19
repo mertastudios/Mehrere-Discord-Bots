@@ -42,13 +42,16 @@ const ALL_COMMAND_NAMES = [
   'set_anti_delete_messages',
   'set_language',
   'security_check_now',
+  'security_action',
+  'security_status',
   'help',
+  'adminpanel',
 ];
 
-// Alle Commands sind global und ausschließlich im Guild-Context sichtbar.
+// /adminpanel ist – wie bei den anderen Bots – ausschließlich global im Bot-DM.
+const DM_ONLY_COMMAND_NAMES = ['adminpanel'];
 const GLOBAL_COMMAND_NAMES = [...ALL_COMMAND_NAMES];
-const GUILD_COMMAND_NAMES = [...ALL_COMMAND_NAMES];
-const DM_ONLY_COMMAND_NAMES = [];
+const GUILD_COMMAND_NAMES = ALL_COMMAND_NAMES.filter((name) => !DM_ONLY_COMMAND_NAMES.includes(name));
 
 const DISCORD_LOCALE = {
   de: 'de',
@@ -152,19 +155,41 @@ function defineCommands() {
       ),
 
     new SlashCommandBuilder()
+      .setName('security_action')
+      .setDescription('Führt eine gezielte Moderation sofort und ohne KI-Scan aus')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+      .addUserOption((o) => o.setName('user').setDescription('Zu moderierendes Mitglied').setRequired(true))
+      .addStringOption((o) => o.setName('action').setDescription('Exakte Aktion').setRequired(true).addChoices(
+        { name: 'Verwarnen', value: 'warn' }, { name: 'Timeout', value: 'timeout' }, { name: 'Timeout aufheben', value: 'untimeout' }
+      ))
+      .addStringOption((o) => o.setName('reason').setDescription('Begründung für Nutzer und Audit-Log').setRequired(true).setMaxLength(500))
+      .addIntegerOption((o) => o.setName('minutes').setDescription('Timeout-Dauer (1–40320 Minuten)').setMinValue(1).setMaxValue(40320))
+      .addStringOption((o) => o.setName('message_link').setDescription('Optional: Link zur konkreten Beweis-Nachricht')),
+
+    new SlashCommandBuilder()
+      .setName('security_status')
+      .setDescription('Zeigt Konfiguration, Warteschlange und Betriebszustand')
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+    new SlashCommandBuilder()
       .setName('help')
       .setDescription('Zeigt alle Befehle und wie die KI-Moderation funktioniert (nur Admins)')
       .setDescriptionLocalizations(pick('descHelp'))
       .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  ].map((cmd) =>
-    cmd
-      .setContexts(InteractionContextType.Guild)
-      .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
-  );
+
+    new SlashCommandBuilder()
+      .setName('adminpanel')
+      .setDescription('Owner-Panel im Privatchat: Serverübersicht und Verwaltung'),
+  ].map((cmd) => {
+    const dmOnly = cmd.name === 'adminpanel';
+    return cmd
+      .setContexts(dmOnly ? InteractionContextType.BotDM : InteractionContextType.Guild)
+      .setIntegrationTypes(ApplicationIntegrationType.GuildInstall);
+  });
 }
 
 function guildCommandJson() {
-  return defineCommands().map((c) => {
+  return defineCommands().filter((c) => !DM_ONLY_COMMAND_NAMES.includes(c.name)).map((c) => {
     const json = c.toJSON();
     // `contexts` und `integration_types` sind Felder globaler Commands. Ein
     // Guild-Command ist durch seine REST-Route bereits eindeutig auf Guild
@@ -709,6 +734,8 @@ async function handleHelp(ctx, interaction) {
     set_anti_delete_messages: commandMention(ctx, 'set_anti_delete_messages', interaction.guildId),
     set_language: commandMention(ctx, 'set_language', interaction.guildId),
     security_check_now: commandMention(ctx, 'security_check_now', interaction.guildId),
+    security_action: commandMention(ctx, 'security_action', interaction.guildId),
+    security_status: commandMention(ctx, 'security_status', interaction.guildId),
     help: commandMention(ctx, 'help', interaction.guildId),
   };
   const container = buildHelpContainer({ lang, commands });
@@ -856,6 +883,75 @@ async function handleCheckNow(ctx, interaction) {
   );
 }
 
+async function handleSecurityStatus(ctx, interaction) {
+  if (!interaction.inGuild()) return interaction.reply({ content: 'Dieser Befehl funktioniert nur auf einem Server.', ephemeral: true });
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+  const cfg = ctx.store.ensureGuild(interaction.guildId);
+  const pending = ctx.store.countPendingMessages(interaction.guildId);
+  const batches = ctx.store.getBatches(interaction.guildId).length;
+  const lines = [
+    '# 🛡️ Security-Status', '',
+    `**KI-Key:** ${cfg.geminiApiKey ? '✅ eingerichtet' : '❌ fehlt'}`,
+    `**Log-Kanal:** ${cfg.logChannelId ? `<#${cfg.logChannelId}>` : '❌ nicht eingerichtet'}`,
+    `**Sprache:** ${cfg.lang || 'de'}`,
+    `**Anti-Delete:** ${cfg.antiDeleteEnabled ? '✅ aktiv' : '➖ aus'}`,
+    `**Eigener Prompt:** ${cfg.prompt ? `✅ ${cfg.prompt.length} Zeichen` : '➖ Standardregeln'}`,
+    `**Wartende Nachrichten:** ${pending}`,
+    `**Analyse-Batches:** ${batches}`,
+    '',
+    pending ? 'ℹ️ Mit `/security_check_now` wird die Warteschlange analysiert.' : '✅ Die Warteschlange ist leer.',
+    '🎯 `/security_action` handelt dagegen **sofort und deterministisch**, ohne Gemini und unabhängig von bereits gescannten Nachrichten.',
+  ];
+  return interaction.reply(componentsV2Payload([smallContainer(null, lines.join('\n'))], { ephemeral: true }));
+}
+
+async function handleSecurityAction(ctx, interaction) {
+  if (!interaction.inGuild()) return interaction.reply({ content: 'Dieser Befehl funktioniert nur auf einem Server.', ephemeral: true });
+  const lang = guildLang(ctx, interaction);
+  if (!isAdminInteraction(interaction)) return denyMissingPermission(ctx, interaction, lang);
+  const user = interaction.options.getUser('user');
+  const action = interaction.options.getString('action');
+  const reason = interaction.options.getString('reason').trim();
+  const minutes = interaction.options.getInteger('minutes');
+  const link = interaction.options.getString('message_link')?.trim() || null;
+  const member = interaction.guild.members.cache.get(user.id) || await interaction.guild.members.fetch(user.id).catch(() => null);
+  if (!member || user.bot || member.permissions?.has?.(PermissionFlagsBits.Administrator)) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, '❌ Bots, unbekannte Mitglieder und Administratoren können nicht als Ziel verwendet werden.')], { ephemeral: true }));
+  }
+  if (action === 'timeout' && !minutes) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, '❌ Für einen Timeout musst du `minutes` angeben.')], { ephemeral: true }));
+  }
+  if ((action === 'timeout' || action === 'untimeout') && member.moderatable === false) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, '❌ Ich kann dieses Mitglied wegen der Rollen-Hierarchie nicht timeouten.')], { ephemeral: true }));
+  }
+  const evidence = link ? `\nBeweis: ${link}` : '';
+  const actor = interaction.user.tag || interaction.user.username;
+  try {
+    if (action === 'timeout') await member.timeout(minutes * 60_000, `${reason} | durch ${actor}`);
+    if (action === 'untimeout') await member.timeout(null, `${reason} | durch ${actor}`);
+    if (action === 'warn' || action === 'timeout') {
+      const label = action === 'warn' ? 'Verwarnung' : `Timeout (${minutes} Min.)`;
+      await user.send(`🛡️ **${label} auf ${interaction.guild.name}**\nGrund: ${reason}${evidence}`).catch(() => null);
+    }
+    // Optional exakt auf die angegebene Nachricht antworten; sie wird nicht erst von Gemini gesucht oder gescannt.
+    if (link) {
+      const match = link.match(/discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/);
+      if (match && match[1] === interaction.guildId) {
+        const channel = await interaction.guild.channels.fetch(match[2]).catch(() => null);
+        const message = await channel?.messages?.fetch?.(match[3]).catch(() => null);
+        if (message) await message.reply(`🛡️ Moderationsmaßnahme für <@${user.id}>: **${action === 'warn' ? 'Verwarnung' : action === 'timeout' ? `Timeout (${minutes} Min.)` : 'Timeout aufgehoben'}**\nGrund: ${reason}`);
+      }
+    }
+    const result = `✅ <@${user.id}>: **${action === 'warn' ? 'verwarnt' : action === 'timeout' ? `${minutes} Minuten timeout` : 'Timeout aufgehoben'}**.\nGrund: ${reason}${evidence}\n\nDiese Aktion wurde direkt ausgeführt – **kein KI-Scan und keine Abhängigkeit vom Nachrichtenpuffer**.`;
+    const { sendLogNotice } = require('./notices');
+    await sendLogNotice(ctx, interaction.guildId, smallContainer('🎯 Direkte Admin-Maßnahme', `${result}\nAusgeführt von: <@${interaction.user.id}>`));
+    return interaction.reply(componentsV2Payload([smallContainer(null, result)], { ephemeral: true }));
+  } catch (err) {
+    return interaction.reply(componentsV2Payload([smallContainer(null, `❌ Aktion fehlgeschlagen: ${String(err.message || err).slice(0, 500)}`)], { ephemeral: true }));
+  }
+}
+
 /**
  * Chat-Input-Router für Slash-Commands.
  */
@@ -873,6 +969,14 @@ async function handleChatInput(ctx, interaction) {
       return handleSetLanguage(ctx, interaction);
     case 'security_check_now':
       return handleCheckNow(ctx, interaction);
+    case 'security_action':
+      return handleSecurityAction(ctx, interaction);
+    case 'security_status':
+      return handleSecurityStatus(ctx, interaction);
+    case 'adminpanel': {
+      const { openPanel } = require('./admin-panel');
+      return openPanel(ctx, interaction);
+    }
     case 'help':
       return handleHelp(ctx, interaction);
     default:
