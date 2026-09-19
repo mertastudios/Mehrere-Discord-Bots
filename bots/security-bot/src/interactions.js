@@ -23,6 +23,11 @@ async function handleInteraction(ctx, interaction) {
     if (interaction.isModalSubmit()) {
       return await handleModalSubmit(ctx, interaction);
     }
+
+    if (interaction.isButton?.() || interaction.isStringSelectMenu?.()) {
+      const { handlePanelInteraction } = require('./admin-panel');
+      return await handlePanelInteraction(ctx, interaction);
+    }
   } catch (err) {
     ctx.logger?.error?.('[security-bot] Fehler bei Interaction-Handling:', err);
     try {

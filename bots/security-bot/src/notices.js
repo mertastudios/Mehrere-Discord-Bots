@@ -55,7 +55,15 @@ async function sendJoinNotice(ctx, guild) {
     const ownerUser =
       ctx.client.users.cache.get(ctx.ownerId) || (await ctx.client.users.fetch(ctx.ownerId));
     const dm = await ownerUser.createDM();
-    const text = t('joinDesc', 'de', {});
+    const text = [
+      `🏷️ **${guild.name}**`,
+      `👥 **${(guild.memberCount || 0).toLocaleString('de-DE')} Mitglieder**`,
+      `👑 **Server-Owner:** ${guild.ownerId ? `<@${guild.ownerId}>` : 'unbekannt'}`,
+      '',
+      'Der Server ist jetzt im **/adminpanel** verfügbar. Dort siehst du den Sicherheitsstatus, kannst eine einmalige Einladung erstellen oder den Server verlassen.',
+      '',
+      t('joinDesc', 'de', {}),
+    ].join('\n');
     try {
       await dm.send(componentsV2Payload([smallContainer(t('joinTitle', 'de'), text)]));
     } catch {

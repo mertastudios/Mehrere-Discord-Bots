@@ -45,6 +45,10 @@ function buildHelpContainer({ lang, commands }) {
     '',
     `**${commands.security_check_now}**\n${t('helpCheckNow', lang)}`,
     '',
+    `**${commands.security_action}**\n🎯 Führt eine Verwarnung oder einen Timeout exakt für das gewählte Mitglied aus – optional mit konkretem Nachrichtenlink, ohne KI-Warteschlange.`,
+    '',
+    `**${commands.security_status}**\n📊 Zeigt Key, Log-Kanal, Prompt, Anti-Delete und wartende Analysen auf einen Blick.`,
+    '',
     `**${commands.help}**\n${t('helpHelp', lang)}`,
   ];
 
