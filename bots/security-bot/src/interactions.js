@@ -25,6 +25,12 @@ async function handleInteraction(ctx, interaction) {
     }
 
     if (interaction.isButton?.() || interaction.isStringSelectMenu?.()) {
+      // Die Auswahl-Oberfläche von /security_action hat Vorrang vor dem
+      // Owner-Adminpanel (eigener customId-Präfix "secact:").
+      const { isTargetedActionInteraction, handleComponent } = require('./targeted-action');
+      if (isTargetedActionInteraction(interaction)) {
+        return await handleComponent(ctx, interaction);
+      }
       const { handlePanelInteraction } = require('./admin-panel');
       return await handlePanelInteraction(ctx, interaction);
     }
@@ -48,6 +54,12 @@ async function handleInteraction(ctx, interaction) {
 
 async function handleModalSubmit(ctx, interaction) {
   const id = interaction.customId;
+
+  // Freier KI-Auftrag (/security_ai_order)
+  const { MODAL_ID: ORDER_MODAL_ID, handleAiOrderModal } = require('./ai-order');
+  if (id === ORDER_MODAL_ID) {
+    return handleAiOrderModal(ctx, interaction);
+  }
 
   if (id === 'secgem_modal_prompt') {
     if (!interaction.inGuild()) {

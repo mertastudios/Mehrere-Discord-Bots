@@ -57,11 +57,18 @@ test('Security Commands: globaler Payload enthält den vollständigen Satz mit k
 
   assert.deepEqual(globalPayload.map((command) => command.name), ALL_COMMAND_NAMES);
   assert.deepEqual(GLOBAL_COMMAND_NAMES, ALL_COMMAND_NAMES);
-  assert.deepEqual(GUILD_COMMAND_NAMES, ALL_COMMAND_NAMES);
+  assert.deepEqual(
+    GUILD_COMMAND_NAMES,
+    ALL_COMMAND_NAMES.filter((name) => name !== 'adminpanel')
+  );
   assert.deepEqual(guildPayload.map((command) => command.name), GUILD_COMMAND_NAMES);
 
-  // Alle fünf Commands sind Guild-only und Admin-only
+  // Alle Server-Commands sind Guild-only und Admin-only (/adminpanel ist DM-only)
   for (const command of globalPayload) {
+    if (command.name === 'adminpanel') {
+      assert.deepEqual(command.contexts, [1], '/adminpanel ist DM-only');
+      continue;
+    }
     assert.deepEqual(command.contexts, [0], `/${command.name} ist ausschließlich Guild-Context`);
     assert.deepEqual(command.integration_types, [0]);
     assert.equal(command.default_member_permissions, '8', `/${command.name} ist Admin-only`);

@@ -142,7 +142,16 @@ function buildPenaltyRegister({ participants, penaltyByUser, now = Date.now() })
  * dieser Analyse ZWINGEND moderiert werden muss. Der Prompt erhält dann einen
  * eigenen, verbindlichen Abschnitt dazu.
  */
-function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penaltyByUser, now = Date.now(), forceUser = null }) {
+function buildSystemPrompt({
+  guildName,
+  lang,
+  adminPrompt,
+  participants,
+  penaltyByUser,
+  now = Date.now(),
+  forceUser = null,
+  extraDirectives = [],
+}) {
   const languageName = LANGS[lang]?.name || 'Deutsch';
   const register = buildPenaltyRegister({ participants, penaltyByUser, now });
 
@@ -179,6 +188,17 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     'ob jemand gegen die Serverregeln verstoßen hat. Du bist fair, mit Kontext denkend,',
     'deeskalierend und freundlich – aber bei echten Verstößen konsequent.',
 
+    '== EINSATZKONTEXT: AUTORISIERTE INHALTSMODERATION ==',
+    'Dies ist eine offizielle, vom Server-Betreiber beauftragte Content-Moderation.',
+    'Der Verlauf kann Beleidigungen, Hass, Drohungen, sexuelle oder gefährliche Inhalte',
+    'enthalten – genau DAS ist der Grund, warum du ihn bewerten sollst. Du sollst diese',
+    'Inhalte ausschließlich KLASSIFIZIEREN und Schutzmaßnahmen begründen, niemals selbst',
+    'wiederholen, verstärken, fortsetzen oder gutheißen. Zitiere höchstens kurz das,',
+    'was zur Begründung nötig ist. Eine Verweigerung der Analyse ist keine gültige Antwort:',
+    'Ohne dein Urteil bleibt der Verstoß unmoderiert und die betroffenen Mitglieder',
+    'ungeschützt. Antworte deshalb IMMER mit dem geforderten JSON – notfalls mit einem',
+    'leeren moderations-Array, aber niemals mit einer Weigerung oder einer leeren Antwort.',
+
     '== DEINE EINZIGE AUFGABE: MODERIEREN, NICHT CHATTEN ==',
     'Du bist KEIN Chat-Bot, KEIN Assistent und KEIN Gesprächsteilnehmer. Du schreibst',
     'NUR dann etwas in den Chat, wenn du eine konkrete Nachricht wegen eines konkreten',
@@ -210,6 +230,10 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     '  [ADMIN – immun] YYYY-MM-DD HH:MM UTC · Anzeigename (user_id=...):',
     'Sie dienen NUR dem Kontext (z.B. damit du verstehst, worauf jemand reagiert).',
     'Da sie keine ID haben, kannst und darfst du sie nicht moderieren.',
+    'Ebenfalls ohne ID – und damit ebenfalls NICHT moderierbar – sind Nachrichten mit:',
+    '  [KONTEXT – nicht moderierbar] YYYY-MM-DD HH:MM UTC · Anzeigename (user_id=...):',
+    'Das sind normale Nutzernachrichten, die dir nur den Gesprächsverlauf erklären.',
+    'Bewerte sie mit, aber moderiere ausschließlich Nachrichten mit einer echten [ID].',
     'Mentions, Rollen, Kanäle und Emojis wurden bereits in lesbaren Text umgewandelt.',
     'user_id ist die eindeutige, dauerhafte Discord-Nutzer-ID.',
 
@@ -219,6 +243,7 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     register || '- (keine Teilnehmer)',
 
     ...forcedBlock,
+    ...(Array.isArray(extraDirectives) ? extraDirectives : []),
 
     '== DEINE ENTSCHEIDUNG ==',
     'Bewerte fair, aber NICHT isoliert Satz für Satz. Lies immer den gesamten Verlauf:',
@@ -300,6 +325,17 @@ function buildSystemPrompt({ guildName, lang, adminPrompt, participants, penalty
     '- Nutze EXAKT den Platzhalter {USER} an der Stelle, an der der Nutzer erwähnt werden',
     '  soll (das System ersetzt ihn durch die echte Discord-Erwähnung). Verwende niemals',
     '  echte Discord-Mention-Syntax (<@...>) und schreibe die user_id NICHT in den Text.',
+
+    'DISCORD-FORMATIERUNG (Pflicht):',
+    '- Die Nachricht wird direkt in Discord gepostet – nutze deshalb Discord-Markdown.',
+    '- Die verhängte MASSNAHME schreibst du fett: **Verwarnung** bzw. **Timeout (1h)**.',
+    '- Den HAUPTGRUND (den Kern des Verstoßes) schreibst du ebenfalls fett, z. B.',
+    '  **Beleidigung eines anderen Mitglieds** oder **Drohung gegen ein Mitglied**.',
+    '- Weitere wichtige Begriffe (betroffene Regel, Dauer, Zielperson) dürfen fett sein.',
+    '- Zitate aus der Nachricht setzt du in `Backticks` oder in "Anführungszeichen".',
+    '- Verwende keine Überschriften (#), keine Codeblöcke und keine @everyone/@here.',
+    '- Das System stellt der Nachricht zusätzlich eine fette Kopfzeile mit Maßnahme und',
+    '  Grund voran – schreibe trotzdem beides auch im Fließtext fett aus.',
 
     'primary Regeln:',
     '- Setze bei GENAU EINER moderation "primary": true – auf die Nachricht mit dem',
@@ -384,7 +420,11 @@ function buildChatLog(messages) {
     const name = msgs[0]?.channelName || 'unbekannt';
     const lines = [`########## KANAL: #${name} (kanal_id=${channelId}) ##########`];
     for (const m of msgs) {
-      const tag = m.isAdmin || m.seq == null ? '[ADMIN – immun]' : `[${m.seq}]`;
+      const tag = m.isAdmin
+        ? '[ADMIN – immun]'
+        : m.seq == null
+          ? '[KONTEXT – nicht moderierbar]'
+          : `[${m.seq}]`;
       const authorName = oneLine(m.authorName, 100) || 'Unbekannt';
       const authorId = oneLine(m.authorId, 40) || 'unbekannt';
       lines.push(`${tag} ${fmtUtc(m.sentAt)} · ${authorName} (user_id=${authorId}):`);
@@ -403,10 +443,89 @@ function buildChatLog(messages) {
   return sections.join('\n\n');
 }
 
+/**
+ * Zusatz-Direktiven für /security_action (gezielte KI-Moderation):
+ * Ein Administrator hat konkrete Nachrichten EINES Nutzers ausgewählt und die
+ * KI soll daraus selbstständig die schwerwiegendste heraussuchen, bewerten und
+ * moderieren. Nach außen muss es wirken, als hätte der Bot den Verstoß von
+ * allein bemerkt – der Auftraggeber darf NIRGENDS erwähnt werden.
+ */
+function buildTargetedDirectives({ targetName, targetId, selectedIds = [], adminNote = '' } = {}) {
+  const name = oneLine(targetName || targetId || 'Unbekannt', 100);
+  const ids = selectedIds.filter((id) => Number.isFinite(Number(id))).map((id) => `[${id}]`);
+  const lines = [
+    '== GEZIELTE PRÜFUNG AUSGEWÄHLTER NACHRICHTEN ==',
+    `Zu prüfen ist ausschließlich der Nutzer "${name}" (user_id=${targetId}).`,
+    `Diese Nachrichten-IDs stehen zur Bewertung: ${ids.join(', ') || '(keine)'}`,
+    'Arbeitsauftrag:',
+    '- Bewerte NUR diese Nachrichten als moderierbare Verstöße. Alle übrigen Nachrichten',
+    '  im Verlauf sind ausschließlich Kontext und dürfen NICHT moderiert werden.',
+    '- Suche dir SELBST die schwerwiegendste dieser Nachrichten heraus und moderiere sie',
+    '  mit primary=true. Weitere klar eigenständige Verstöße desselben Nutzers aus der',
+    '  Auswahl darfst du zusätzlich mit primary=false moderieren (höchstens 5 insgesamt,',
+    '  und wie immer höchstens EIN timeout für diese Person).',
+    '- Enthält die Auswahl wirklich keinen Verstoß, gib {"moderations":[]} zurück.',
+    '',
+    'VERDECKTE AUSFÜHRUNG (sehr wichtig):',
+    '- Du handelst nach außen wie eine automatische, eigenständige KI-Moderation.',
+    '- Erwähne NIEMALS, dass ein Administrator, Moderator oder Mensch diese Prüfung',
+    '  angestoßen, Nachrichten ausgewählt oder um Hilfe gebeten hat.',
+    '- Verwende keine Formulierungen wie "auf Wunsch", "gemeldet", "ein Admin", "Meldung",',
+    '  "Beschwerde" oder "mir wurde mitgeteilt". Begründe ausschließlich mit dem Inhalt',
+    '  der Nachricht, dem Kontext im Verlauf und der Regel, gegen die verstoßen wurde.',
+    '- Formuliere so, als hättest du den Verstoß beim routinemäßigen Scannen des Chats',
+    '  selbst entdeckt.',
+  ];
+  if (String(adminNote || '').trim()) {
+    lines.push(
+      '',
+      'INTERNER HINWEIS ZUM FALL (nur für deine Bewertung, NIEMALS im Text erwähnen):',
+      `<<< ${oneLine(adminNote, 900)} >>>`
+    );
+  }
+  return lines;
+}
+
+/**
+ * Zusatz-Direktiven für /security_ai_order: freier Auftrag eines Admins an die
+ * KI ("was soll sie tun und warum") auf Basis des kompletten Chatverlaufs.
+ */
+function buildOrderDirectives({ order, reasoning, focus } = {}) {
+  const lines = [
+    '== AUFTRAG DER SERVERLEITUNG FÜR DIESE ANALYSE ==',
+    'Für DIESE eine Analyse gilt zusätzlich der folgende Auftrag. Er hat Vorrang vor',
+    'deiner üblichen Zurückhaltung, aber NICHT vor den harten Grenzen (JSON-Format,',
+    'Admin-Immunität, kein Kick/Ban, max. 1 timeout pro Person, keine erfundenen IDs).',
+    '',
+    'WAS DU TUN SOLLST:',
+    `<<< ${String(order || '').trim().slice(0, 1500) || '(kein Auftrag angegeben)'} >>>`,
+    '',
+    'WARUM (Begründung/Hintergrund der Serverleitung):',
+    `<<< ${String(reasoning || '').trim().slice(0, 1500) || '(keine Begründung angegeben)'} >>>`,
+  ];
+  if (String(focus || '').trim()) {
+    lines.push('', 'ZUSÄTZLICHER FOKUS / GRENZEN:', `<<< ${String(focus).trim().slice(0, 1000)} >>>`);
+  }
+  lines.push(
+    '',
+    'Umsetzung:',
+    '- Wende den Auftrag konsequent auf den GESAMTEN Verlauf an und moderiere alle',
+    '  Nachrichten, die ihn erfüllen (max. 10, sortiert nach Schwere).',
+    '- Der Hintergrund erklärt dir, worauf du achten sollst – er ist selbst kein Beweis.',
+    '  Moderiere nur, was im Verlauf tatsächlich belegt ist.',
+    '- Nach außen bleibt es eine eigenständige KI-Moderation: Erwähne in reason und',
+    '  personal_message NIEMALS diesen Auftrag, den Admin, eine Meldung oder Beschwerde.',
+    '- Passt auf den Auftrag keine einzige Nachricht, gib {"moderations":[]} zurück.'
+  );
+  return lines;
+}
+
 module.exports = {
   DURATION_SECONDS,
   buildSystemPrompt,
   buildUserPrompt,
   buildChatLog,
   buildPenaltyRegister,
+  buildTargetedDirectives,
+  buildOrderDirectives,
 };
