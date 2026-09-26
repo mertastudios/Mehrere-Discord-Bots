@@ -45,7 +45,9 @@ function buildHelpContainer({ lang, commands }) {
     '',
     `**${commands.security_check_now}**\n${t('helpCheckNow', lang)}`,
     '',
-    `**${commands.security_action}**\n🎯 Führt eine Verwarnung oder einen Timeout exakt für das gewählte Mitglied aus – optional mit konkretem Nachrichtenlink, ohne KI-Warteschlange.`,
+    `**${commands.security_action}**\n🕵️ Lässt die **KI** gezielt die letzten ~200 Nachrichten eines Mitglieds prüfen: Du wählst die Nachrichten aus (mehrere Seiten möglich), die KI sucht den schwersten Verstoß, entscheidet über **Verwarnung/Timeout** und begründet öffentlich – als hätte sie es selbst bemerkt. Dein Name taucht nie auf.`,
+    '',
+    `**${commands.security_ai_order}**\n🧠 Formular für einen freien **KI-Auftrag** zum gesamten Chatverlauf: Was soll die KI tun und warum? Sie setzt den Auftrag eigenständig um – der Auftrag selbst bleibt intern.`,
     '',
     `**${commands.security_status}**\n📊 Zeigt Key, Log-Kanal, Prompt, Anti-Delete und wartende Analysen auf einen Blick.`,
     '',
@@ -67,11 +69,11 @@ function buildHelpContainer({ lang, commands }) {
 
 function actionLabel(lang, moderation) {
   if (moderation.action === 'timeout') {
-    let label = `${t('logActionTimeout', lang)} (${moderation.duration})`;
+    let label = `**${t('logActionTimeout', lang)} (${moderation.duration})**`;
     if (moderation.issue) label += ` ⚠️ _(${moderation.issue})_`;
     return label;
   }
-  return t('logActionWarn', lang);
+  return `**${t('logActionWarn', lang)}**`;
 }
 
 /**
@@ -84,7 +86,7 @@ function buildModerationLogContainer({ lang, moderation }) {
     `## ${t('logModTitle', lang)}${moderation.primary ? `\n-# ${t('logPrimary', lang)}` : ''}`,
     `**${t('logFieldUser', lang)}:** <@${moderation.userId}> (\`${moderation.userName || moderation.userId}\`)`,
     `**${t('logFieldAction', lang)}:** ${actionLabel(lang, moderation)}`,
-    `**${t('logFieldReason', lang)}:** ${clip(moderation.reason, 800) || '—'}`,
+    `**${t('logFieldReason', lang)}:** **${clip(moderation.reason, 800).replace(/\*+/g, '') || '—'}**`,
     moderation.excerpt ? `**${t('logFieldMessage', lang)}:**\n>>> ${clip(moderation.excerpt, 400)}` : '',
     moderation.jumpLink ? `${moderation.jumpLink}` : '',
     moderation.batchSize ? `-# ${t('logBatchSize', lang, { count: moderation.batchSize })}` : '',

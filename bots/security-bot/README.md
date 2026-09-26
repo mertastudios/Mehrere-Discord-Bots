@@ -110,6 +110,9 @@ tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett sti
 | `/set_anti_delete_messages [enabled:true/false]` | Schaltet **Anti-Delete** ein oder aus. Aktiv: Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, wird sie per Webhook mit exakter Profil-Kopie (Name & Avatar) erneut gesendet. |
 | `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die Zeitzone des Sicherheits-Flushs & die Standardsprache der KI-Antworten). |
 | `/security_check_now [user]` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf den adaptiven Auto-Flush zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Mit der optionalen Auswahl `user` wird ein Nutzer bestimmt, der bei dieser Prüfung **zwingend moderiert** werden soll (Admin-Anordnung im System-Prompt; Bots/Admins nicht wählbar). |
+| `/security_action [user] [hinweis]` | **Verdeckte KI-Moderation.** Der Bot liest die **letzten ~200 Nachrichten** des Mitglieds live aus der Kanalhistorie, zeigt sie in einem **seitenweisen Mehrfach-Auswahlmenü** (25 Optionen pro Seite – die Auswahl bleibt beim Blättern erhalten) und schickt alle markierten Nachrichten gemeinsam an Gemini. Gemini sucht sich davon **selbst den schwersten Verstoß** heraus, entscheidet über Verwarnung/Timeout und begründet öffentlich – so, als hätte der Bot den Verstoß beim Routine-Scan selbst gefunden. Hat das Mitglied **nichts geschrieben**, bricht der Befehl ab. Optional `hinweis`: interner Kontext für die KI, der **nie** im Chat auftaucht. |
+| `/security_ai_order` | **Freier KI-Auftrag zum gesamten Chatverlauf.** Formular mit *Was soll die KI tun?*, *Warum?* (Begründung/Hintergrund) und optionalem Fokus. Der Bot schickt Auftrag + gesammelten **und** live nachgelesenen Verlauf an Gemini und setzt die Maßnahmen um. Auftrag und Auftraggeber bleiben intern. |
+| `/security_status` | Konfiguration, Warteschlange und Betriebszustand auf einen Blick. |
 | `/help` | Übersicht aller Befehle mit klickbaren Mentions. |
 
 ---
@@ -157,6 +160,51 @@ tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett sti
    umgesetzt. Alle Details wandern in den Log-Kanal.
 6. **Niemand schuldig?** Dann passiert **gar nichts**: keine Nachricht im Chat, kein
    Eintrag im Log-Kanal. Genau das ist der Normalfall.
+
+### 🕵️ Verdeckte Moderation für Admins mit Bauchschmerzen
+
+Manche Admins wollen (oder trauen sich) nicht, selbst zu moderieren – Drama, Stress und
+persönliche Anfeindungen bleiben sonst an ihnen hängen. Genau dafür gibt es
+`/security_action` und `/security_ai_order`:
+
+- **Die Entscheidung trifft immer die KI**, nicht der Admin. Der Admin wählt nur aus,
+  *was angeschaut werden soll*.
+- Im Chat tritt **ausschließlich der Bot** als Moderator auf. Prompt-Regeln verbieten der
+  KI ausdrücklich jede Formulierung wie „auf Wunsch“, „gemeldet“, „ein Admin“ oder
+  „Beschwerde“ – begründet wird nur mit Inhalt, Kontext und Regel.
+- Nur der **Log-Kanal** bekommt einen internen Vermerk, wer die Prüfung angestoßen hat.
+- Die Antwort an den Admin ist **ephemer** (nur für ihn sichtbar).
+
+### 🎨 Discord-Formatierung der Begründungen
+
+Jede öffentliche Moderationsnachricht beginnt mit einer fetten Kopfzeile:
+
+```
+@Max
+**⏱️ Timeout (1h)** · **Beleidigung eines Mitglieds**
+Ausführliche Begründung …
+```
+
+Die **Maßnahme** und der **Hauptgrund** sind immer fett (`**…**`) – im Chat wie im
+Log-Kanal. Die KI wird zusätzlich angewiesen, auch im Fließtext Maßnahme, Regel und
+Dauer fett zu setzen und Zitate in Backticks zu schreiben.
+
+### 🛟 Warum der Bot nicht mehr an schweren Verstößen scheitert
+
+Googles Safety-Filter blockierten bisher genau die Fälle, für die man den Bot braucht:
+Bei harter Toxizität kam HTTP 200 **ohne Text** zurück (`finish_reason: SAFETY`), im Log
+sichtbar als `invalid_model_response (empty_response)`. Jetzt gilt:
+
+- **Alle** Safety-Kategorien (inkl. `HARM_CATEGORY_CIVIC_INTEGRITY`) werden auf `OFF`
+  gesetzt, mit `BLOCK_NONE` als Fallback für ältere Modelle.
+- Die Safety-Abschaltung bleibt **auch im Kompatibilitäts-Fallback** erhalten (früher fiel
+  sie bei einem HTTP 400 stillschweigend weg).
+- Kommt trotzdem eine leere Antwort, degradiert der Client automatisch über eine
+  **Varianten-Leiter** (ohne `responseSchema`, ohne `thinkingConfig`, ohne JSON-MIME),
+  statt aufzugeben.
+- Der System-Prompt erklärt der KI ausdrücklich, dass sie eine **autorisierte
+  Inhaltsmoderation** durchführt und eine Verweigerung keine gültige Antwort ist.
+- Fehlermeldungen im Log nennen jetzt `finish_reason` und `block_reason`.
 
 ### Maßnahmen, die Gemini wählen kann
 

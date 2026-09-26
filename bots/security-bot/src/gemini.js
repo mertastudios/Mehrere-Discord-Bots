@@ -70,12 +70,58 @@ const RESPONSE_SCHEMA = {
   required: ['moderations'],
 };
 
-const SAFETY_OFF = [
+// ---------------------------------------------------------------------------
+// Safety-Filter: Ein Moderationsbot MUSS toxische Inhalte lesen dürfen.
+//
+// Google blockiert sonst schon die Eingabe (promptFeedback.blockReason) oder
+// die Generierung (candidates[0].finishReason = "SAFETY") – genau bei den
+// schweren Verstößen, für die man den Bot eigentlich braucht. Das äußerte sich
+// bisher als `invalid_model_response (empty_response)`.
+//
+// Deshalb: ALLE Kategorien (inkl. CIVIC_INTEGRITY) explizit abschalten.
+// `OFF` ist die härteste Stufe der aktuellen Gemini-Generationen; ältere
+// Modelle kennen nur `BLOCK_NONE`. Beides wird nacheinander probiert.
+// ---------------------------------------------------------------------------
+const SAFETY_CATEGORIES = [
   'HARM_CATEGORY_HARASSMENT',
   'HARM_CATEGORY_HATE_SPEECH',
   'HARM_CATEGORY_SEXUALLY_EXPLICIT',
   'HARM_CATEGORY_DANGEROUS_CONTENT',
-].map((category) => ({ category, threshold: 'BLOCK_NONE' }));
+];
+// Nur neuere Modelle kennen diese Kategorie – sie steht deshalb separat und
+// wird nur in den ersten Varianten mitgeschickt (400 => nächste Variante).
+const SAFETY_CATEGORY_CIVIC = 'HARM_CATEGORY_CIVIC_INTEGRITY';
+
+function safetySettings(threshold, { withCivic = false } = {}) {
+  const categories = withCivic ? [...SAFETY_CATEGORIES, SAFETY_CATEGORY_CIVIC] : SAFETY_CATEGORIES;
+  return categories.map((category) => ({ category, threshold }));
+}
+
+const SAFETY_OFF = safetySettings('OFF', { withCivic: true });
+const SAFETY_BLOCK_NONE = safetySettings('BLOCK_NONE');
+
+/**
+ * Varianten-Leiter für EINEN Modellaufruf. Jede Variante wird der Reihe nach
+ * probiert, sobald die vorherige mit HTTP 400 (Feld nicht unterstützt) oder
+ * mit einer LEEREN Antwort (Safety-Block, MAX_TOKENS, RECITATION) endet.
+ *
+ * Die Reihenfolge geht von „maximal abgesichert“ zu „maximal kompatibel“:
+ *   1. Structured Output + thinking aus + Safety komplett OFF (inkl. Civic)
+ *   2. dasselbe mit dem klassischen BLOCK_NONE (ältere Modelle)
+ *   3. ohne responseSchema (nur JSON-MIME) – manche Modelle liefern mit
+ *      Schema + toxischem Input gar nichts zurück
+ *   4. blanker Aufruf ohne JSON-Zwang: Text wird nachträglich geparst
+ */
+const REQUEST_VARIANTS = [
+  { id: 'schema_safety_off', schema: true, thinking: false, jsonMime: true, safety: SAFETY_OFF, maxOutputTokens: 8192 },
+  { id: 'schema_block_none', schema: true, thinking: false, jsonMime: true, safety: SAFETY_BLOCK_NONE, maxOutputTokens: 8192 },
+  { id: 'no_schema_block_none', schema: false, thinking: false, jsonMime: true, safety: SAFETY_BLOCK_NONE, maxOutputTokens: 8192 },
+  { id: 'plain_text_block_none', schema: false, thinking: null, jsonMime: false, safety: SAFETY_BLOCK_NONE, maxOutputTokens: 4096 },
+  { id: 'bare', schema: false, thinking: null, jsonMime: false, safety: null, maxOutputTokens: 4096 },
+];
+
+/** finishReason-Werte, die bedeuten: „Das Modell hat die Arbeit verweigert“. */
+const BLOCKED_FINISH_REASONS = new Set(['SAFETY', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'RECITATION', 'IMAGE_SAFETY']);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -122,7 +168,8 @@ function retryAfterMsFromResponse(res, payload) {
   return undefined;
 }
 
-function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
+function buildRequestBody({ systemPrompt, userPrompt, variant, responseSchema = RESPONSE_SCHEMA }) {
+  const v = variant || REQUEST_VARIANTS[0];
   const generationConfig = {
     temperature: 0.35,
     topP: 0.9,
@@ -130,22 +177,43 @@ function buildRequestBody({ systemPrompt, userPrompt, withExtras = true }) {
     // deutlich mehr Output-Tokens. 8.192 deckt den Worst Case ab: 10 Moderationen
     // mit jeweils ausführlich begründeter personal_message (mehrere hundert Zeichen
     // pro Nachricht), ohne dass die JSON-Antwort mittendrin abgeschnitten wird.
-    maxOutputTokens: 8192,
-    responseMimeType: 'application/json',
+    maxOutputTokens: v.maxOutputTokens || 8192,
   };
-  if (withExtras) {
-    generationConfig.responseSchema = RESPONSE_SCHEMA;
-    // Thinking komplett aus – kostet sonst Zeit und Output-Tokens, ohne
-    // Mehrwert für dieses einfache Klassifikations-/JSON-Format.
-    generationConfig.thinkingConfig = { thinkingBudget: 0 };
-  }
+  if (v.jsonMime !== false) generationConfig.responseMimeType = 'application/json';
+  if (v.schema && responseSchema) generationConfig.responseSchema = responseSchema;
+  // Thinking komplett aus – kostet sonst Zeit und Output-Tokens, ohne
+  // Mehrwert für dieses einfache Klassifikations-/JSON-Format. In den späten
+  // Kompatibilitätsvarianten (thinking === null) wird das Feld weggelassen.
+  if (v.thinking === false) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
     contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
     generationConfig,
   };
-  if (withExtras) body.safetySettings = SAFETY_OFF;
+  // Safety-Filter deaktivieren: Der Bot IST die Moderation, er muss toxische
+  // Sprache bewerten dürfen, statt von Google vorab blockiert zu werden.
+  if (v.safety) body.safetySettings = v.safety;
   return body;
+}
+
+/**
+ * Zerlegt eine erfolgreiche (HTTP 200) Antwort in Text + Diagnose.
+ * Genau hier entstand bisher `empty_response`: HTTP 200, aber kein Text, weil
+ * Google die Eingabe (promptFeedback.blockReason) oder die Ausgabe
+ * (finishReason = SAFETY) blockiert hat.
+ */
+function inspectResponse(data) {
+  const candidate = data?.candidates?.[0] || null;
+  const parts = candidate?.content?.parts;
+  const text = Array.isArray(parts)
+    ? parts.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('').trim()
+    : '';
+  const finishReason = String(candidate?.finishReason || '').toUpperCase() || null;
+  const blockReason = String(data?.promptFeedback?.blockReason || '').toUpperCase() || null;
+  const blocked =
+    Boolean(blockReason) || (finishReason ? BLOCKED_FINISH_REASONS.has(finishReason) : false);
+  return { text, finishReason, blockReason, blocked, truncated: finishReason === 'MAX_TOKENS' };
 }
 
 /**
@@ -157,6 +225,7 @@ async function callGeminiForModel({
   systemPrompt,
   userPrompt,
   chosenModel,
+  responseSchema,
   fetchFn,
   sleepFn,
   maxQuickRetries,
@@ -167,10 +236,13 @@ async function callGeminiForModel({
   let lastFailure = { ok: false, error: 'retry_exhausted' };
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    // Fallback-Kaskade: Manuelle Gemini-Versionen akzeptieren teils weder
-    // thinkingConfig noch responseSchema/BLOCK_NONE. Wir probieren es erst
-    // mit voller Ausstattung und degradieren bei 400 auf das nötige Minimum.
-    for (const withExtras of [true, false]) {
+    // Varianten-Kaskade: Manche Modelle akzeptieren weder thinkingConfig noch
+    // responseSchema/OFF-Safety, und manche liefern bei hart toxischem Input
+    // trotz HTTP 200 gar keinen Text (Safety-Block). Wir degradieren dann
+    // Schritt für Schritt auf die kompatiblere Variante, statt sofort
+    // aufzugeben – so bleibt gerade der schwere Verstoß moderierbar.
+    let variantFailure = null;
+    for (const variant of REQUEST_VARIANTS) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let res;
@@ -182,14 +254,14 @@ async function callGeminiForModel({
             'x-goog-api-key': apiKey.trim(),
           },
           body: JSON.stringify(
-            buildRequestBody({ systemPrompt, userPrompt, withExtras })
+            buildRequestBody({ systemPrompt, userPrompt, variant, responseSchema })
           ),
           signal: controller.signal,
         });
       } catch (err) {
         const error = err?.name === 'AbortError' ? 'timeout' : 'network_error';
-        lastFailure = { ok: false, error, message: err?.message };
-        break; // Netzwerkfehler -> kein Schema-Fallback nötig, äußerer Retry greift
+        variantFailure = { ok: false, error, message: err?.message };
+        break; // Netzwerkfehler -> keine Varianten-Kaskade nötig, äußerer Retry greift
       } finally {
         clearTimeout(timer);
       }
@@ -199,10 +271,30 @@ async function callGeminiForModel({
         try {
           data = await res.json();
         } catch {
-          lastFailure = { ok: false, error: 'bad_json_response' };
+          variantFailure = { ok: false, error: 'bad_json_response' };
           break;
         }
-        return { ok: true, data, model: chosenModel };
+
+        const info = inspectResponse(data);
+        if (info.text) {
+          return { ok: true, data, model: chosenModel, variant: variant.id, info };
+        }
+
+        // HTTP 200, aber kein Text: Safety-Block, MAX_TOKENS oder leeres
+        // Kandidatenfeld. Nächste (weniger restriktive) Variante versuchen.
+        variantFailure = {
+          ok: false,
+          error: 'empty_response',
+          blocked: info.blocked,
+          finishReason: info.finishReason,
+          blockReason: info.blockReason,
+          variant: variant.id,
+          message:
+            `Gemini lieferte keinen Text (variant=${variant.id}` +
+            `${info.finishReason ? `, finish_reason=${info.finishReason}` : ''}` +
+            `${info.blockReason ? `, block_reason=${info.blockReason}` : ''})`,
+        };
+        continue;
       }
 
       const errText = await res.text().catch(() => '');
@@ -212,20 +304,22 @@ async function callGeminiForModel({
         payload = JSON.parse(errText);
         detail = extractErrorText(payload, res);
       } catch {}
-      lastFailure = {
+      variantFailure = {
         ok: false,
         status: res.status,
         error: `api_error_${res.status}`,
         message: String(detail).slice(0, 500),
         retryAfterMs: retryAfterMsFromResponse(res, payload),
+        variant: variant.id,
       };
 
-      // 400 = vermutlich ein optionales Feld abgelehnt -> einmal ohne Extras versuchen.
-      if (res.status === 400 && withExtras) continue;
+      // 400 = ein optionales Feld wurde abgelehnt -> nächste Variante testen.
+      if (res.status === 400) continue;
       break;
     }
 
-    if (lastFailure?.ok) break;
+    lastFailure = variantFailure || lastFailure;
+
     // Ein 404 ("Modell nicht (mehr) verfügbar") ist NICHT retry-würdig – hier
     // hilft nur ein anderes Modell (siehe callGemini-Fallback-Kette), kein
     // erneuter Versuch mit demselben Modellnamen.
@@ -258,6 +352,7 @@ async function callGemini({
   userPrompt,
   model,
   env,
+  responseSchema = RESPONSE_SCHEMA,
   fetchFn = globalThis.fetch,
   sleepFn = sleep,
   maxQuickRetries = 1,
@@ -288,6 +383,7 @@ async function callGemini({
       systemPrompt,
       userPrompt,
       chosenModel,
+      responseSchema,
       fetchFn,
       sleepFn,
       maxQuickRetries,
@@ -412,6 +508,10 @@ function extractResponseText(data) {
 
 module.exports = {
   DEFAULT_GEMINI_MODEL,
+  REQUEST_VARIANTS,
+  SAFETY_OFF,
+  SAFETY_BLOCK_NONE,
+  inspectResponse,
   MODEL_FALLBACK_CHAIN,
   GEMINI_BASE_URL,
   RESPONSE_SCHEMA,

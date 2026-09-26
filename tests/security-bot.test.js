@@ -108,14 +108,18 @@ test('Security Bot: Modul-Export & Intents', () => {
 // 2. Commands
 // ============================================================================
 
-test('Security Bot: genau 7 Commands, alle nur für Admins', () => {
+test('Security Bot: vollständiger Befehlssatz, alle nur für Admins', () => {
   const cmds = defineCommands().map((c) => c.toJSON());
-  assert.equal(cmds.length, 7);
+  assert.equal(cmds.length, 11);
 
   const names = cmds.map((c) => c.name);
   assert.deepEqual([...names].sort(), [
+    'adminpanel',
     'help',
+    'security_action',
+    'security_ai_order',
     'security_check_now',
+    'security_status',
     'set_anti_delete_messages',
     'set_gemini_api_key',
     'set_language',
@@ -125,6 +129,11 @@ test('Security Bot: genau 7 Commands, alle nur für Admins', () => {
   assert.deepEqual(ALL_COMMAND_NAMES, names);
 
   for (const cmd of cmds) {
+    if (cmd.name === 'adminpanel') {
+      // Owner-Panel: ausschließlich im Bot-DM, deshalb ohne Guild-Permissions.
+      assert.deepEqual(cmd.contexts, [1], '/adminpanel ist DM-only');
+      continue;
+    }
     assert.equal(cmd.default_member_permissions, '8', `/${cmd.name} ist Admin-only`);
     assert.deepEqual(cmd.contexts, [0], `/${cmd.name} ist Guild-only`);
     assert.deepEqual(cmd.integration_types, [0]);
@@ -171,8 +180,23 @@ test('Security Bot: genau 7 Commands, alle nur für Admins', () => {
   assert.equal(antiCmd.options[0].type, 5); // BOOLEAN
   assert.equal(antiCmd.options[0].required, true);
 
-  // Guild-Payload identisch (kein DM-Command mehr)
-  assert.deepEqual(guildCommandJson().map((c) => c.name), ALL_COMMAND_NAMES);
+  // /security_action: Pflicht-User-Option + optionaler interner Hinweis
+  const actionCmd = cmds.find((c) => c.name === 'security_action');
+  assert.equal(actionCmd.options[0].name, 'user');
+  assert.equal(actionCmd.options[0].type, 6);
+  assert.equal(actionCmd.options[0].required, true);
+  assert.equal(actionCmd.options[1].name, 'hinweis');
+  assert.equal(actionCmd.options[1].required, false);
+
+  // /security_ai_order öffnet ein Formular und hat deshalb keine Optionen
+  const orderCmd = cmds.find((c) => c.name === 'security_ai_order');
+  assert.equal(orderCmd.options.length, 0);
+
+  // Guild-Payload = alles außer dem DM-only Owner-Panel
+  assert.deepEqual(
+    guildCommandJson().map((c) => c.name),
+    ALL_COMMAND_NAMES.filter((n) => n !== 'adminpanel')
+  );
 });
 
 // ============================================================================
@@ -704,8 +728,12 @@ test('Security Bot: Gemini-Request (Struktur, Header, günstigstes Modell)', asy
   assert.ok(calls[0].body.generationConfig.responseSchema, 'responseSchema erzwingt JSON-Struktur');
   assert.deepEqual(calls[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
   assert.ok(
-    calls[0].body.safetySettings.every((s) => s.threshold === 'BLOCK_NONE'),
-    'Safety-Filter sind aus – der Moderator muss Toxizität lesen können'
+    calls[0].body.safetySettings.every((s) => s.threshold === 'OFF'),
+    'Safety-Filter sind komplett aus – der Moderator muss Toxizität lesen können'
+  );
+  assert.ok(
+    calls[0].body.safetySettings.some((s) => s.category === 'HARM_CATEGORY_CIVIC_INTEGRITY'),
+    'auch die Civic-Integrity-Kategorie wird abgeschaltet'
   );
   assert.equal(estimateTokens('a'.repeat(30)), 10, 'Grobe Schätzung: 3 Zeichen/Token');
   assert.equal(modelFromEnv(() => 'gemini-2.0-flash'), 'gemini-2.0-flash');
@@ -722,7 +750,8 @@ test('Security Bot: Gemini-Request (Struktur, Header, günstigstes Modell)', asy
   assert.equal(retryRes.ok, true);
   assert.equal(n, 2, '429 wird sofort einmal wiederholt');
 
-  // 400 mit optionalen Feldern → Fallback-Kaskade ohne responseSchema/thinking/safety
+  // 400 mit optionalen Feldern → Fallback-Kaskade: nächste Variante behält die
+  // Safety-Abschaltung (BLOCK_NONE), degradiert aber die optionalen Felder.
   let bodies = [];
   const fallbackFetch = async (url, options) => {
     bodies.push(JSON.parse(options.body));
@@ -731,9 +760,14 @@ test('Security Bot: Gemini-Request (Struktur, Header, günstigstes Modell)', asy
   };
   const fallbackRes = await callGemini({ apiKey: 'k', systemPrompt: 's', userPrompt: 'u', fetchFn: fallbackFetch, sleepFn: async () => {} });
   assert.equal(fallbackRes.ok, true);
-  assert.equal(bodies[1].generationConfig.responseSchema, undefined);
-  assert.equal(bodies[1].generationConfig.thinkingConfig, undefined);
-  assert.equal(bodies[1].safetySettings, undefined);
+  assert.ok(
+    bodies[1].safetySettings.every((s) => s.threshold === 'BLOCK_NONE'),
+    'Safety bleibt auch im Fallback deaktiviert (sonst blockt Google schwere Verstöße)'
+  );
+  assert.ok(
+    !bodies[1].safetySettings.some((s) => s.category === 'HARM_CATEGORY_CIVIC_INTEGRITY'),
+    'die neue Kategorie entfällt im Kompatibilitäts-Fallback'
+  );
 
   // Fatale Keys werden klar gemeldet
   assert.deepEqual(await callGemini({ systemPrompt: 's', userPrompt: 'u' }), { ok: false, error: 'missing_api_key' });

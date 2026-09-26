@@ -22,11 +22,14 @@ const {
   callGemini,
   extractResponseText,
   parseModerationJson,
+  estimateTokens,
 } = require('./gemini');
 const {
   buildSystemPrompt,
   buildUserPrompt,
   buildChatLog,
+  buildTargetedDirectives,
+  buildOrderDirectives,
   DURATION_SECONDS,
 } = require('./prompts');
 const {
@@ -382,19 +385,53 @@ async function processSingleBatch(ctx, guildId, batch) {
   return true;
 }
 
-/** Ersetzt die Platzhalter in Geminis persönlicher Nachricht durch echte Mentions. */
-function personalMessageText(mod, authorId, authorName) {
+/** Fette Discord-Bezeichnung der Maßnahme, z. B. "**⏱️ Timeout (1h)**". */
+function actionHeadline(mod, lang = 'de') {
+  if (mod?.action === 'timeout') {
+    const duration = mod.duration ? ` (${mod.duration})` : '';
+    return `**${t('logActionTimeout', lang)}${duration}**`;
+  }
+  return `**${t('logActionWarn', lang)}**`;
+}
+
+/**
+ * Fette Kopfzeile über der Begründung: Maßnahme + Hauptgrund.
+ * Discord-Format ist hier Pflicht – Maßnahme UND Hauptgrund sind fett, damit
+ * im Chat sofort erkennbar ist, was passiert ist und warum.
+ */
+function moderationHeadline(mod, lang = 'de') {
+  const reason = clip(String(mod?.reason || '').replace(/\s+/g, ' ').trim(), 180);
+  const parts = [actionHeadline(mod, lang)];
+  if (reason) parts.push(`**${reason.replace(/\*+/g, '')}**`);
+  return parts.join(' · ');
+}
+
+/**
+ * Ersetzt die Platzhalter in Geminis persönlicher Nachricht durch echte
+ * Mentions und stellt die fette Maßnahmen-/Grund-Kopfzeile voran.
+ */
+function personalMessageText(mod, authorId, authorName, lang = 'de') {
   let text = String(mod.personal_message || '').trim();
   const mention = `<@${authorId}>`;
   text = text
     .replace(/\{\s*USER\s*\}|\[\s*USER\s*\]|\(\s*USER\s*\)|@USER\b/gi, mention)
     .replace(/\{\s*USER_?NAME\s*\}|\{\s*NAME\s*\}/gi, authorName || mention);
   if (!text.includes(mention)) text = `${mention} ${text}`.trim();
-  return clip(text, 1800);
+
+  const headline = moderationHeadline(mod, lang);
+  const body = clip(text, 1700);
+  // Die Erwähnung steht bewusst in der ersten Zeile (Discord pingt sicher),
+  // darunter die fette Kopfzeile, danach die ausführliche Begründung.
+  if (body.startsWith(mention)) {
+    const rest = body.slice(mention.length).trim();
+    return clip(`${mention}\n${headline}\n${rest}`, 1900);
+  }
+  return clip(`${mention}\n${headline}\n${body}`, 1900);
 }
 
 /** Wendet die Moderationen aus der Gemini-Antwort auf Discord an. */
-async function applyResults({ ctx, guildId, messages, parsed, lang }) {
+async function applyResults({ ctx, guildId, messages, parsed, lang, maxModerations = MAX_MODERATIONS_PER_BATCH }) {
+  const applied = [];
   const guild =
     ctx.client?.guilds?.cache?.get?.(guildId) ||
     (await ctx.client?.guilds?.fetch?.(guildId).catch(() => null));
@@ -414,7 +451,7 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
       (a, b) =>
         (b.primary === true) - (a.primary === true) || durationRank(b) - durationRank(a)
     )
-    .slice(0, MAX_MODERATIONS_PER_BATCH);
+    .slice(0, Math.max(1, maxModerations));
 
   // Harte Garantie: höchstens EIN Timeout pro Person pro Analyse. Alle weiteren
   // Timeout-Wünsche derselben Person werden automatisch zu Warnungen degradiert
@@ -482,7 +519,7 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
       }
 
       // 2) Persönliche Nachricht auf die (Haupt-)Verstoßnachricht antworten
-      const replyText = personalMessageText(mod, authorId, rec.authorName);
+      const replyText = personalMessageText(mod, authorId, rec.authorName, lang);
       const channel = guild?.channels?.cache?.get?.(rec.channelId) || null;
       let replied = false;
       if (channel && rec.discordMessageId) {
@@ -542,6 +579,19 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
           },
         })
       );
+      applied.push({
+        userId: authorId,
+        userName: rec.authorName,
+        action: mod.action,
+        duration: mod.duration,
+        reason: mod.reason,
+        primary: mod.primary === true,
+        timeoutApplied,
+        timeoutIssue,
+        replied,
+        excerpt: rec.content,
+        jumpLink,
+      });
       ctx.logger?.info?.(
         `[security-bot] Moderation angewendet: user=${authorId} action=${mod.action}` +
           `${mod.action === 'timeout' ? ` duration=${mod.duration} applied=${timeoutApplied}` : ''}` +
@@ -557,12 +607,181 @@ async function applyResults({ ctx, guildId, messages, parsed, lang }) {
   // Feld "chat_reply" ohne jeden Verstoß Small-Talk in den Chat posten
   // ("Hey zusammen! Hier ist alles entspannt ... 👋"). Das ist entfernt: keine
   // Moderation = keine Nachricht.
+  return applied;
+}
+
+/**
+ * Kürzt eine Nachrichtenliste, bis sie sicher ins Token-Budget passt
+ * (älteste Nachrichten fliegen zuerst raus).
+ */
+function trimToTokenBudget(messages, maxTokens = 15000) {
+  const sorted = [...messages].sort((a, b) => a.ord - b.ord);
+  let out = sorted;
+  while (out.length > 1) {
+    const tokens = estimateTokens(buildChatLog(out));
+    if (tokens <= maxTokens) break;
+    out = out.slice(Math.ceil(out.length * 0.15) || 1);
+  }
+  return out;
+}
+
+/**
+ * Einmalige Ad-hoc-Analyse einer frei zusammengestellten Nachrichtenliste
+ * (z. B. gezielt ausgewählte Nachrichten eines Nutzers oder der frisch
+ * eingelesene Live-Verlauf) – ohne Batch-/Retry-Warteschlange.
+ *
+ * Wird von /security_action und /security_ai_order genutzt. Die Maßnahmen
+ * werden exakt wie bei einer regulären Analyse angewendet, damit der Bot
+ * nach außen wie eine eigenständige KI-Moderation wirkt.
+ */
+async function runAdHocAnalysis({
+  ctx,
+  guildId,
+  messages,
+  extraDirectives = [],
+  maxModerations = MAX_MODERATIONS_PER_BATCH,
+  adminPromptOverride = null,
+}) {
+  const gid = String(guildId);
+  const lang = ctx.store.getLanguage(gid);
+  const apiKey = ctx.store.getApiKey(gid);
+  if (!apiKey) return { ok: false, error: 'missing_api_key', lang };
+
+  const usable = trimToTokenBudget(
+    messages.filter((m) => String(m.content || '').trim()),
+    Number.parseInt(String(ctx.env?.('SECURITY_GEMINI_MAX_INPUT_TOKENS', '') || ''), 10) || 15000
+  );
+  if (!usable.some((m) => m.seq != null && !m.isAdmin)) {
+    return { ok: false, error: 'no_messages', lang };
+  }
+
+  const guildName = ctx.client?.guilds?.cache?.get?.(gid)?.name || 'Unbekannter Server';
+  const penaltyByUser = ctx.store.getPenaltySummary(gid, { days: 20 });
+  const participantMap = new Map();
+  for (const m of usable) {
+    const prev = participantMap.get(m.authorId);
+    participantMap.set(m.authorId, {
+      authorId: m.authorId,
+      authorName: m.authorName,
+      authorMeta: m.authorMeta || prev?.authorMeta || null,
+      isAdmin: Boolean(prev?.isAdmin || m.isAdmin),
+    });
+  }
+
+  const systemPrompt = buildSystemPrompt({
+    guildName,
+    lang,
+    participants: [...participantMap.values()],
+    penaltyByUser,
+    extraDirectives,
+  });
+  const adminPrompt = adminPromptOverride || ctx.store.getPrompt(gid) || t('defaultPrompt', lang);
+  const userPrompt = buildUserPrompt({ adminPrompt, logText: buildChatLog(usable) });
+
+  const res = await callGemini({ apiKey, systemPrompt, userPrompt, env: ctx.env });
+  if (!res.ok) {
+    if (res.status === 429) noteGemini429({ ctx, apiKey, env: ctx.env, retryAfterMs: res.retryAfterMs });
+    ctx.logger?.warn?.(
+      `[security-bot] Ad-hoc-Analyse für Gilde ${gid} fehlgeschlagen: ${res.error}` +
+        `${res.message ? ` (${clip(res.message, 200)})` : ''}`
+    );
+    return { ok: false, error: res.error, message: res.message, lang };
+  }
+
+  const parsed = parseModerationJson(extractResponseText(res.data));
+  if (!parsed.ok) {
+    return { ok: false, error: `invalid_model_response (${parsed.error})`, lang };
+  }
+
+  const applied = await applyResults({
+    ctx,
+    guildId: gid,
+    messages: usable,
+    parsed,
+    lang,
+    maxModerations,
+  });
+
+  return { ok: true, lang, applied, moderations: parsed.moderations, analyzed: usable.length };
+}
+
+/**
+ * /security_action – gezielte, verdeckte KI-Moderation ausgewählter
+ * Nachrichten EINES Nutzers. Der Bot entscheidet selbst, welche der
+ * ausgewählten Nachrichten die schwerwiegendste ist.
+ */
+async function runTargetedModeration({ ctx, guildId, target, selected, context = [], adminNote = '' }) {
+  const all = [...context, ...selected];
+  const seen = new Set();
+  const merged = [];
+  for (const rec of all.sort((a, b) => a.ord - b.ord)) {
+    const key = rec.discordMessageId || `${rec.channelId}:${rec.ord}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push({ ...rec });
+  }
+
+  // Nur die AUSGEWÄHLTEN Nachrichten bekommen eine moderierbare ID – alles
+  // andere ist reiner Kontext (seq = null) und kann nicht bestraft werden.
+  const selectedKeys = new Set(
+    selected.map((rec) => rec.discordMessageId || `${rec.channelId}:${rec.ord}`)
+  );
+  let seq = 0;
+  const selectedIds = [];
+  for (const rec of merged) {
+    const key = rec.discordMessageId || `${rec.channelId}:${rec.ord}`;
+    if (selectedKeys.has(key) && !rec.isAdmin) {
+      rec.seq = ++seq;
+      selectedIds.push(rec.seq);
+    } else {
+      // Kein seq => im Chat-Log als "[KONTEXT – nicht moderierbar]" markiert.
+      rec.seq = null;
+    }
+  }
+
+  return runAdHocAnalysis({
+    ctx,
+    guildId,
+    messages: merged,
+    maxModerations: 5,
+    extraDirectives: buildTargetedDirectives({
+      targetName: target?.name,
+      targetId: target?.id,
+      selectedIds,
+      adminNote,
+    }),
+  });
+}
+
+/**
+ * /security_ai_order – freier Auftrag an die KI auf Basis des kompletten
+ * Chatverlaufs ("was soll sie tun und warum").
+ */
+async function runCustomOrder({ ctx, guildId, messages, order, reasoning, focus }) {
+  const numbered = [];
+  let seq = 0;
+  for (const rec of [...messages].sort((a, b) => a.ord - b.ord)) {
+    const copy = { ...rec };
+    copy.seq = copy.isAdmin ? null : ++seq;
+    numbered.push(copy);
+  }
+  return runAdHocAnalysis({
+    ctx,
+    guildId,
+    messages: numbered,
+    extraDirectives: buildOrderDirectives({ order, reasoning, focus }),
+  });
 }
 
 module.exports = {
   processGuild,
   flushBuffer,
   runCheckNow,
+  runAdHocAnalysis,
+  runTargetedModeration,
+  runCustomOrder,
+  trimToTokenBudget,
+  moderationHeadline,
   applyResults,
   personalMessageText,
   nextRetryDelay,
