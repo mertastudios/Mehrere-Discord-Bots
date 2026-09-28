@@ -61,7 +61,7 @@ const RESPONSE_SCHEMA = {
           duration: { type: 'STRING', enum: ['1m', '5m', '10m', '1h', '1d', '1w'], description: 'Nur bei action=timeout' },
           primary: { type: 'BOOLEAN', description: 'true für GENAU EINE Moderation: der schwerwiegendste Verstoß' },
           reason: { type: 'STRING', description: 'Kurze Begründung, gegen welche Regel verstoßen wurde' },
-          personal_message: { type: 'STRING', description: 'Ausführlich begründete persönliche Nachricht an den Nutzer (4-8 Sätze: konkreter Inhalt, betroffene Regel, Kontext, Maßnahmen-Begründung, Verhaltenshinweis), {USER} als Platzhalter für die Erwähnung' },
+          personal_message: { type: 'STRING', description: 'Ausführlich begründete persönliche Nachricht an den Nutzer in 4 Blöcken (1. Anrede mit {USER}, 2. Konkreter Verstoß mit *„Zitat“* & Kontext, 3. **Maßnahme:** `VERWARNUNG` bzw. `TIMEOUT (1h)`, 4. Begründung & Verhaltenshinweis)' },
         },
         required: ['message_id', 'action', 'primary', 'reason', 'personal_message'],
       },

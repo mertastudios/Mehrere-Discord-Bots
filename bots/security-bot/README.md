@@ -71,11 +71,12 @@ tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett sti
   werden. Weitere Verstöße derselben Person werden automatisch zu Warnungen herabgestuft –
   das garantiert der Code, unabhängig davon, was Gemini liefert.
 - **Ausführlich begründete Moderations-Nachrichten**: Die persönliche Nachricht von Gemini
-  (`personal_message`) ist bewusst kein Ein-Zeilen-Hinweis mehr. Der System-Prompt verlangt
-  **4–8 vollständige Sätze**: konkreter Inhalt der Verstoß-Nachricht, welche Regel genau
-  verletzt wurde und warum, Kontext/Wirkung im Kanal, Begründung der gewählten Maßnahme
-  (inkl. Eskalation bei Wiederholungstätern) und ein konkreter Verhaltenshinweis. Dafür ist
-  auch das Output-Token-Budget der Gemini-Anfrage auf 8.192 erhöht.
+  (`personal_message`) ist sauber im 4-Absätze-Format strukturiert:
+  1. Anrede & Einleitung (`Hallo {USER}, als KI-Moderationssystem dieses Servers...`)
+  2. Konkreter Verstoß mit *kursiven Zitaten* (`*„...“*`), verletzter Regel und Auswirkung auf das Chatklima
+  3. Hervorgehobene Maßnahme (`**Maßnahme:** \`VERWARNUNG\`` bzw. `**Maßnahme:** \`TIMEOUT (1h)\``)
+  4. Begründung der Maßnahme (**erster Verstoß** fett hervorheben bzw. Bezug auf Strafenregister bei Wiederholung) und deeskalierender Verhaltenshinweis.
+  Dafür ist auch das Output-Token-Budget der Gemini-Anfrage auf 8.192 erhöht.
 - **Zwangsmoderation per Befehl**: `/security_check_now` hat die optionale Auswahl `user` –
   ein Nutzer, der bei dieser Prüfung **zwingend** moderiert werden soll. Diese Admin-Anordnung
   wird als verbindliche Direktive in den System-Prompt eingebaut („ZWINGENDE MODERATION“) und
@@ -143,20 +144,20 @@ tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett sti
        {
          "message_id": 7,
          "action": "timeout",
-         "duration": "5m",
+         "duration": "1h",
          "primary": true,
-         "reason": "Gegen Regel 2 verstoßen: Beleidigung",
-         "personal_message": "{USER}, das war eine klare Beleidigung – 5 Minuten Pause."
+         "reason": "Gegen Regel zu respektvollem Umgang verstoßen: Schwere Beleidigung",
+         "personal_message": "Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.\n\nDu hast wiederholt andere Mitglieder beleidigt, unter anderem mit Aussagen wie *„...“*. Solche Ausdrücke verletzen unsere Serverregeln zu respektvollem Umgang und stören das Chatklima erheblich.\n\n**Maßnahme:** `TIMEOUT (1h)`\n\nDa du in den letzten 20 Tagen bereits verwarnt wurdest, wirst du für 1 Stunde stummgeschaltet. Bitte passe deinen Sprachstil nach Ablauf des Timeouts an und halte dich an die Serverregeln, um weitere automatische Konsequenzen zu vermeiden."
        }
      ]
    }
    ```
    Kein Verstoß gefunden? Dann `{"moderations": []}` – und der Bot bleibt still.
 5. **Anwenden**: Der Bot antwortet **auf die Nachricht mit dem schwerwiegendsten
-   Verstoß** (`primary: true`), ersetzt `{USER}` durch die echte Erwähnung, wendet den
-   **Timeout** an (1m / 5m / 10m / 1h / 1d / 1w) bzw. sendet nur die **Warnung**, und
-   pflegt das Strafenregister. Dabei gilt als harte Garantie: **höchstens ein Timeout
-   pro Person** pro Analyse – weitere Verstöße derselben Person werden als Warnung
+   Verstoß** (`primary: true`), ersetzt `{USER}` und weitere Platzhalter durch die echten
+   Discord-Werte, wendet den **Timeout** an (1m / 5m / 10m / 1h / 1d / 1w) bzw. sendet nur die
+   **Warnung**, und pflegt das Strafenregister. Dabei gilt als harte Garantie: **höchstens ein
+   Timeout pro Person** pro Analyse – weitere Verstöße derselben Person werden als Warnung
    umgesetzt. Alle Details wandern in den Log-Kanal.
 6. **Niemand schuldig?** Dann passiert **gar nichts**: keine Nachricht im Chat, kein
    Eintrag im Log-Kanal. Genau das ist der Normalfall.
@@ -175,19 +176,21 @@ persönliche Anfeindungen bleiben sonst an ihnen hängen. Genau dafür gibt es
 - Nur der **Log-Kanal** bekommt einen internen Vermerk, wer die Prüfung angestoßen hat.
 - Die Antwort an den Admin ist **ephemer** (nur für ihn sichtbar).
 
-### 🎨 Discord-Formatierung der Begründungen
+### 🎨 Discord-Formatierung der Moderations-Nachrichten
 
-Jede öffentliche Moderationsnachricht beginnt mit einer fetten Kopfzeile:
+Jede öffentliche Moderationsnachricht folgt einer sauberen, lesbaren 4-teiligen Struktur:
 
 ```
-@Max
-**⏱️ Timeout (1h)** · **Beleidigung eines Mitglieds**
-Ausführliche Begründung …
+Hallo @Max, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.
+
+Du hast vor kurzem mehrfach obszöne Nachrichten wie *„...“* verfasst. Solche Ausdrücke verletzen unsere Regeln zu...
+
+**Maßnahme:** `VERWARNUNG`
+
+Da es sich um deinen **ersten Verstoß** handelt, bleibt es vorerst bei dieser Verwarnung. Bitte passe deinen Sprachstil ab sofort an...
 ```
 
-Die **Maßnahme** und der **Hauptgrund** sind immer fett (`**…**`) – im Chat wie im
-Log-Kanal. Die KI wird zusätzlich angewiesen, auch im Fließtext Maßnahme, Regel und
-Dauer fett zu setzen und Zitate in Backticks zu schreiben.
+Die Nachricht nutzt Discord-Markdown: **Fett** (`**...**`) für Hervorhebungen, *Kursiv* (`*„...“*`) für Zitate und `Inline-Code` (\`...\`) für die Maßnahme. Alle Platzhalter (`{USER}`, `{USERNAME}`, `{SERVER}`, `{ACTION}`, `{DURATION}`, `{REASON}`) werden automatisch vom Bot ersetzt.
 
 ### 🛟 Warum der Bot nicht mehr an schweren Verstößen scheitert
 
