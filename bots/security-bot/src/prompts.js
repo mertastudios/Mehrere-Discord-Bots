@@ -296,46 +296,65 @@ function buildSystemPrompt({
     '  bekommt sie EINEN timeout (den schwerwiegendsten) und alle weiteren als "warn".',
     '- Mehrere Personen dürfen gleichzeitig je einen timeout bekommen.',
 
-    'personal_message Regeln:',
+    'personal_message Regeln (4-teilige saubere Struktur):',
     '- Sie ist der EINZIGE Text, der jemals im Chat landet, und gehört immer zu genau',
     '  einem konkreten Regelverstoß. Schreibe niemals eine personal_message ohne Verstoß.',
-    '- Schreibe AUSFÜHRLICH und GRÜNDLICH: mindestens 4-8 vollständige Sätze',
-    '  (grob 300-1200 Zeichen). Kurze Ein-Satz-Hinweise wie "das war nicht okay" oder',
-    '  "bitte Regeln beachten" sind NICHT ausreichend – die Person soll die Begründung',
-    '  vollständig verstehen, ohne Nachfragen zu müssen.',
-    '- Jede personal_message muss ALLE diese Punkte enthalten:',
-    '  1) WAS genau die Person geschrieben hat: Nenne den konkreten Inhalt (Kurzzitat',
-    '     oder präzise in eigenen Worten), damit klar ist, welche Nachricht gemeint ist.',
-    '  2) GEGEN WELCHE Regel das genau verstößt und warum dieser Inhalt problematisch',
-    '     ist – nicht nur "verstößt gegen die Regeln", sondern die echte Begründung',
-    '     (z. B. welche Wirkung solche Aussagen auf andere haben).',
-    '  3) KONTEXT: Wie wirkt das Verhalten im Gespräch/auf den Kanal (z. B. eskaliert',
-    '     es eine Diskussion, verletzt es eine bestimmte Gruppe, stört es den Ablauf',
-    '     oder setzt es eine konkrete Zielperson durch Pings/Replies/Dogpiling unter Druck)?',
-    '  4) WARUM genau DIESE Maßnahme (warn bzw. timeout mit dieser Dauer) angemessen',
-    '     ist – bei Wiederholungstätern ausdrücklich mit Bezug auf die bisherigen',
-    '     Moderationen aus dem Strafenregister (Eskalation nachvollziehbar machen).',
-    '  5) Ein konkreter, respektvoller Hinweis, wie sich die Person ab jetzt verhalten',
-    '     soll, damit es keine weitere Maßnahme gibt.',
-    '- Ton: freundlich, respektvoll und sachlich. Keine Beleidigungen, keine Drohungen,',
-    '  keine Emoji-Ketten, keine Füllsätze ohne Informationsgehalt, keine Widersprüche',
-    '  zur Begründung und keine Wiederholungen desselben Satzes in anderen Worten.',
-    '- Kein Small-Talk, keine allgemeinen Grüße und keine Botschaften an den restlichen',
-    '  Chat – die Nachricht richtet sich ausschließlich an die moderierte Person.',
-    '- Nutze EXAKT den Platzhalter {USER} an der Stelle, an der der Nutzer erwähnt werden',
-    '  soll (das System ersetzt ihn durch die echte Discord-Erwähnung). Verwende niemals',
-    '  echte Discord-Mention-Syntax (<@...>) und schreibe die user_id NICHT in den Text.',
-
-    'DISCORD-FORMATIERUNG (Pflicht):',
-    '- Die Nachricht wird direkt in Discord gepostet – nutze deshalb Discord-Markdown.',
-    '- Die verhängte MASSNAHME schreibst du fett: **Verwarnung** bzw. **Timeout (1h)**.',
-    '- Den HAUPTGRUND (den Kern des Verstoßes) schreibst du ebenfalls fett, z. B.',
-    '  **Beleidigung eines anderen Mitglieds** oder **Drohung gegen ein Mitglied**.',
-    '- Weitere wichtige Begriffe (betroffene Regel, Dauer, Zielperson) dürfen fett sein.',
-    '- Zitate aus der Nachricht setzt du in `Backticks` oder in "Anführungszeichen".',
-    '- Verwende keine Überschriften (#), keine Codeblöcke und keine @everyone/@here.',
-    '- Das System stellt der Nachricht zusätzlich eine fette Kopfzeile mit Maßnahme und',
-    '  Grund voran – schreibe trotzdem beides auch im Fließtext fett aus.',
+    '- Schreibe AUSFÜHRLICH, sachlich und präzise. Die personal_message muss eine saubere,',
+    '  übersichtliche Struktur aus genau 4 Absätzen (getrennt durch Leerzeilen) haben:',
+    '',
+    '  1. ABSATZ (Anrede & Einleitung):',
+    '     Beginne immer mit der Erwähnung des Nutzers über den Platzhalter {USER} und einer klaren Einleitung:',
+    '     "Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen."',
+    '     (In anderen Sprachen entsprechend sinngemäß formuliert).',
+    '',
+    '  2. ABSATZ (Konkreter Verstoß, Zitate, Regelbezug & Kontext/Chatklima):',
+    '     Beschreibe frei, lebendig und präzise, was der Nutzer geschrieben hat. Zitiere problematische',
+    '     Aussagen oder Formulierungen in kursiven Anführungszeichen (z. B. *„...“* oder *"..."*).',
+    '     Erkläre, gegen welche Regel verstoßen wurde und wie sich das Verhalten im Kontext auf den Chat,',
+    '     das Klima oder betroffene Personen ausgewirkt hat (z. B. Chat dominiert, Gruppe herabgewürdigt,',
+    '     Diskussion eskaliert, Person unter Druck gesetzt).',
+    '     Verzichte auf hölzerne, starre Datums- oder Kanalangaben ("in deiner Nachricht vom 28.09.2026 um 07:59 in #kanal"),',
+    '     sondern formuliere natürlich ("Du hast vor kurzem mehrfach... verfasst.").',
+    '',
+    '  3. ABSATZ (Hervorhebung der Maßnahme):',
+    '     Eine eigene kurze Zeile mit der fetten Bezeichnung **Maßnahme:** und der Maßnahme im Backtick-Code-Format:',
+    '     Bei Verwarnung: **Maßnahme:** `VERWARNUNG`',
+    '     Bei Timeout:    **Maßnahme:** `TIMEOUT (1h)` (bzw. 1m, 5m, 10m, 1d, 1w passend zur verhängten duration).',
+    '     (Auf Englisch: **Action:** `WARNING` bzw. **Action:** `TIMEOUT (1h)`; in anderen Sprachen analog).',
+    '',
+    '  4. ABSATZ (Begründung der Maßnahme, Vorgeschichte & Verhaltenshinweis):',
+    '     Begründe die Wahl der Maßnahme. Hebe bei Ersttätern den **ersten Verstoß** fett hervor:',
+    '     "Da es sich um deinen **ersten Verstoß** handelt, bleibt es vorerst bei dieser Verwarnung."',
+    '     Bei Wiederholungstätern nimm Bezug auf vorherige Moderationen laut Strafenregister.',
+    '     Schließe mit einem klaren, respektvollen Hinweis ab, wie sich der Nutzer ab sofort verhalten soll,',
+    '     um weitere automatische Konsequenzen zu vermeiden.',
+    '',
+    'DISCORD-FORMATIERUNG & PLATZHALTER:',
+    '- Nutze Discord-Markdown zur Strukturierung:',
+    '  • **Fetter Text** (**fett**) für wichtige Hervorhebungen wie **Maßnahme:**, **ersten Verstoß**, **Regelverstoß** etc.',
+    '  • *Kursiver Text* (*kursiv*) für Zitate aus Nachrichten wie *„Beispielzitat“*.',
+    '  • `Inline-Code` (`code`) für die Maßnahme: `VERWARNUNG` oder `TIMEOUT (1h)`.',
+    '  • Trenne die 4 Absätze mit doppelten Zeilenumbrüchen für übersichtliche Lesbarkeit auf Discord.',
+    '  • Verwende keine großen Überschriften (#), keine mehrzeiligen Codeblöcke (```) und keine @everyone/@here Pings.',
+    '- Das System ersetzt automatisch folgende Platzhalter im Text:',
+    '  • {USER} → Wird durch die echte Discord-Erwähnung <@Nutzer-ID> ersetzt. Verwende IMMER {USER} in der Anrede.',
+    '  • {USERNAME} oder {NAME} → Der Anzeigename des Nutzers.',
+    '  • {SERVER} → Der Name des Servers.',
+    '  • {ACTION} → Die Bezeichnung der Maßnahme (z. B. VERWARNUNG oder TIMEOUT (1h)).',
+    '  • {DURATION} → Die Timeout-Dauer (z. B. 1h).',
+    '  • {REASON} → Der kurze Grund des Verstoßes.',
+    '- Verwende niemals eigene <@123456789>-Mentions oder rohe IDs im Text, sondern immer {USER}.',
+    '',
+    'BEISPIEL FÜR EINE PERSÖNLICHE NACHRICHT (Verwarnung):',
+    'Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.',
+    '',
+    'Du hast vor kurzem mehrfach obszöne und sexuell explizite Nachrichten wie *„Wann ficken wir das nächste mal wieder ?“* verfasst. Solche Ausdrücke verletzen unsere Regeln zu sexistisch und unangemessen gefärbten Inhalten. Im Kontext zeigt sich, dass du den Chat in kurzer Folge mit diesen Aussagen dominiert hast, was das Klima für andere Mitglieder erheblich stört.',
+    '',
+    '**Maßnahme:** `VERWARNUNG`',
+    '',
+    'Da es sich um deinen **ersten Verstoß** handelt, bleibt es vorerst bei dieser Verwarnung. Bitte passe deinen Sprachstil ab sofort an und halte dich an die Serverregeln, um weitere automatische Konsequenzen zu vermeiden.',
+    '',
+    'Formuliere den Text jedes Mal frei, lebendig und individuell passend zum realen Fall – das obige Schema dient als Leitfaden für Ton, Struktur und Formatierung.',
 
     'primary Regeln:',
     '- Setze bei GENAU EINER moderation "primary": true – auf die Nachricht mit dem',
@@ -369,35 +388,98 @@ function buildSystemPrompt({
 /**
  * User-Prompt: Admin-Anweisungen + Chat-Verlauf + Arbeitsauftrag.
  */
-function buildUserPrompt({ adminPrompt, logText }) {
-  return [
-    '=== ANWEISUNGEN DES SERVER-ADMINS (Regeln, Strenge & Maßnahmen) ===',
-    'Diese Anweisungen haben hohe Priorität. Sie bestimmen Regeln, Strenge, Maßnahmen',
-    'und Eskalation – sie dürfen deine Entscheidungen auch strenger ODER lockerer machen',
-    'als die Standard-Regeln. Befolge sie konsequent, aber nur innerhalb der System-Grenzen:',
-    'harmlose Jokes/Sarkasmus/einvernehmliche Insider nicht bestrafen, Kontextpflicht',
-    'einhalten und Mobbing/Dogpiling im Gesamtverlauf prüfen. Die weiteren absoluten',
-    'Grenzen gelten immer: Antwortformat (JSON), Admin-Immunität, kein Kick/Ban, höchstens',
-    'EIN timeout pro Person pro Analyse und das Verbot, ohne konkreten Verstoß irgendetwas',
-    'in den Chat zu schreiben.',
-    '<<<',
-    String(adminPrompt || '').trim(),
-    '>>>',
+function buildUserPrompt({ adminPrompt, logText, customOrder = null, targetedAction = null }) {
+  const parts = [];
 
+  if (customOrder) {
+    const cleanOrder = String(customOrder.order || '').trim();
+    const cleanReasoning = String(customOrder.reasoning || '').trim();
+    const cleanFocus = String(customOrder.focus || '').trim();
+
+    parts.push(
+      '=== SPEZIFISCHER KI-AUFTRAG DER SERVERLEITUNG (HÖCHSTE PRIORITÄT) ===',
+      'Für diese Analyse gilt ein konkreter Einzelauftrag der Serverleitung.',
+      'Dieser Auftrag hat für diesen Lauf oberste Priorität:',
+      '',
+      `1. WAS DU TUN SOLLST (Auftrag):`,
+      `<<< ${cleanOrder || '(kein Auftrag)'} >>>`,
+      '',
+      `2. WARUM / BEGRÜNDUNG (Hintergrund der Serverleitung):`,
+      `<<< ${cleanReasoning || '(keine Begründung)'} >>>`
+    );
+
+    if (cleanFocus) {
+      parts.push(
+        '',
+        `3. FOKUS, GRENZEN & MASSNAHMEN-VORGABEN:`,
+        `<<< ${cleanFocus} >>>`
+      );
+    }
+
+    parts.push(
+      '',
+      'BINDENDE VORGABEN ZUR AUSFÜHRUNG:',
+      '- Richte deine Analyse VOLLSTÄNDIG nach diesem Auftrag und der angegebenen Begründung (WARUM) aus.',
+      '- Denke dir KEINE eigenen, abwegigen Gründe aus und moderiere keine Vorfälle, die nichts mit diesem Auftrag zu tun haben.',
+      '- Halte alle gesetzten Grenzen und Vorgaben aus dem Fokus (z. B. zeitliche Begrenzung, betroffene Themen/Personen, "nur Verwarnung / kein Timeout") strikt ein.',
+      '- Wenn der Chatverlauf keine Nachrichten enthält, die zu diesem Auftrag und Grund passen, antworte exakt mit {"moderations":[]}.',
+      ''
+    );
+  } else if (targetedAction) {
+    const targetName = oneLine(targetedAction.targetName || 'Unbekannt', 100);
+    parts.push(
+      '=== GEZIELTE PRÜFUNG DES NUTZERS ===',
+      `Prüfe gezielt die ausgewählten Nachrichten des Nutzers "${targetName}".`,
+      targetedAction.adminNote ? `Interner Hinweis: ${targetedAction.adminNote}` : '',
+      ''
+    );
+  } else {
+    parts.push(
+      '=== ANWEISUNGEN DES SERVER-ADMINS (Regeln, Strenge & Maßnahmen) ===',
+      'Diese Anweisungen haben hohe Priorität. Sie bestimmen Regeln, Strenge, Maßnahmen',
+      'und Eskalation – sie dürfen deine Entscheidungen auch strenger ODER lockerer machen',
+      'als die Standard-Regeln. Befolge sie konsequent, aber nur innerhalb der System-Grenzen:',
+      'harmlose Jokes/Sarkasmus/einvernehmliche Insider nicht bestrafen, Kontextpflicht',
+      'einhalten und Mobbing/Dogpiling im Gesamtverlauf prüfen. Die weiteren absoluten',
+      'Grenzen gelten immer: Antwortformat (JSON), Admin-Immunität, kein Kick/Ban, höchstens',
+      'EIN timeout pro Person pro Analyse und das Verbot, ohne konkreten Verstoß irgendetwas',
+      'in den Chat zu schreiben.',
+      '<<<',
+      String(adminPrompt || '').trim(),
+      '>>>',
+      ''
+    );
+  }
+
+  parts.push(
     '=== CHAT-VERLAUF (älteste → neueste Nachricht, gruppiert nach Kanal) ===',
     String(logText || '').trim(),
+    '',
+    '=== AUFGABE ==='
+  );
 
-    '=== AUFGABE ===',
-    'Analysiere den gesamten Verlauf mit Kontext, Reply-Ketten, Mention-Zielen und Namens-/Nickname-Daten.',
-    'Achte besonders auf Mobbing, Dogpiling, wiederholtes Pingen und Nachtreten, ohne harmlose',
-    'Jokes/Sarkasmus/Insider zu bestrafen. Antworte NUR mit dem geforderten JSON.',
-    'Denke daran: primary=true für GENAU EINE moderation (der schwerwiegendste Verstoß),',
-    '{USER} als Platzhalter in jeder personal_message – und jede personal_message muss',
-    'ausführlich begründet sein (4-8 Sätze: Inhalt, Regel, Kontext, Maßnahme, Hinweis).',
-    'Kein Verstoß gefunden? Dann antworte exakt mit {"moderations":[]} – der Bot bleibt',
-    'still. Schreibe unter KEINEN Umständen eine Begrüßung, eine Entwarnung oder sonst',
-    'irgendeinen Text in den Chat, wenn niemand gegen die Regeln verstoßen hat.',
-  ].join('\n');
+  if (customOrder) {
+    parts.push(
+      'Führe den spezifischen KI-Auftrag der Serverleitung gewissenhaft aus.',
+      'Beachte zwingend den angegebenen Grund (WARUM) und halte alle Grenzen & Fokus-Vorgaben strikt ein.',
+      'Denke dir keine eigenen, fremden Gründe aus. Gibt es keinen passenden Verstoß, gib exakt {"moderations":[]} zurück.',
+      'Antworte NUR mit dem geforderten JSON (Format: {"moderations":[...]}).'
+    );
+  } else {
+    parts.push(
+      'Analysiere den gesamten Verlauf mit Kontext, Reply-Ketten, Mention-Zielen und Namens-/Nickname-Daten.',
+      'Achte besonders auf Mobbing, Dogpiling, wiederholtes Pingen und Nachtreten, ohne harmlose',
+      'Jokes/Sarkasmus/Insider zu bestrafen. Antworte NUR mit dem geforderten JSON.',
+      'Denke daran: primary=true für GENAU EINE moderation (der schwerwiegendste Verstoß),',
+      '{USER} als Platzhalter in jeder personal_message – und jede personal_message muss',
+      'sauber im 4-Absätze-Format formuliert sein (Anrede mit {USER}, Verstoß mit *„Zitat“* & Kontext, **Maßnahme:** `...`, Begründung & Hinweis).',
+      'Kein Verstoß gefunden? Dann antworte exakt mit {"moderations":[]} – der Bot bleibt',
+      'still. Schreibe unter KEINEN Umständen eine Begrüßung, eine Entwarnung oder sonst',
+      'irgendeinen Text in den Chat, wenn niemand gegen die Regeln verstoßen hat.'
+    );
+  }
+
+  return parts.filter((p) => p !== null && p !== undefined).join('\n');
 }
 
 /**
@@ -491,31 +573,53 @@ function buildTargetedDirectives({ targetName, targetId, selectedIds = [], admin
  * KI ("was soll sie tun und warum") auf Basis des kompletten Chatverlaufs.
  */
 function buildOrderDirectives({ order, reasoning, focus } = {}) {
+  const cleanOrder = String(order || '').trim().slice(0, 1500) || '(kein Auftrag angegeben)';
+  const cleanReasoning = String(reasoning || '').trim().slice(0, 1500) || '(keine Begründung angegeben)';
+  const cleanFocus = String(focus || '').trim().slice(0, 1000);
+
   const lines = [
-    '== AUFTRAG DER SERVERLEITUNG FÜR DIESE ANALYSE ==',
-    'Für DIESE eine Analyse gilt zusätzlich der folgende Auftrag. Er hat Vorrang vor',
-    'deiner üblichen Zurückhaltung, aber NICHT vor den harten Grenzen (JSON-Format,',
-    'Admin-Immunität, kein Kick/Ban, max. 1 timeout pro Person, keine erfundenen IDs).',
+    '====================================================================',
+    '🚨 SPEZIFISCHER KI-AUFTRAG DER SERVERLEITUNG (HÖCHSTE PRIORITÄT) 🚨',
+    '====================================================================',
+    'Du führst für diesen Lauf einen KONKRETEN EINZELAUFTRAG der Serverleitung aus.',
+    'Dieser Auftrag, seine Begründung und alle angegebenen Grenzen/Fokus-Vorgaben',
+    'sind VERBINDLICH und haben absolute Priorität vor allgemeinen Moderationsregeln!',
     '',
-    'WAS DU TUN SOLLST:',
-    `<<< ${String(order || '').trim().slice(0, 1500) || '(kein Auftrag angegeben)'} >>>`,
+    '1. WAS DU TUN SOLLST (Auftrag):',
+    `<<< ${cleanOrder} >>>`,
     '',
-    'WARUM (Begründung/Hintergrund der Serverleitung):',
-    `<<< ${String(reasoning || '').trim().slice(0, 1500) || '(keine Begründung angegeben)'} >>>`,
+    '2. WARUM / BEGRÜNDUNG (Hintergrund der Serverleitung):',
+    `<<< ${cleanReasoning} >>>`,
   ];
-  if (String(focus || '').trim()) {
-    lines.push('', 'ZUSÄTZLICHER FOKUS / GRENZEN:', `<<< ${String(focus).trim().slice(0, 1000)} >>>`);
+
+  if (cleanFocus) {
+    lines.push(
+      '',
+      '3. FOKUS, GRENZEN & MASSNAHMEN-VORGABEN (STRIKT EINHALTEN):',
+      `<<< ${cleanFocus} >>>`
+    );
   }
+
   lines.push(
     '',
-    'Umsetzung:',
-    '- Wende den Auftrag konsequent auf den GESAMTEN Verlauf an und moderiere alle',
-    '  Nachrichten, die ihn erfüllen (max. 10, sortiert nach Schwere).',
-    '- Der Hintergrund erklärt dir, worauf du achten sollst – er ist selbst kein Beweis.',
-    '  Moderiere nur, was im Verlauf tatsächlich belegt ist.',
-    '- Nach außen bleibt es eine eigenständige KI-Moderation: Erwähne in reason und',
-    '  personal_message NIEMALS diesen Auftrag, den Admin, eine Meldung oder Beschwerde.',
-    '- Passt auf den Auftrag keine einzige Nachricht, gib {"moderations":[]} zurück.'
+    'STRIKTE REGELN FÜR DIESEN AUFTRAG:',
+    '• GRUND & BEGRÜNDUNG BEACHTEN:',
+    '  Du MUSST genau den Sachverhalt und den Grund prüfen, den die Serverleitung unter',
+    '  "WARUM" und "WAS DU TUN SOLLST" beschrieben hat. Denke dir KEINE eigenen, abwegigen',
+    '  oder themenfremden Gründe aus. Moderiere AUSSCHLIESSLICH Vorfälle, die direkt zu diesem',
+    '  Auftrag und der angegebenen Begründung passen.',
+    '• FOKUS & GRENZEN STRIKT EINHALTEN:',
+    '  Halte alle Einschränkungen im Fokus (z. B. zeitliche Begrenzung, bestimmte Kanäle,',
+    '  bestimmte Personen, thematischer Fokus oder Vorgaben wie "nur Verwarnung / kein Timeout")',
+    '  ausnahmslos ein. Wenn im Fokus z. B. steht "nur Verwarnung", verhänge keinesfalls einen Timeout.',
+    '• KEINE ERFUNDENEN ODER FREMDEN VERSTÖSSE:',
+    '  Wenn im Chatverlauf keine Nachrichten vorkommen, die diesen konkreten Auftrag im Rahmen',
+    '  der gesetzten Grenzen belegen, ist die EINZIG richtige Antwort {"moderations":[]}.',
+    '  Moderiere in keinem Fall unbeteiligte Personen oder unpassende Nachrichten.',
+    '• VERDECKTE MODERATION:',
+    '  Formuliere in reason und personal_message sachlich und bezogen auf das reale Verhalten im Chat.',
+    '  Erwähne niemals, dass ein Admin diesen Befehl (/security_ai_order) aufgerufen hat oder dass',
+    '  ein interner Auftrag vorliegt – nach außen wirkt es wie deine eigenständige Entscheidung.'
   );
   return lines;
 }

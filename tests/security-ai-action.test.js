@@ -257,20 +257,26 @@ test('Gemini: dauerhaft leere Antwort meldet empty_response inkl. finish_reason'
 });
 
 // ---------------------------------------------------------------------------
-// 2. Discord-Formatierung der Begründung
+// 2. Discord-Formatierung & Platzhalter-Ersetzung
 // ---------------------------------------------------------------------------
 
-test('Moderation: Maßnahme und Hauptgrund sind fett formatiert', () => {
+test('Moderation: Formatierung und Platzhalter-Ersetzung ({USER}, {ACTION}, etc.)', () => {
   const mod = {
     action: 'timeout',
     duration: '1h',
     reason: 'Beleidigung eines Mitglieds',
-    personal_message: '{USER} bitte unterlasse das.',
+    personal_message:
+      'Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.\n\n' +
+      'Du hast vor kurzem beleidigende Nachrichten wie *„Idiot“* verfasst. Solche Ausdrücke verletzen unsere Regeln zu respektvollem Umgang.\n\n' +
+      '**Maßnahme:** `{ACTION}`\n\n' +
+      'Da es sich nicht um deinen ersten Verstoß handelt, wird dein Account für {DURATION} stummgeschaltet. Grund: {REASON}.',
   };
-  const text = personalMessageText(mod, 'u1', 'Max', 'de');
-  assert.ok(text.startsWith('<@u1>'), 'Erwähnung zuerst');
-  assert.ok(text.includes('**⏱️ Timeout (1h)**'), 'Maßnahme fett');
-  assert.ok(text.includes('**Beleidigung eines Mitglieds**'), 'Hauptgrund fett');
+  const text = personalMessageText(mod, 'u1', 'Max', 'de', 'Mein Server');
+  assert.ok(text.startsWith('Hallo <@u1>,'), 'Erwähnung in Anrede aufgelöst');
+  assert.ok(text.includes('**Maßnahme:** `TIMEOUT (1H)`'), 'Maßnahme-Platzhalter ersetzt');
+  assert.ok(text.includes('für 1h stummgeschaltet'), 'Dauer-Platzhalter ersetzt');
+  assert.ok(text.includes('Grund: Beleidigung eines Mitglieds'), 'Grund-Platzhalter ersetzt');
+  assert.ok(!text.includes('{USER}'), 'Platzhalter {USER} aufgelöst');
 
   const warnHead = moderationHeadline({ action: 'warn', reason: 'Spam' }, 'de');
   assert.ok(warnHead.includes('**⚠️ Warnung**'));
@@ -418,7 +424,11 @@ test('/security_action: Auswahl über mehrere Seiten und verdeckte KI-Moderation
           duration: '1h',
           primary: true,
           reason: 'Beleidigung eines Mitglieds',
-          personal_message: '{USER} deine Nachricht verstößt gegen die Regeln.',
+          personal_message:
+            'Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.\n\n' +
+            'Du hast vor kurzem beleidigende Nachrichten verfasst.\n\n' +
+            '**Maßnahme:** `TIMEOUT (1h)`\n\n' +
+            'Da du bereits verwarnt wurdest, wirst du für 1 Stunde stummgeschaltet.',
         },
       ],
     });
@@ -436,12 +446,12 @@ test('/security_action: Auswahl über mehrere Seiten und verdeckte KI-Moderation
     const member = w.membersCache.get('111111111111111111');
     assert.equal(member.timeouts.length, 1, 'Timeout wurde tatsächlich gesetzt');
 
-    // Die öffentliche Begründung hängt an der Nachricht – fett formatiert
+    // Die öffentliche Begründung hängt an der Nachricht – sauber formatiert mit Ping
     const answered = w.history.filter((m) => m.replies.length);
     assert.equal(answered.length, 1);
     const publicText = answered[0].replies[0].content;
-    assert.ok(publicText.includes('**⏱️ Timeout (1h)**'));
-    assert.ok(publicText.includes('**Beleidigung eines Mitglieds**'));
+    assert.ok(publicText.includes('<@111111111111111111>'));
+    assert.ok(publicText.includes('**Maßnahme:** `TIMEOUT (1h)`'));
     assert.ok(!publicText.includes('Admin'), 'kein Hinweis auf den Auftraggeber');
 
     assert.ok(w.logChannel.sent.length > 0, 'Log-Kanal wurde informiert');
@@ -515,6 +525,65 @@ test('/security_ai_order: Formular öffnet sich und der Auftrag wird ausgeführt
     const prompt = seen[0].systemInstruction.parts[0].text;
     assert.ok(prompt.includes('Moderiere alle, die Anna angreifen.'), 'Auftrag steckt im Prompt');
     assert.ok(prompt.includes('Mehrere Beschwerden'), 'Begründung steckt im Prompt');
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('/security_ai_order: beachtet Grund (WARUM) und Grenzen/Fokus im System- und User-Prompt', async () => {
+  const w = makeWorld({ messageCount: 20 });
+  const ctx = await makeCtx(w);
+
+  const fields = {
+    secgem_order_task: 'Prüfe Beleidigungen im Chat.',
+    secgem_order_reason: 'Spieler haben sich über Toxizität beschwert.',
+    secgem_order_focus: 'Nur die letzten Nachrichten, nur Verwarnungen, kein Timeout.',
+  };
+  const modal = makeInteraction({ guild: w.guild });
+  modal.customId = aiOrder.MODAL_ID;
+  modal.fields = { getTextInputValue: (id) => fields[id] ?? '' };
+
+  const origFetch = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url, options) => {
+    seen.push(JSON.parse(options.body));
+    return geminiJsonResponse({
+      moderations: [
+        {
+          message_id: 1,
+          action: 'timeout',
+          duration: '1h',
+          primary: true,
+          reason: 'Toxizität im Chat',
+          personal_message:
+            'Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.\n\n' +
+            'Du hast toxische Aussagen verfasst.\n\n' +
+            '**Maßnahme:** `VERWARNUNG`\n\n' +
+            'Da es sich um deinen **ersten Verstoß** handelt, bleibt es vorerst bei einer Verwarnung.',
+        },
+      ],
+    });
+  };
+
+  try {
+    await aiOrder.handleAiOrderModal(ctx, modal);
+    assert.ok(seen.length === 1);
+    const sysPrompt = seen[0].systemInstruction.parts[0].text;
+    const usrPrompt = seen[0].contents[0].parts[0].text;
+
+    assert.ok(sysPrompt.includes('Prüfe Beleidigungen im Chat.'), 'Auftrag im System-Prompt');
+    assert.ok(sysPrompt.includes('Spieler haben sich über Toxizität beschwert.'), 'Grund (WARUM) im System-Prompt');
+    assert.ok(sysPrompt.includes('Nur die letzten Nachrichten, nur Verwarnungen, kein Timeout.'), 'Fokus im System-Prompt');
+    assert.ok(sysPrompt.includes('GRUND & BEGRÜNDUNG BEACHTEN'), 'Direktive zur Grund-Beachtung');
+
+    assert.ok(usrPrompt.includes('SPEZIFISCHER KI-AUFTRAG DER SERVERLEITUNG'), 'Auftrag im User-Prompt');
+    assert.ok(usrPrompt.includes('Prüfe Beleidigungen im Chat.'), 'Auftrag im User-Prompt');
+    assert.ok(usrPrompt.includes('Spieler haben sich über Toxizität beschwert.'), 'Grund im User-Prompt');
+    assert.ok(usrPrompt.includes('Nur die letzten Nachrichten, nur Verwarnungen, kein Timeout.'), 'Fokus im User-Prompt');
+
+    // Timeout wurde wegen "nur Verwarnungen, kein Timeout" im Fokus auf Warnung herabgestuft
+    const member = w.membersCache.get('111111111111111111');
+    assert.equal(member.timeouts.length, 0, 'Kein Timeout gesetzt, da Fokus nur Verwarnungen erlaubte');
   } finally {
     globalThis.fetch = origFetch;
   }

@@ -396,8 +396,7 @@ function actionHeadline(mod, lang = 'de') {
 
 /**
  * Fette Kopfzeile über der Begründung: Maßnahme + Hauptgrund.
- * Discord-Format ist hier Pflicht – Maßnahme UND Hauptgrund sind fett, damit
- * im Chat sofort erkennbar ist, was passiert ist und warum.
+ * (Wird vor allem für Log-Kanal-Hinweise und Statusanzeigen genutzt)
  */
 function moderationHeadline(mod, lang = 'de') {
   const reason = clip(String(mod?.reason || '').replace(/\s+/g, ' ').trim(), 180);
@@ -406,27 +405,47 @@ function moderationHeadline(mod, lang = 'de') {
   return parts.join(' · ');
 }
 
-/**
- * Ersetzt die Platzhalter in Geminis persönlicher Nachricht durch echte
- * Mentions und stellt die fette Maßnahmen-/Grund-Kopfzeile voran.
- */
-function personalMessageText(mod, authorId, authorName, lang = 'de') {
-  let text = String(mod.personal_message || '').trim();
-  const mention = `<@${authorId}>`;
-  text = text
-    .replace(/\{\s*USER\s*\}|\[\s*USER\s*\]|\(\s*USER\s*\)|@USER\b/gi, mention)
-    .replace(/\{\s*USER_?NAME\s*\}|\{\s*NAME\s*\}/gi, authorName || mention);
-  if (!text.includes(mention)) text = `${mention} ${text}`.trim();
-
-  const headline = moderationHeadline(mod, lang);
-  const body = clip(text, 1700);
-  // Die Erwähnung steht bewusst in der ersten Zeile (Discord pingt sicher),
-  // darunter die fette Kopfzeile, danach die ausführliche Begründung.
-  if (body.startsWith(mention)) {
-    const rest = body.slice(mention.length).trim();
-    return clip(`${mention}\n${headline}\n${rest}`, 1900);
+function formatActionMeasure(mod) {
+  if (mod?.action === 'timeout') {
+    const duration = mod.duration ? ` (${mod.duration})` : '';
+    return `TIMEOUT${duration}`.toUpperCase();
   }
-  return clip(`${mention}\n${headline}\n${body}`, 1900);
+  return 'VERWARNUNG';
+}
+
+/**
+ * Ersetzt alle Platzhalter in Geminis persönlicher Nachricht ({USER}, {NAME},
+ * {SERVER}, {ACTION}, {DURATION}, {REASON}) durch die echten Werte und stellt
+ * sicher, dass der Nutzer ordnungsgemäß erwähnt wird.
+ */
+function personalMessageText(mod, authorId, authorName, lang = 'de', guildName = '') {
+  let text = String(mod?.personal_message || '').trim();
+  const mention = `<@${authorId}>`;
+  const name = authorName || mention;
+  const action = formatActionMeasure(mod);
+  const duration = mod?.duration || '';
+  const reason = String(mod?.reason || '').trim();
+
+  // Ersetze alle System-Platzhalter
+  text = text
+    .replace(/\{\s*USER\s*\}|\[\s*USER\s*\]|\(\s*USER\s*\)|<@\s*USER\s*>|@USER\b/gi, mention)
+    .replace(/\{\s*USER_?ID\s*\}|\[\s*USER_?ID\s*\]/gi, authorId)
+    .replace(/\{\s*USER_?NAME\s*\}|\{\s*NAME\s*\}|\[\s*USER_?NAME\s*\]|\[\s*NAME\s*\]/gi, name)
+    .replace(/\{\s*(?:SERVER|GUILD)(?:_?NAME)?\s*\}|\[\s*(?:SERVER|GUILD)(?:_?NAME)?\s*\]/gi, guildName || '')
+    .replace(/\{\s*ACTION\s*\}|\[\s*ACTION\s*\]|\{\s*MASSNAHME\s*\}|\[\s*MASSNAHME\s*\]/gi, action)
+    .replace(/\{\s*DURATION\s*\}|\[\s*DURATION\s*\]|\{\s*DAUER\s*\}|\[\s*DAUER\s*\]/gi, duration)
+    .replace(/\{\s*REASON\s*\}|\[\s*REASON\s*\]|\{\s*GRUND\s*\}|\[\s*GRUND\s*\]/gi, reason);
+
+  // Sicherstellen, dass die Erwähnung im Text vorkommt (Discord-Ping)
+  if (!text.includes(mention)) {
+    if (/^Hallo\b/i.test(text)) {
+      text = text.replace(/^Hallo\s*[,:]?/i, `Hallo ${mention},`);
+    } else {
+      text = `${mention}\n\n${text}`.trim();
+    }
+  }
+
+  return clip(text, 1950);
 }
 
 /** Wendet die Moderationen aus der Gemini-Antwort auf Discord an. */
@@ -519,7 +538,8 @@ async function applyResults({ ctx, guildId, messages, parsed, lang, maxModeratio
       }
 
       // 2) Persönliche Nachricht auf die (Haupt-)Verstoßnachricht antworten
-      const replyText = personalMessageText(mod, authorId, rec.authorName, lang);
+      const guildName = guild?.name || '';
+      const replyText = personalMessageText(mod, authorId, rec.authorName, lang, guildName);
       const channel = guild?.channels?.cache?.get?.(rec.channelId) || null;
       let replied = false;
       if (channel && rec.discordMessageId) {
@@ -641,6 +661,8 @@ async function runAdHocAnalysis({
   extraDirectives = [],
   maxModerations = MAX_MODERATIONS_PER_BATCH,
   adminPromptOverride = null,
+  customOrder = null,
+  targetedAction = null,
 }) {
   const gid = String(guildId);
   const lang = ctx.store.getLanguage(gid);
@@ -676,7 +698,12 @@ async function runAdHocAnalysis({
     extraDirectives,
   });
   const adminPrompt = adminPromptOverride || ctx.store.getPrompt(gid) || t('defaultPrompt', lang);
-  const userPrompt = buildUserPrompt({ adminPrompt, logText: buildChatLog(usable) });
+  const userPrompt = buildUserPrompt({
+    adminPrompt,
+    logText: buildChatLog(usable),
+    customOrder,
+    targetedAction,
+  });
 
   const res = await callGemini({ apiKey, systemPrompt, userPrompt, env: ctx.env });
   if (!res.ok) {
@@ -750,6 +777,10 @@ async function runTargetedModeration({ ctx, guildId, target, selected, context =
       selectedIds,
       adminNote,
     }),
+    targetedAction: {
+      targetName: target?.name,
+      adminNote,
+    },
   });
 }
 
@@ -765,12 +796,31 @@ async function runCustomOrder({ ctx, guildId, messages, order, reasoning, focus 
     copy.seq = copy.isAdmin ? null : ++seq;
     numbered.push(copy);
   }
-  return runAdHocAnalysis({
+
+  // Wenn der Fokus Vorgaben wie "nur Verwarnung / kein Timeout" enthält,
+  // werden zurückgegebene Moderationen programmatisch abgesichert
+  const warnOnly = Boolean(
+    focus && /nur\s*(?:ver)?warn|kein\s*timeout|keine\s*timeouts|only\s*warn/i.test(focus)
+  );
+
+  const res = await runAdHocAnalysis({
     ctx,
     guildId,
     messages: numbered,
     extraDirectives: buildOrderDirectives({ order, reasoning, focus }),
+    customOrder: { order, reasoning, focus },
   });
+
+  if (warnOnly && res?.ok && Array.isArray(res?.moderations)) {
+    for (const mod of res.moderations) {
+      if (mod.action === 'timeout') {
+        mod.action = 'warn';
+        mod.duration = null;
+      }
+    }
+  }
+
+  return res;
 }
 
 module.exports = {
