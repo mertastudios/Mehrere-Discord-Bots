@@ -49,6 +49,16 @@ const MAX_RAGE_MESSAGES = 7;
 const OK_EMOJI = '✅';
 const FAIL_EMOJI = '❌';
 
+/** Zufällige Feier-Reaktionen bei einem Meilenstein (es werden 5 davon gezogen). */
+const MILESTONE_EMOJIS = ['🏅', '🏆', '✨', '⭐️', '💫', '🤩', '💪', '🔥', '😲'];
+const MILESTONE_REACTION_COUNT = 5;
+/** Feste Reaktionen für die 67 – in genau dieser Reihenfolge. */
+const SPECIAL_67_EMOJIS = ['😭', '6️⃣', '7️⃣', '❗️'];
+/** Anzahl der Meilenstein-Sprüche in `languages.js` (milestoneQuote1…N). */
+const MILESTONE_QUOTE_VARIANTS = 4;
+/** Anzahl der 67-Trend-Sprüche in `languages.js` (trend67Rant1…N). */
+const TREND_RANT_VARIANTS = 3;
+
 /* ------------------------------------------------------------------ *
  * Reine Logik (ohne Discord) – dadurch vollständig testbar
  * ------------------------------------------------------------------ */
@@ -204,6 +214,54 @@ function rageDelayForLine(content, baseDelayMs = FREAKOUT_MESSAGE_DELAY_MS, rand
   const jitter = 0.7 + Math.max(0, Math.min(1, Number(random()) || 0)) * 0.6;
   const typingTime = Math.min(350, String(content || '').length * 3);
   return Math.max(250, Math.min(1_500, Math.round(base * jitter + typingTime)));
+}
+
+/**
+ * Meilensteine sind 100, 500, 1000, 5000, 10000, 50000, 100000 … also
+ * 10^k bzw. 5·10^k mit k ≥ 2. Die 67 ist ein Sonderfall und kein Meilenstein.
+ */
+function isMilestone(value) {
+  const n = Math.floor(Number(value));
+  if (!Number.isSafeInteger(n) || n < 100) return false;
+  let rest = n;
+  while (rest % 10 === 0) rest /= 10;
+  return rest === 1 || rest === 5;
+}
+
+/** Zieht `count` verschiedene Elemente in zufälliger Reihenfolge (Fisher-Yates). */
+function pickRandomEmojis(list, count, random = Math.random) {
+  const pool = [...list];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.max(0, Math.min(0.999999, Number(random()) || 0)) * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, Math.max(0, Math.min(pool.length, Number(count) || 0)));
+}
+
+/**
+ * Erkennt den 67-Trend: die Zahl 67 als eigenständiges Wort, „six seven“ und
+ * die gesprochene Form „6-7“ bzw. „6 7“. Ziffern drumherum zählen nicht mit,
+ * damit z. B. 1267 keinen Fehlalarm auslöst.
+ */
+function isSixtySevenTrend(content) {
+  const text = String(content ?? '');
+  return (
+    /(?<!\d)67(?!\d)/.test(text) ||
+    /\bsix[\s-]*seven\b/i.test(text) ||
+    /(?<!\d)6[\s-]+7(?!\d)/.test(text)
+  );
+}
+
+/** Wählt einen der Meilenstein-Sprüche aus. */
+function milestoneQuote(lang, index = Math.floor(Math.random() * MILESTONE_QUOTE_VARIANTS)) {
+  const variant = normalizedVariant(index, MILESTONE_QUOTE_VARIANTS);
+  return t(`milestoneQuote${variant + 1}`, lang);
+}
+
+/** Wählt einen der genervten 67-Trend-Sprüche aus. */
+function trend67Text(lang, index = Math.floor(Math.random() * TREND_RANT_VARIANTS)) {
+  const variant = normalizedVariant(index, TREND_RANT_VARIANTS);
+  return t(`trend67Rant${variant + 1}`, lang);
 }
 
 /* ------------------------------------------------------------------ *
@@ -613,6 +671,10 @@ function createCountingManager(
 
       if (result.action === 'delete') {
         await message.delete().catch(() => {});
+        // Auch gelöschte Nachrichten mit dem 67-Trend bekommen die genervte Antwort.
+        if (isSixtySevenTrend(message.content)) {
+          await channel.send({ content: trend67Text(lang), allowedMentions: { parse: [] } }).catch(() => {});
+        }
         return result;
       }
 
@@ -620,6 +682,20 @@ function createCountingManager(
         entry.count = result.state.count;
         entry.lastUserId = result.state.lastUserId;
         await message.react(OK_EMOJI).catch(() => {});
+
+        if (result.expected === 67) {
+          // Sonderfall: genau diese Emojis in genau dieser Reihenfolge, kein Spruch.
+          for (const emoji of SPECIAL_67_EMOJIS) {
+            await message.react(emoji).catch(() => {});
+          }
+        } else if (isMilestone(result.expected)) {
+          // Meilenstein: 5 zufällige Feier-Emojis in zufälliger Reihenfolge, dann ein Spruch.
+          for (const emoji of pickRandomEmojis(MILESTONE_EMOJIS, MILESTONE_REACTION_COUNT, random)) {
+            await message.react(emoji).catch(() => {});
+          }
+          await channel.send({ content: milestoneQuote(lang), allowedMentions: { parse: [] } }).catch(() => {});
+        }
+
         scheduleTopicUpdate(channel, entry, lang, false, languageChangedAt);
         return result;
       }
@@ -637,6 +713,9 @@ function createCountingManager(
         streak: Math.max(0, Number(result.expected) - 1),
       };
       await sendFailureReaction(channel, message.author.id, lang, vars);
+      if (isSixtySevenTrend(message.content)) {
+        await channel.send({ content: trend67Text(lang), allowedMentions: { parse: [] } }).catch(() => {});
+      }
       scheduleTopicUpdate(channel, entry, lang, true, languageChangedAt);
       return result;
     });
@@ -684,6 +763,16 @@ module.exports = {
   rageBar,
   rageDelayForLine,
   buildEscalationLines,
+  isMilestone,
+  pickRandomEmojis,
+  isSixtySevenTrend,
+  milestoneQuote,
+  trend67Text,
+  MILESTONE_EMOJIS,
+  MILESTONE_REACTION_COUNT,
+  SPECIAL_67_EMOJIS,
+  MILESTONE_QUOTE_VARIANTS,
+  TREND_RANT_VARIANTS,
   parseCountingTopic,
   stripCountingTopic,
   buildCountingTopic,

@@ -160,6 +160,9 @@ Gegner, keine Annahme, kein Warten – die Runde läuft direkt los.
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
   **gelöscht**, der Zählstand bleibt stehen.
 - **Text statt Zahl** → Nachricht wird ebenfalls nur gelöscht, kein Neustart.
+- **Meilensteine** (100, 500, 1000, 5000, 10000, 50000 … also 10ᵏ bzw. 5·10ᵏ): Zusätzlich zu **✅** reagiert der Bot mit **5 zufälligen Feier-Emojis** (🏅 🏆 ✨ ⭐️ 💫 🤩 💪 🔥 😲) in zufälliger Reihenfolge und wirft danach einen zufälligen Spruch in den Chat.
+- **Die 67** ist ein Sonderfall: Wird sie richtig gezählt, reagiert der Bot mit **✅** und anschließend genau mit **😭 6️⃣ 7️⃣ ❗️** in dieser Reihenfolge.
+- **67-Trend:** Schreibt jemand „67“, „six seven“ oder „6-7“, ist der Bot genervt und antwortet mit einem Spruch gegen den Trend. Bei einer falschen 67 kommt die Antwort nach der normalen Fehlermeldung.
 - **Bots und Webhooks spielen nicht mit** – ihre Nachrichten werden ignoriert.
 - Zum Löschen braucht der Bot *Nachrichten verwalten*, zum Speichern des
   Zählstands *Kanal verwalten*. Fehlt ein Recht, sagt der Command das direkt.
