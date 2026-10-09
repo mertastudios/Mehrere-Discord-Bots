@@ -113,6 +113,16 @@ const {
   stripCountingTopic,
   TOPIC_MAX_LENGTH,
   createCountingManager,
+  isMilestone,
+  pickRandomEmojis,
+  isSixtySevenTrend,
+  milestoneQuote,
+  trend67Text,
+  MILESTONE_EMOJIS,
+  MILESTONE_REACTION_COUNT,
+  SPECIAL_67_EMOJIS,
+  MILESTONE_QUOTE_VARIANTS,
+  TREND_RANT_VARIANTS,
 } = require('../bots/minigames-bot/src/counting');
 const {
   pickVoiceChannel,
@@ -1736,3 +1746,131 @@ test('registerGuildCommands schreibt genau die Server-Commands einer Gilde', asy
   assert.ok(ids[MULTIPLAYER_COMMAND] && ids[SINGLEPLAYER_COMMAND]);
   assert.equal(await registerGuildCommands(ctx, ''), null, 'ohne Guild-ID passiert nichts');
 });
+
+test('Meilensteine sind 100, 500, 1000, 5000, 10000 … – die 67 ist kein Meilenstein', () => {
+  for (const value of [100, 500, 1000, 5000, 10000, 50000, 100000, 500000]) {
+    assert.equal(isMilestone(value), true, `${value} ist ein Meilenstein`);
+  }
+  for (const value of [0, 1, 10, 50, 67, 99, 200, 250, 999, 1001, 5001, 12000]) {
+    assert.equal(isMilestone(value), false, `${value} ist kein Meilenstein`);
+  }
+});
+
+test('Meilenstein-Emojis: fünf verschiedene zufällige Emojis aus der Liste', () => {
+  assert.deepEqual(MILESTONE_EMOJIS, ['🏅', '🏆', '✨', '⭐️', '💫', '🤩', '💪', '🔥', '😲']);
+  assert.equal(MILESTONE_REACTION_COUNT, 5);
+  for (const seed of [0, 0.3, 0.6, 0.99]) {
+    const picked = pickRandomEmojis(MILESTONE_EMOJIS, 5, () => seed);
+    assert.equal(picked.length, 5);
+    assert.equal(new Set(picked).size, 5, 'keine Doppelten');
+    for (const emoji of picked) assert.ok(MILESTONE_EMOJIS.includes(emoji));
+  }
+  const orders = new Set(
+    [0.05, 0.4, 0.8].map((seed) => pickRandomEmojis(MILESTONE_EMOJIS, 5, () => seed).join('|'))
+  );
+  assert.ok(orders.size > 1, 'die Reihenfolge ist zufällig');
+});
+
+test('67 hat feste Reaktionen 😭6️⃣7️⃣❗️ in genau dieser Reihenfolge', () => {
+  assert.deepEqual(SPECIAL_67_EMOJIS, ['😭', '6️⃣', '7️⃣', '❗️']);
+});
+
+test('Meilenstein-Sprüche und 67-Trend-Sprüche existieren in allen Sprachen', () => {
+  const languages = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
+  for (let i = 1; i <= MILESTONE_QUOTE_VARIANTS; i += 1) {
+    for (const lang of languages) assert.ok(T[`milestoneQuote${i}`][lang], `milestoneQuote${i} fehlt in ${lang}`);
+  }
+  for (let i = 1; i <= TREND_RANT_VARIANTS; i += 1) {
+    for (const lang of languages) assert.ok(T[`trend67Rant${i}`][lang], `trend67Rant${i} fehlt in ${lang}`);
+  }
+  assert.equal(
+    milestoneQuote('de', 0),
+    'Super! Jetzt bloß nicht versagen Leute, sonst müssen wir von vorn beginnen!'
+  );
+  assert.equal(
+    trend67Text('de', 0),
+    'Oh nein! Nicht schon wieder der blöde 67-Trend! Ich hasse ihn! Was ist daran so lustig?'
+  );
+});
+
+test('Der 67-Trend wird erkannt, ohne Zahlen wie 1267 falsch zu treffen', () => {
+  for (const text of ['67', '67!', 'six seven', 'Six-Seven lol', '6-7', '6 7', 'das ist so 67 haha']) {
+    assert.equal(isSixtySevenTrend(text), true, `${text} ist der Trend`);
+  }
+  for (const text of ['1267', '670', '66', '7', 'sechs sieben', 'Hallo']) {
+    assert.equal(isSixtySevenTrend(text), false, `${text} ist kein Trend`);
+  }
+});
+
+function milestoneHarness(count, content, overrides = {}) {
+  const reactions = [];
+  const sent = [];
+  const deleted = [];
+  const channel = {
+    id: 'counting',
+    guildId: 'guild',
+    topic: buildCountingTopic('', count, 'de'),
+    send: async (payload) => sent.push(payload.content),
+    setTopic: async () => {},
+    sendTyping: async () => {},
+  };
+  const message = {
+    id: 'msg',
+    guildId: 'guild',
+    content,
+    author: { id: 'player-1' },
+    channel,
+    react: async (emoji) => reactions.push(emoji),
+    delete: async () => deleted.push(true),
+  };
+  const manager = createCountingManager(
+    {
+      client: { user: { id: 'minigames-bot' } },
+      logger: { warn() {} },
+      store: { withLock: async (_key, fn) => fn(), getServerLang: () => 'de' },
+    },
+    { random: () => 0.5, ...overrides }
+  );
+  return { manager, message, reactions, sent, deleted };
+}
+
+test('Meilenstein 100 → ✅, fünf Zufalls-Emojis und ein Spruch', async () => {
+  const { manager, message, reactions, sent } = milestoneHarness(99, '100');
+  const result = await manager.handleMessage(message);
+  assert.equal(result.action, 'accept');
+  assert.equal(reactions[0], '✅');
+  assert.equal(reactions.length, 1 + MILESTONE_REACTION_COUNT);
+  assert.equal(new Set(reactions.slice(1)).size, MILESTONE_REACTION_COUNT);
+  for (const emoji of reactions.slice(1)) assert.ok(MILESTONE_EMOJIS.includes(emoji));
+  assert.equal(sent.length, 1, 'genau ein Spruch');
+  assert.ok(MILESTONE_QUOTE_VARIANTS >= 1);
+});
+
+test('Normale Zahl → nur ✅, kein Spruch', async () => {
+  const { manager, message, reactions, sent } = milestoneHarness(41, '42');
+  await manager.handleMessage(message);
+  assert.deepEqual(reactions, ['✅']);
+  assert.deepEqual(sent, []);
+});
+
+test('67 → ✅ und genau 😭6️⃣7️⃣❗️ ohne Zufalls-Emojis', async () => {
+  const { manager, message, reactions, sent } = milestoneHarness(66, '67');
+  await manager.handleMessage(message);
+  assert.deepEqual(reactions, ['✅', ...SPECIAL_67_EMOJIS]);
+  assert.deepEqual(sent, []);
+});
+
+test('Falsche 67 bzw. Text mit 67-Trend bekommt die genervte Antwort', async () => {
+  const text = milestoneHarness(10, 'six seven!');
+  await text.manager.handleMessage(text.message);
+  assert.equal(text.deleted.length, 1, 'Text wird gelöscht');
+  assert.equal(text.sent.length, 1, 'genau eine Trend-Antwort');
+  const trendTexts = [1, 2, 3].map((i) => T[`trend67Rant${i}`].de);
+  assert.ok(trendTexts.includes(text.sent[0]), 'einer der 67-Trend-Sprüche');
+
+  const wrong = milestoneHarness(10, '67');
+  await wrong.manager.handleMessage(wrong.message);
+  assert.ok(wrong.reactions.includes('❌'), 'falsche Zahl → ❌');
+  assert.ok(trendTexts.includes(wrong.sent.at(-1)), 'Trend-Antwort nach der Fehlermeldung');
+});
+
