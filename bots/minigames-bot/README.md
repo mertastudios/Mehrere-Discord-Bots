@@ -160,8 +160,20 @@ Gegner, keine Annahme, kein Warten – die Runde läuft direkt los.
 - **Zwei Zahlen derselben Person hintereinander** → Nachricht wird nur
   **gelöscht**, der Zählstand bleibt stehen.
 - **Text statt Zahl** → Nachricht wird ebenfalls nur gelöscht, kein Neustart.
-- **Meilensteine** (100, 500, 1000, 5000, 10000, 50000 … also 10ᵏ bzw. 5·10ᵏ): Zusätzlich zu **✅** reagiert der Bot mit **5 zufälligen Feier-Emojis** (🏅 🏆 ✨ ⭐️ 💫 🤩 💪 🔥 😲) in zufälliger Reihenfolge und wirft danach einen zufälligen Spruch in den Chat.
-- **Die 67** ist ein Sonderfall: Wird sie richtig gezählt, reagiert der Bot mit **✅** und anschließend genau mit **😭 6️⃣ 7️⃣ ❗️** in dieser Reihenfolge.
+- **Meilensteine** (100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 2500, 3000,
+  5000, 7500, 10000 … – unter 1000 jeder Hunderter bis 500 plus die 750, ab 1000
+  je Dekade 1k, 1,5k, 2k, 2,5k, 3k, 5k, 7,5k): Zusätzlich zu **✅** reagiert der
+  Bot mit **5 zufälligen Feier-Emojis** (🏅 🏆 ✨ ⭐️ 💫 🤩 💪 🔥 😲) in zufälliger
+  Reihenfolge und **antwortet auf die Nachricht, die den Meilenstein ausgelöst
+  hat**. Die Antwort ist eine menschlich-organische Freudensequenz aus mehreren
+  Nachrichten mit Tippfehlern, Begeisterungsausbrüchen, „tippt …“-Pausen und
+  genau einem Ping der Person, die den Meilenstein gesetzt hat – je größer der
+  Meilenstein, desto länger die Sequenz (maximal sechs Nachrichten).
+- **Die 67** ist ein Sonderfall: Wird sie richtig gezählt, reagiert der Bot mit
+  **✅** und anschließend genau mit **😭 6️⃣ 7️⃣ ❗️** in dieser Reihenfolge –
+  und rastet dann als **Antwort auf die 67-Nachricht** in einer kurzen,
+  menschlich-organischen Sequenz über den Trend aus (Tippfehler, genervte
+  Selbstgespräche, genau ein Ping).
 - **67-Trend:** Schreibt jemand „67“, „six seven“ oder „6-7“, ist der Bot genervt und antwortet mit einem Spruch gegen den Trend. Bei einer falschen 67 kommt die Antwort nach der normalen Fehlermeldung.
 - **Bots und Webhooks spielen nicht mit** – ihre Nachrichten werden ignoriert.
 - Zum Löschen braucht der Bot *Nachrichten verwalten*, zum Speichern des
