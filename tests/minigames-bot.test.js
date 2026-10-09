@@ -118,11 +118,17 @@ const {
   isSixtySevenTrend,
   milestoneQuote,
   trend67Text,
+  hypeTierForCount,
+  buildMilestoneHypeLines,
+  buildTrend67RageLines,
   MILESTONE_EMOJIS,
   MILESTONE_REACTION_COUNT,
   SPECIAL_67_EMOJIS,
   MILESTONE_QUOTE_VARIANTS,
   TREND_RANT_VARIANTS,
+  MILESTONE_HYPE_VARIANTS,
+  TREND67_RAGE_VARIANTS,
+  MAX_HYPE_MESSAGES,
 } = require('../bots/minigames-bot/src/counting');
 const {
   pickVoiceChannel,
@@ -1747,11 +1753,20 @@ test('registerGuildCommands schreibt genau die Server-Commands einer Gilde', asy
   assert.equal(await registerGuildCommands(ctx, ''), null, 'ohne Guild-ID passiert nichts');
 });
 
-test('Meilensteine sind 100, 500, 1000, 5000, 10000 … – die 67 ist kein Meilenstein', () => {
-  for (const value of [100, 500, 1000, 5000, 10000, 50000, 100000, 500000]) {
+test('Meilensteine sind 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 2500, 3000, 5000, 7500, 10000 … – die 67 ist kein Meilenstein', () => {
+  for (const value of [
+    100, 200, 300, 400, 500, 750,
+    1000, 1500, 2000, 2500, 3000, 5000, 7500,
+    10000, 15000, 20000, 25000, 30000, 50000, 75000,
+    100000, 150000, 1000000,
+  ]) {
     assert.equal(isMilestone(value), true, `${value} ist ein Meilenstein`);
   }
-  for (const value of [0, 1, 10, 50, 67, 99, 200, 250, 999, 1001, 5001, 12000]) {
+  for (const value of [
+    0, 1, 10, 50, 67, 99,
+    150, 250, 600, 700, 800, 900, 999,
+    1001, 1200, 1750, 4000, 5001, 12000, 40000, 123456,
+  ]) {
     assert.equal(isMilestone(value), false, `${value} ist kein Meilenstein`);
   }
 });
@@ -1775,13 +1790,28 @@ test('67 hat feste Reaktionen 😭6️⃣7️⃣❗️ in genau dieser Reihenfol
   assert.deepEqual(SPECIAL_67_EMOJIS, ['😭', '6️⃣', '7️⃣', '❗️']);
 });
 
-test('Meilenstein-Sprüche und 67-Trend-Sprüche existieren in allen Sprachen', () => {
+test('Meilenstein-Sprüche, Hype-Sequenzen und 67-Sprüche existieren in allen Sprachen', () => {
   const languages = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
   for (let i = 1; i <= MILESTONE_QUOTE_VARIANTS; i += 1) {
     for (const lang of languages) assert.ok(T[`milestoneQuote${i}`][lang], `milestoneQuote${i} fehlt in ${lang}`);
   }
   for (let i = 1; i <= TREND_RANT_VARIANTS; i += 1) {
     for (const lang of languages) assert.ok(T[`trend67Rant${i}`][lang], `trend67Rant${i} fehlt in ${lang}`);
+  }
+  for (let i = 1; i <= MILESTONE_HYPE_VARIANTS; i += 1) {
+    for (const lang of languages) {
+      assert.ok(T[`milestoneHypeTitle${i}`][lang], `milestoneHypeTitle${i} fehlt in ${lang}`);
+      assert.ok(T[`milestoneHypeBody${i}`][lang], `milestoneHypeBody${i} fehlt in ${lang}`);
+    }
+  }
+  for (const key of ['milestoneHypeStreak', 'milestoneHypeLegend', 'milestoneHypeGodlike']) {
+    for (const lang of languages) assert.ok(T[key][lang], `${key} fehlt in ${lang}`);
+  }
+  for (let i = 1; i <= TREND67_RAGE_VARIANTS; i += 1) {
+    for (const lang of languages) {
+      assert.ok(T[`trend67RageTitle${i}`][lang], `trend67RageTitle${i} fehlt in ${lang}`);
+      assert.ok(T[`trend67RageBody${i}`][lang], `trend67RageBody${i} fehlt in ${lang}`);
+    }
   }
   assert.equal(
     milestoneQuote('de', 0),
@@ -1805,6 +1835,7 @@ test('Der 67-Trend wird erkannt, ohne Zahlen wie 1267 falsch zu treffen', () => 
 function milestoneHarness(count, content, overrides = {}) {
   const reactions = [];
   const sent = [];
+  const replies = [];
   const deleted = [];
   const channel = {
     id: 'counting',
@@ -1821,6 +1852,7 @@ function milestoneHarness(count, content, overrides = {}) {
     author: { id: 'player-1' },
     channel,
     react: async (emoji) => reactions.push(emoji),
+    reply: async (payload) => replies.push(payload.content),
     delete: async () => deleted.push(true),
   };
   const manager = createCountingManager(
@@ -1829,35 +1861,113 @@ function milestoneHarness(count, content, overrides = {}) {
       logger: { warn() {} },
       store: { withLock: async (_key, fn) => fn(), getServerLang: () => 'de' },
     },
-    { random: () => 0.5, ...overrides }
+    // Ohne Pause bleibt der Test schnell.
+    { random: () => 0.5, messageDelayMs: 0, ...overrides }
   );
-  return { manager, message, reactions, sent, deleted };
+  return { manager, message, reactions, sent, replies, deleted };
 }
 
-test('Meilenstein 100 → ✅, fünf Zufalls-Emojis und ein Spruch', async () => {
-  const { manager, message, reactions, sent } = milestoneHarness(99, '100');
+test('Meilenstein 100 → ✅, fünf Zufalls-Emojis und organische Antwort-Sequenz als Reply', async () => {
+  const { manager, message, reactions, sent, replies } = milestoneHarness(99, '100');
   const result = await manager.handleMessage(message);
   assert.equal(result.action, 'accept');
   assert.equal(reactions[0], '✅');
   assert.equal(reactions.length, 1 + MILESTONE_REACTION_COUNT);
   assert.equal(new Set(reactions.slice(1)).size, MILESTONE_REACTION_COUNT);
   for (const emoji of reactions.slice(1)) assert.ok(MILESTONE_EMOJIS.includes(emoji));
-  assert.equal(sent.length, 1, 'genau ein Spruch');
-  assert.ok(MILESTONE_QUOTE_VARIANTS >= 1);
+  assert.equal(sent.length, 0, 'keine freien Kanal-Nachrichten mehr');
+  assert.equal(replies.length, 3, 'Titel + Body + Spruch als Antworten');
+  assert.ok(replies[0].includes('<@player-1>'), 'die erste Antwort pingt den Spieler');
+  assert.ok(replies[0].includes('100'), 'die erste Antwort nennt die Zahl');
+  const quotes = [1, 2, 3, 4].map((i) => T[`milestoneQuote${i}`].de);
+  assert.ok(quotes.includes(replies.at(-1)), 'die letzte Antwort ist ein Meilenstein-Spruch');
+});
+
+test('Jeder neue Meilenstein antwortet, 150 und 250 aber nicht', async () => {
+  for (const [count, content] of [[199, '200'], [749, '750'], [1499, '1500'], [9999, '10000']]) {
+    const ms = milestoneHarness(count, content);
+    await ms.manager.handleMessage(ms.message);
+    assert.ok(ms.replies.length >= 2, `Meilenstein ${content} löst eine Antwort-Sequenz aus`);
+    assert.equal(ms.sent.length, 0, `Meilenstein ${content} schreibt nicht frei in den Kanal`);
+  }
+
+  const noMilestone = milestoneHarness(149, '150');
+  await noMilestone.manager.handleMessage(noMilestone.message);
+  assert.deepEqual(noMilestone.reactions, ['✅']);
+  assert.deepEqual(noMilestone.replies, []);
+  assert.deepEqual(noMilestone.sent, []);
+});
+
+test('Die Freudensequenz wächst mit dem Meilenstein und bleibt begrenzt', async () => {
+  const small = milestoneHarness(499, '500');
+  await small.manager.handleMessage(small.message);
+  assert.equal(small.replies.length, 4, 'Stufe 1: Titel, Body, Streak, Spruch');
+
+  const big = milestoneHarness(999, '1000');
+  await big.manager.handleMessage(big.message);
+  assert.equal(big.replies.length, 5, 'Stufe 2: Titel, Body, Streak, Legend, Spruch');
+
+  const huge = milestoneHarness(9999, '10000');
+  await huge.manager.handleMessage(huge.message);
+  assert.equal(huge.replies.length, MAX_HYPE_MESSAGES, 'Stufe 3 ist gedeckelt');
+  assert.ok(huge.replies[0].includes('<@player-1>'), 'nur die erste Antwort pingt');
+  for (const line of huge.replies.slice(1)) {
+    assert.ok(!line.includes('<@player-1>'), 'Folgenachrichten pingen nicht erneut');
+  }
+});
+
+test('Meilenstein-Hype-Builder: Varianten kombinieren sich, nur der Titel pingt', () => {
+  assert.equal(hypeTierForCount(100), 0);
+  assert.equal(hypeTierForCount(500), 1);
+  assert.equal(hypeTierForCount(750), 1);
+  assert.equal(hypeTierForCount(1000), 2);
+  assert.equal(hypeTierForCount(7500), 2);
+  assert.equal(hypeTierForCount(10000), 3);
+
+  const lines = buildMilestoneHypeLines('de', { user: '<@u>', count: 300 }, 0);
+  assert.equal(lines.length, 3, 'Stufe 0: Titel, Body, Spruch');
+  assert.ok(lines[0].includes('<@u>'));
+  assert.ok(lines[0].includes('300'));
+  for (const line of lines.slice(1)) assert.ok(!line.includes('<@u>'));
+
+  const capped = buildMilestoneHypeLines('de', { user: '<@u>', count: 50000 }, 2);
+  assert.ok(capped.length <= MAX_HYPE_MESSAGES);
 });
 
 test('Normale Zahl → nur ✅, kein Spruch', async () => {
-  const { manager, message, reactions, sent } = milestoneHarness(41, '42');
+  const { manager, message, reactions, sent, replies } = milestoneHarness(41, '42');
   await manager.handleMessage(message);
   assert.deepEqual(reactions, ['✅']);
   assert.deepEqual(sent, []);
+  assert.deepEqual(replies, []);
 });
 
-test('67 → ✅ und genau 😭6️⃣7️⃣❗️ ohne Zufalls-Emojis', async () => {
-  const { manager, message, reactions, sent } = milestoneHarness(66, '67');
+test('67 → ✅ und genau 😭6️⃣7️⃣❗️, dazu rastet der Bot als Reply über den Trend aus', async () => {
+  const { manager, message, reactions, sent, replies } = milestoneHarness(66, '67');
   await manager.handleMessage(message);
   assert.deepEqual(reactions, ['✅', ...SPECIAL_67_EMOJIS]);
-  assert.deepEqual(sent, []);
+  assert.equal(sent.length, 0, 'keine freien Kanal-Nachrichten');
+  assert.equal(replies.length, 2, 'Titel + Body als Antworten auf die 67-Nachricht');
+  assert.ok(replies[0].includes('<@player-1>'), 'die erste Antwort pingt');
+  const titles = [1, 2, 3].map((i) =>
+    T[`trend67RageTitle${i}`].de.replace('{user}', '<@player-1>').replace('{count}', '67')
+  );
+  assert.ok(titles.includes(replies[0]), 'einer der 67-Ausraster-Titel');
+  const bodies = [1, 2, 3].map((i) => T[`trend67RageBody${i}`].de);
+  assert.ok(bodies.includes(replies[1]), 'einer der 67-Ausraster-Texte');
+});
+
+test('67-Ausraster-Builder: organische Sequenz mit genau einem Ping', () => {
+  const lines = buildTrend67RageLines('de', { user: '<@u>' }, 0);
+  assert.equal(lines.length, 2);
+  assert.ok(lines[0].includes('<@u>'));
+  assert.ok(!lines[1].includes('<@u>'), 'nur der Titel pingt');
+  // Varianten wiederholen sich nicht sofort und decken alle Bausteine ab.
+  const seen = new Set();
+  for (let i = 0; i < TREND67_RAGE_VARIANTS; i += 1) {
+    seen.add(buildTrend67RageLines('de', { user: '<@u>' }, i)[0]);
+  }
+  assert.equal(seen.size, TREND67_RAGE_VARIANTS, 'jede Variante ist erreichbar');
 });
 
 test('Falsche 67 bzw. Text mit 67-Trend bekommt die genervte Antwort', async () => {

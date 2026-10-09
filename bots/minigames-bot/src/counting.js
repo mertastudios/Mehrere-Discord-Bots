@@ -15,6 +15,12 @@
  *   abgebrochene Gedanken, absichtliche Tippfehler, Selbstkorrekturen und eine
  *   menschlich wirkende Schreib-Pause. Je länger der zerstörte Streak war,
  *   desto stärker fällt die Reaktion aus – ohne Mass-Pings.
+ * - Meilensteine (100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 2500, 3000,
+ *   5000, 7500, 10000 …) werden gefeiert: 5 Feier-Emojis und eine menschlich-
+ *   organische Freudensequenz mit Tippfehlern, Ping und Schreibpausen, die als
+ *   Antwort auf die auslösende Nachricht geschickt wird.
+ * - Die 67 bleibt ein Sonderfall: feste Emojis plus ein genervter, organischer
+ *   Ausraster gegen den Trend – ebenfalls als Antwort auf die Nachricht.
  * - Zwei Zahlen derselben Person hintereinander → Nachricht wird nur
  *   gelöscht, der Zählstand bleibt.
  * - Text statt Zahl → Nachricht wird gelöscht, der Zählstand bleibt.
@@ -58,6 +64,12 @@ const SPECIAL_67_EMOJIS = ['😭', '6️⃣', '7️⃣', '❗️'];
 const MILESTONE_QUOTE_VARIANTS = 4;
 /** Anzahl der 67-Trend-Sprüche in `languages.js` (trend67Rant1…N). */
 const TREND_RANT_VARIANTS = 3;
+/** Anzahl der Meilenstein-Hype-Bausteine (milestoneHypeTitle1…/Body1…). */
+const MILESTONE_HYPE_VARIANTS = 4;
+/** Anzahl der 67-Ausraster-Bausteine (trend67RageTitle1…/Body1…). */
+const TREND67_RAGE_VARIANTS = 3;
+/** Auch die größte Freudensequenz bleibt hart begrenzt. */
+const MAX_HYPE_MESSAGES = 6;
 
 /* ------------------------------------------------------------------ *
  * Reine Logik (ohne Discord) – dadurch vollständig testbar
@@ -217,15 +229,23 @@ function rageDelayForLine(content, baseDelayMs = FREAKOUT_MESSAGE_DELAY_MS, rand
 }
 
 /**
- * Meilensteine sind 100, 500, 1000, 5000, 10000, 50000, 100000 … also
- * 10^k bzw. 5·10^k mit k ≥ 2. Die 67 ist ein Sonderfall und kein Meilenstein.
+ * Meilensteine sind 100, 200, 300, 400, 500, 750, 1000, 1500, 2000, 2500,
+ * 3000, 5000, 7500, 10000 … und so weiter:
+ * - Unter 1000 jeder volle Hunderter bis 500, dazu die 750.
+ * - Ab 1000 je Dekade 1k, 1,5k, 2k, 2,5k, 3k, 5k und 7,5k.
+ * Die 67 ist ein Sonderfall und kein Meilenstein.
  */
 function isMilestone(value) {
   const n = Math.floor(Number(value));
   if (!Number.isSafeInteger(n) || n < 100) return false;
+  if (n < 1000) {
+    return (n % 100 === 0 && n <= 500) || n === 750;
+  }
   let rest = n;
   while (rest % 10 === 0) rest /= 10;
-  return rest === 1 || rest === 5;
+  return (
+    rest === 1 || rest === 15 || rest === 2 || rest === 25 || rest === 3 || rest === 5 || rest === 75
+  );
 }
 
 /** Zieht `count` verschiedene Elemente in zufälliger Reihenfolge (Fisher-Yates). */
@@ -262,6 +282,104 @@ function milestoneQuote(lang, index = Math.floor(Math.random() * MILESTONE_QUOTE
 function trend67Text(lang, index = Math.floor(Math.random() * TREND_RANT_VARIANTS)) {
   const variant = normalizedVariant(index, TREND_RANT_VARIANTS);
   return t(`trend67Rant${variant + 1}`, lang);
+}
+
+/**
+ * Gibt die Freudestufe anhand der erreichten Zahl zurück. Je größer der
+ * Meilenstein, desto länger darf die Feier-Sequenz werden.
+ */
+function hypeTierForCount(count) {
+  const value = Math.max(0, Number(count) || 0);
+  if (value >= 10000) return 3;
+  if (value >= 1000) return 2;
+  if (value >= 500) return 1;
+  return 0;
+}
+
+/**
+ * Baut die menschlich-organische Freudensequenz für einen Meilenstein:
+ * überschwänglicher Einstieg mit Erwähnung und Tippfehlern, ein zweiter
+ * Gedanke, je nach Größe Zusatzzeilen und zum Schluss ein Meilenstein-Spruch.
+ * Nur die erste Zeile enthält die User-Erwähnung.
+ */
+function buildMilestoneHypeLines(
+  lang,
+  vars = {},
+  index = Math.floor(Math.random() * MILESTONE_HYPE_VARIANTS)
+) {
+  const count = Math.max(0, Number(vars.count ?? vars.expected) || 0);
+  const tier = hypeTierForCount(count);
+  const variant = normalizedVariant(index, MILESTONE_HYPE_VARIANTS);
+  const bodyVariant = normalizedVariant(variant + tier + 1, MILESTONE_HYPE_VARIANTS);
+  const values = { ...vars, count };
+
+  const lines = [
+    t(`milestoneHypeTitle${variant + 1}`, lang, values),
+    t(`milestoneHypeBody${bodyVariant + 1}`, lang, values),
+  ];
+  if (tier >= 1) lines.push(t('milestoneHypeStreak', lang, values));
+  if (tier >= 2) lines.push(t('milestoneHypeLegend', lang, values));
+  if (tier >= 3) lines.push(t('milestoneHypeGodlike', lang, values));
+  lines.push(milestoneQuote(lang, variant + tier));
+
+  return lines.slice(0, MAX_HYPE_MESSAGES);
+}
+
+/**
+ * Baut den genervten 67-Ausraster, wenn jemand die 67 richtig zählt:
+ * erster Satz mit Erwähnung und Tippfehlern, zweiter Satz ohne erneuten Ping.
+ */
+function buildTrend67RageLines(
+  lang,
+  vars = {},
+  index = Math.floor(Math.random() * TREND67_RAGE_VARIANTS)
+) {
+  const variant = normalizedVariant(index, TREND67_RAGE_VARIANTS);
+  const bodyVariant = normalizedVariant(variant + 1, TREND67_RAGE_VARIANTS);
+  return [
+    t(`trend67RageTitle${variant + 1}`, lang, vars),
+    t(`trend67RageBody${bodyVariant + 1}`, lang, vars),
+  ];
+}
+
+/**
+ * Sendet eine menschlich wirkende Chat-Sequenz. Wird `replyTo` übergeben,
+ * antwortet der Bot auf genau diese Nachricht (jede Folgezeile als eigene
+ * Antwort) – ohne die Flags einer freien Kanal-Nachricht. Die erste Zeile
+ * trägt die Erwähnung, Folgesätze pingen weder erneut noch den Autor der
+ * beantworteten Nachricht. Ohne `replyTo` landen alle Zeilen wie bisher als
+ * normale Chat-Nachrichten im Kanal – mit „tippt …“-Pausen dazwischen.
+ */
+async function sendChatSequence(
+  channel,
+  lines,
+  {
+    replyTo = null,
+    allowedMentions = { parse: [] },
+    followupMentions = { parse: [], repliedUser: false },
+    messageDelayMs = FREAKOUT_MESSAGE_DELAY_MS,
+    random = Math.random,
+  } = {}
+) {
+  const canReply = Boolean(replyTo && typeof replyTo.reply === 'function');
+  for (let index = 0; index < lines.length; index += 1) {
+    const content = lines[index];
+    const mentions = index === 0 ? allowedMentions : followupMentions;
+
+    if (index > 0) {
+      await channel.sendTyping?.().catch(() => {});
+      const delay = rageDelayForLine(content, messageDelayMs, random);
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    if (canReply) {
+      await replyTo.reply({ content, allowedMentions: mentions }).catch(() => {});
+    } else {
+      await channel.send({ content, allowedMentions: mentions }).catch(() => {});
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -636,22 +754,46 @@ function createCountingManager(
 
     const variant = Math.floor(Number(random()) * RAGE_VARIANTS);
     const lines = buildEscalationLines(lang, { ...vars, streak }, variant);
-    for (let index = 0; index < lines.length; index += 1) {
-      const content = lines[index];
+    // Die erste Reaktion kommt sofort. Danach zeigt Discord kurz „tippt …“
+    // und die variierende Pause lässt die Folge wie echte Chat-Nachrichten
+    // statt wie einen auf einmal ausgespuckten Textblock wirken.
+    await sendChatSequence(channel, lines, {
+      allowedMentions: mentionOptions,
+      messageDelayMs,
+      random,
+    });
+  }
 
-      // Die erste Reaktion kommt sofort. Danach zeigt Discord kurz „tippt …“
-      // und die variierende Pause lässt die Folge wie echte Chat-Nachrichten
-      // statt wie einen auf einmal ausgespuckten Textblock wirken.
-      if (index > 0) {
-        await channel.sendTyping?.().catch(() => {});
-        const delay = rageDelayForLine(content, messageDelayMs, random);
-        if (delay > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-      }
+  /**
+   * Feiert einen Meilenstein: Die Freudensequenz antwortet auf die Nachricht,
+   * die den Meilenstein ausgelöst hat. Nur die erste Zeile pingt die Person.
+   */
+  async function sendMilestoneHype(channel, message, userId, lang, vars) {
+    const mentionOptions = { users: [userId], parse: [] };
+    const variant = Math.floor(Number(random()) * MILESTONE_HYPE_VARIANTS);
+    const lines = buildMilestoneHypeLines(lang, { ...vars, user: `<@${userId}>` }, variant);
+    await sendChatSequence(channel, lines, {
+      replyTo: message,
+      allowedMentions: mentionOptions,
+      messageDelayMs,
+      random,
+    });
+  }
 
-      await channel.send({ content, allowedMentions: mentionOptions }).catch(() => {});
-    }
+  /**
+   * Rastet bei der richtigen 67 genervt über den Trend aus – als Antwort auf
+   * die Nachricht mit der 67. Menschlich, mit Tippfehlern, nur ein Ping.
+   */
+  async function sendTrend67Rage(channel, message, userId, lang, vars) {
+    const mentionOptions = { users: [userId], parse: [] };
+    const variant = Math.floor(Number(random()) * TREND67_RAGE_VARIANTS);
+    const lines = buildTrend67RageLines(lang, { ...vars, user: `<@${userId}>` }, variant);
+    await sendChatSequence(channel, lines, {
+      replyTo: message,
+      allowedMentions: mentionOptions,
+      messageDelayMs,
+      random,
+    });
   }
 
   async function handleMessage(message) {
@@ -684,16 +826,20 @@ function createCountingManager(
         await message.react(OK_EMOJI).catch(() => {});
 
         if (result.expected === 67) {
-          // Sonderfall: genau diese Emojis in genau dieser Reihenfolge, kein Spruch.
+          // Sonderfall: genau diese Emojis in genau dieser Reihenfolge …
           for (const emoji of SPECIAL_67_EMOJIS) {
             await message.react(emoji).catch(() => {});
           }
+          // … und dazu rastet der Bot menschlich-organisch über den Trend aus,
+          // als Antwort auf die Nachricht mit der 67.
+          await sendTrend67Rage(channel, message, message.author.id, lang, { count: 67 });
         } else if (isMilestone(result.expected)) {
-          // Meilenstein: 5 zufällige Feier-Emojis in zufälliger Reihenfolge, dann ein Spruch.
+          // Meilenstein: 5 zufällige Feier-Emojis in zufälliger Reihenfolge,
+          // dann die organische Freudensequenz als Antwort auf die Nachricht.
           for (const emoji of pickRandomEmojis(MILESTONE_EMOJIS, MILESTONE_REACTION_COUNT, random)) {
             await message.react(emoji).catch(() => {});
           }
-          await channel.send({ content: milestoneQuote(lang), allowedMentions: { parse: [] } }).catch(() => {});
+          await sendMilestoneHype(channel, message, message.author.id, lang, { count: result.expected });
         }
 
         scheduleTopicUpdate(channel, entry, lang, false, languageChangedAt);
@@ -768,11 +914,18 @@ module.exports = {
   isSixtySevenTrend,
   milestoneQuote,
   trend67Text,
+  hypeTierForCount,
+  buildMilestoneHypeLines,
+  buildTrend67RageLines,
+  sendChatSequence,
   MILESTONE_EMOJIS,
   MILESTONE_REACTION_COUNT,
   SPECIAL_67_EMOJIS,
   MILESTONE_QUOTE_VARIANTS,
   TREND_RANT_VARIANTS,
+  MILESTONE_HYPE_VARIANTS,
+  TREND67_RAGE_VARIANTS,
+  MAX_HYPE_MESSAGES,
   parseCountingTopic,
   stripCountingTopic,
   buildCountingTopic,
