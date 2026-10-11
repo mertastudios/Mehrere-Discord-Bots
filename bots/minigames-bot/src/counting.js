@@ -15,6 +15,10 @@
  *   abgebrochene Gedanken, absichtliche Tippfehler, Selbstkorrekturen und eine
  *   menschlich wirkende Schreib-Pause. Je länger der zerstörte Streak war,
  *   desto stärker fällt die Reaktion aus – ohne Mass-Pings.
+ * - Die **67** und **Meilensteine** lösen keine stille Reaktion mehr aus,
+ *   sondern eine schnelle Hype-Salve aus mehreren Nachrichten im Stakkato:
+ *   Alarm, Emoji-Explosion, Krönung und Ansage. Die zählende Person wird dabei
+ *   gezielt gepingt – nie @everyone, Rollen oder Unbeteiligte.
  * - Zwei Zahlen derselben Person hintereinander → Nachricht wird nur
  *   gelöscht, der Zählstand bleibt.
  * - Text statt Zahl → Nachricht wird gelöscht, der Zählstand bleibt.
@@ -41,23 +45,41 @@ const FREAKOUT_PINGS = 1;
 const FREAKOUT_CHANCE = 1;
 /** Grundtempo der variierenden Schreibpausen zwischen den Chat-Nachrichten. */
 const FREAKOUT_MESSAGE_DELAY_MS = 650;
+/**
+ * Tempo der Hype-Salven bei der 67 und bei Meilensteinen. Sie sind bewusst
+ * deutlich schneller als der Wut-Ausraster, weil Freude hier im Stakkato
+ * kommt: fünf Nachrichten in gut einer Sekunde.
+ */
+const HYPE_MESSAGE_DELAY_MS = 200;
 /** Kein einzelner Discord-Request darf eine Sprach-Synchronisierung blockieren. */
 const DISCORD_OPERATION_TIMEOUT_MS = 8_000;
 /** Auch auf der höchsten Stufe bleibt der Ausraster hart begrenzt. */
 const MAX_RAGE_MESSAGES = 7;
+/** Genauso bleibt die Hype-Salve begrenzt – mehr als das ist Spam. */
+const MAX_HYPE_MESSAGES = 5;
 
 const OK_EMOJI = '✅';
 const FAIL_EMOJI = '❌';
 
-/** Zufällige Feier-Reaktionen bei einem Meilenstein (es werden 5 davon gezogen). */
+/**
+ * Zufällige Feier-Reaktionen bei einem Meilenstein: Es werden **alle** Feier-
+ * Emojis in zufälliger Reihenfolge gesetzt, damit richtig was passiert.
+ */
 const MILESTONE_EMOJIS = ['🏅', '🏆', '✨', '⭐️', '💫', '🤩', '💪', '🔥', '😲'];
-const MILESTONE_REACTION_COUNT = 5;
+const MILESTONE_REACTION_COUNT = MILESTONE_EMOJIS.length;
 /** Feste Reaktionen für die 67 – in genau dieser Reihenfolge. */
 const SPECIAL_67_EMOJIS = ['😭', '6️⃣', '7️⃣', '❗️'];
 /** Anzahl der Meilenstein-Sprüche in `languages.js` (milestoneQuote1…N). */
 const MILESTONE_QUOTE_VARIANTS = 4;
+/** Ab dieser Meilenstein-Größe wächst die Hype-Salve (100 / 500 / 5000). */
+const MILESTONE_QUOTE_FROM = 500;
+const MILESTONE_LEGEND_FROM = 5_000;
+/** Anzahl der Varianten je Hype-Baustein in `languages.js` (…1…N). */
+const HYPE_VARIANTS = 3;
 /** Anzahl der 67-Trend-Sprüche in `languages.js` (trend67Rant1…N). */
 const TREND_RANT_VARIANTS = 3;
+/** Anzahl der 67-Warnungen in `languages.js` (trend67Warn1…N). */
+const TREND_WARN_VARIANTS = 3;
 
 /* ------------------------------------------------------------------ *
  * Reine Logik (ohne Discord) – dadurch vollständig testbar
@@ -264,6 +286,75 @@ function trend67Text(lang, index = Math.floor(Math.random() * TREND_RANT_VARIANT
   return t(`trend67Rant${variant + 1}`, lang);
 }
 
+/** Wählt die angesagte 67-Warnung aus, die die Person direkt anspricht. */
+function trend67WarnText(lang, vars = {}, index = Math.floor(Math.random() * TREND_WARN_VARIANTS)) {
+  const variant = normalizedVariant(index, TREND_WARN_VARIANTS);
+  return t(`trend67Warn${variant + 1}`, lang, vars);
+}
+
+/**
+ * Tempo der Hype-Salve: deutlich schneller als der Wut-Ausraster, damit die
+ * Nachrichten wie ein Freuden-Stakkato über den Kanal rollen. Tippzeit wächst
+ * nur leicht mit, die Pause bleibt immer unter einer Sekunde.
+ */
+function hypeDelayForLine(content, baseDelayMs = HYPE_MESSAGE_DELAY_MS, random = Math.random) {
+  const base = Math.max(0, Number(baseDelayMs) || 0);
+  if (base === 0) return 0;
+  const jitter = 0.75 + Math.max(0, Math.min(1, Number(random()) || 0)) * 0.5;
+  const typingTime = Math.min(140, String(content || '').length * 1.5);
+  return Math.max(45, Math.min(600, Math.round(base * jitter + typingTime)));
+}
+
+/**
+ * Hype-Stufe eines Meilensteins. Je größer die Zahl, desto mehr Nachrichten:
+ * 100 → Basis-Show, ab 500 mit Spruch, ab 5000 zusätzlich legendär.
+ */
+function milestoneHypeTier(value, quoteFrom = MILESTONE_QUOTE_FROM, legendFrom = MILESTONE_LEGEND_FROM) {
+  const n = Math.max(0, Math.floor(Number(value) || 0));
+  if (n >= legendFrom) return 3;
+  if (n >= quoteFrom) return 2;
+  if (n >= 100) return 1;
+  return 0;
+}
+
+/**
+ * Die 67-Hype-Salve: Alarm, Chant, Kontrollverlust, Krönung und der Schubs zur
+ * nächsten Zahl. Titel und Krone erwähnen die Person gezielt, damit sie einen
+ * Ping bekommt – alle anderen Zeilen bleiben ping-frei.
+ */
+function build67HypeLines(lang, vars = {}, index = Math.floor(Math.random() * HYPE_VARIANTS)) {
+  const variant = normalizedVariant(index, HYPE_VARIANTS);
+  const lines = [
+    t(`count67HypeTitle${variant + 1}`, lang, vars),
+    t(`count67HypeChant${normalizedVariant(variant + 1, HYPE_VARIANTS) + 1}`, lang, vars),
+    t(`count67HypeMania${normalizedVariant(variant + 2, HYPE_VARIANTS) + 1}`, lang, vars),
+    t(`count67HypeCrown${normalizedVariant(variant + 1, HYPE_VARIANTS) + 1}`, lang, vars),
+    t('count67HypeGo', lang, vars),
+  ];
+  return lines.slice(0, MAX_HYPE_MESSAGES);
+}
+
+/**
+ * Die Meilenstein-Hype-Salve: Titel, Emoji-Explosion und Krönung mit Ping,
+ * ab 500 kommt der warnende Spruch, ab 5000 die Legenden-Zeile dazu.
+ */
+function buildMilestoneHypeLines(
+  lang,
+  vars = {},
+  index = Math.floor(Math.random() * HYPE_VARIANTS),
+  tier = milestoneHypeTier(vars.count)
+) {
+  const variant = normalizedVariant(index, HYPE_VARIANTS);
+  const lines = [
+    t(`milestoneHypeTitle${variant + 1}`, lang, vars),
+    t(`milestoneHypeFire${normalizedVariant(variant + 1, HYPE_VARIANTS) + 1}`, lang, vars),
+    t(`milestoneHypeCrown${normalizedVariant(variant + 2, HYPE_VARIANTS) + 1}`, lang, vars),
+  ];
+  if (tier >= 3) lines.push(t(`milestoneHypeLegend${variant + 1}`, lang, vars));
+  if (tier >= 2) lines.push(milestoneQuote(lang, variant));
+  return lines.slice(0, MAX_HYPE_MESSAGES);
+}
+
 /* ------------------------------------------------------------------ *
  * Kanal-Thema als Speicher
  * ------------------------------------------------------------------ */
@@ -328,6 +419,7 @@ function createCountingManager(
     random = Math.random,
     freakoutChance = FREAKOUT_CHANCE,
     messageDelayMs = FREAKOUT_MESSAGE_DELAY_MS,
+    hypeDelayMs = HYPE_MESSAGE_DELAY_MS,
   } = {}
 ) {
   /** channelId -> { guildId, count, lastUserId, recovered, topicWrittenAt, timer, pending } */
@@ -654,6 +746,42 @@ function createCountingManager(
     }
   }
 
+  /**
+   * Hype-Salve für die 67 und für Meilensteine. Die Zeilen werden in einem
+   * sehr kurzen Takt abgefeuert („tippt …“ + Mini-Pause), damit die Show wie
+   * ein Freuden-Ausbruch wirkt und nicht wie ein Textblock. Erwähnt wird nur
+   * die zählende Person – Discord löst weder Rollen noch @everyone auf.
+   */
+  async function sendHypeSequence(channel, userId, lines) {
+    const mentionOptions = { users: [userId], parse: [] };
+    for (let index = 0; index < lines.length; index += 1) {
+      const content = lines[index];
+      if (index > 0) {
+        await channel.sendTyping?.().catch(() => {});
+        const delay = hypeDelayForLine(content, hypeDelayMs, random);
+        if (delay > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+      await channel.send({ content, allowedMentions: mentionOptions }).catch(() => {});
+    }
+  }
+
+  /**
+   * Antwort auf den 67-Trend: erst der genervte Spruch, direkt dahinter die
+   * persönliche Warnung mit Ping. Kürzer und schneller als der Zahlen-Ausraster,
+   * weil hier nur eine Modeerscheinung gemeint ist – aber deutlich präsenter
+   * als eine einzelne, ungepingte Nachricht.
+   */
+  async function sendTrendRant(channel, userId, lang) {
+    const variant = Math.floor(Number(random()) * TREND_RANT_VARIANTS);
+    const warnVariant = Math.floor(Number(random()) * TREND_WARN_VARIANTS);
+    await sendHypeSequence(channel, userId, [
+      trend67Text(lang, variant),
+      trend67WarnText(lang, { user: `<@${userId}>` }, warnVariant),
+    ]);
+  }
+
   async function handleMessage(message) {
     // Bots und Webhooks spielen nicht mit.
     if (!message.guildId || message.author?.bot || message.webhookId || message.system) return null;
@@ -671,9 +799,10 @@ function createCountingManager(
 
       if (result.action === 'delete') {
         await message.delete().catch(() => {});
-        // Auch gelöschte Nachrichten mit dem 67-Trend bekommen die genervte Antwort.
+        // Auch gelöschte Nachrichten mit dem 67-Trend bekommen die genervte
+        // Antwort – jetzt als schnelle Doppel-Nachricht mit Ping.
         if (isSixtySevenTrend(message.content)) {
-          await channel.send({ content: trend67Text(lang), allowedMentions: { parse: [] } }).catch(() => {});
+          await sendTrendRant(channel, message.author.id, lang);
         }
         return result;
       }
@@ -682,18 +811,38 @@ function createCountingManager(
         entry.count = result.state.count;
         entry.lastUserId = result.state.lastUserId;
         await message.react(OK_EMOJI).catch(() => {});
+        const mention = `<@${message.author.id}>`;
 
         if (result.expected === 67) {
-          // Sonderfall: genau diese Emojis in genau dieser Reihenfolge, kein Spruch.
+          // Sonderfall: erst die festen Emojis in genau dieser Reihenfolge,
+          // dann sofort die 67-Hype-Salve mit Ping auf die zählende Person.
           for (const emoji of SPECIAL_67_EMOJIS) {
             await message.react(emoji).catch(() => {});
           }
+          await sendHypeSequence(
+            channel,
+            message.author.id,
+            build67HypeLines(
+              lang,
+              { user: mention },
+              Math.floor(Number(random()) * HYPE_VARIANTS)
+            )
+          );
         } else if (isMilestone(result.expected)) {
-          // Meilenstein: 5 zufällige Feier-Emojis in zufälliger Reihenfolge, dann ein Spruch.
+          // Meilenstein: alle Feier-Emojis in zufälliger Reihenfolge – und
+          // danach die Hype-Salve, die mit der Größe des Meilensteins wächst.
           for (const emoji of pickRandomEmojis(MILESTONE_EMOJIS, MILESTONE_REACTION_COUNT, random)) {
             await message.react(emoji).catch(() => {});
           }
-          await channel.send({ content: milestoneQuote(lang), allowedMentions: { parse: [] } }).catch(() => {});
+          await sendHypeSequence(
+            channel,
+            message.author.id,
+            buildMilestoneHypeLines(
+              lang,
+              { user: mention, count: result.expected },
+              Math.floor(Number(random()) * HYPE_VARIANTS)
+            )
+          );
         }
 
         scheduleTopicUpdate(channel, entry, lang, false, languageChangedAt);
@@ -714,7 +863,7 @@ function createCountingManager(
       };
       await sendFailureReaction(channel, message.author.id, lang, vars);
       if (isSixtySevenTrend(message.content)) {
-        await channel.send({ content: trend67Text(lang), allowedMentions: { parse: [] } }).catch(() => {});
+        await sendTrendRant(channel, message.author.id, lang);
       }
       scheduleTopicUpdate(channel, entry, lang, true, languageChangedAt);
       return result;
@@ -747,8 +896,10 @@ module.exports = {
   FREAKOUT_PINGS,
   FREAKOUT_CHANCE,
   FREAKOUT_MESSAGE_DELAY_MS,
+  HYPE_MESSAGE_DELAY_MS,
   DISCORD_OPERATION_TIMEOUT_MS,
   MAX_RAGE_MESSAGES,
+  MAX_HYPE_MESSAGES,
   OK_EMOJI,
   FAIL_EMOJI,
   parseCountingNumber,
@@ -763,16 +914,25 @@ module.exports = {
   rageBar,
   rageDelayForLine,
   buildEscalationLines,
+  hypeDelayForLine,
+  milestoneHypeTier,
+  build67HypeLines,
+  buildMilestoneHypeLines,
+  HYPE_VARIANTS,
   isMilestone,
   pickRandomEmojis,
   isSixtySevenTrend,
   milestoneQuote,
   trend67Text,
+  trend67WarnText,
   MILESTONE_EMOJIS,
   MILESTONE_REACTION_COUNT,
   SPECIAL_67_EMOJIS,
   MILESTONE_QUOTE_VARIANTS,
+  MILESTONE_QUOTE_FROM,
+  MILESTONE_LEGEND_FROM,
   TREND_RANT_VARIANTS,
+  TREND_WARN_VARIANTS,
   parseCountingTopic,
   stripCountingTopic,
   buildCountingTopic,
