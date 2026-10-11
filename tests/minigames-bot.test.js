@@ -101,13 +101,20 @@ const {
   FREAKOUT_PINGS,
   FREAKOUT_CHANCE,
   FREAKOUT_MESSAGE_DELAY_MS,
+  HYPE_MESSAGE_DELAY_MS,
   MAX_RAGE_MESSAGES,
+  MAX_HYPE_MESSAGES,
+  HYPE_VARIANTS,
   shouldFreakout,
   pingBomb,
   buildFreakoutLines,
   buildEscalationLines,
   rageTierForCount,
   rageDelayForLine,
+  hypeDelayForLine,
+  milestoneHypeTier,
+  build67HypeLines,
+  buildMilestoneHypeLines,
   buildCountingTopic,
   parseCountingTopic,
   stripCountingTopic,
@@ -118,11 +125,15 @@ const {
   isSixtySevenTrend,
   milestoneQuote,
   trend67Text,
+  trend67WarnText,
   MILESTONE_EMOJIS,
   MILESTONE_REACTION_COUNT,
   SPECIAL_67_EMOJIS,
   MILESTONE_QUOTE_VARIANTS,
+  MILESTONE_QUOTE_FROM,
+  MILESTONE_LEGEND_FROM,
   TREND_RANT_VARIANTS,
+  TREND_WARN_VARIANTS,
 } = require('../bots/minigames-bot/src/counting');
 const {
   pickVoiceChannel,
@@ -1756,17 +1767,20 @@ test('Meilensteine sind 100, 500, 1000, 5000, 10000 … – die 67 ist kein Meil
   }
 });
 
-test('Meilenstein-Emojis: fünf verschiedene zufällige Emojis aus der Liste', () => {
+test('Meilenstein-Emojis: alle Feier-Emojis in zufälliger Reihenfolge', () => {
   assert.deepEqual(MILESTONE_EMOJIS, ['🏅', '🏆', '✨', '⭐️', '💫', '🤩', '💪', '🔥', '😲']);
-  assert.equal(MILESTONE_REACTION_COUNT, 5);
+  assert.equal(MILESTONE_REACTION_COUNT, MILESTONE_EMOJIS.length);
+  assert.equal(MILESTONE_REACTION_COUNT, 9, 'ein Meilenstein bekommt die volle Emoji-Ladung');
   for (const seed of [0, 0.3, 0.6, 0.99]) {
-    const picked = pickRandomEmojis(MILESTONE_EMOJIS, 5, () => seed);
-    assert.equal(picked.length, 5);
-    assert.equal(new Set(picked).size, 5, 'keine Doppelten');
+    const picked = pickRandomEmojis(MILESTONE_EMOJIS, MILESTONE_REACTION_COUNT, () => seed);
+    assert.equal(picked.length, MILESTONE_REACTION_COUNT);
+    assert.equal(new Set(picked).size, MILESTONE_REACTION_COUNT, 'keine Doppelten');
     for (const emoji of picked) assert.ok(MILESTONE_EMOJIS.includes(emoji));
   }
   const orders = new Set(
-    [0.05, 0.4, 0.8].map((seed) => pickRandomEmojis(MILESTONE_EMOJIS, 5, () => seed).join('|'))
+    [0.05, 0.4, 0.8].map((seed) =>
+      pickRandomEmojis(MILESTONE_EMOJIS, MILESTONE_REACTION_COUNT, () => seed).join('|')
+    )
   );
   assert.ok(orders.size > 1, 'die Reihenfolge ist zufällig');
 });
@@ -1775,7 +1789,7 @@ test('67 hat feste Reaktionen 😭6️⃣7️⃣❗️ in genau dieser Reihenfol
   assert.deepEqual(SPECIAL_67_EMOJIS, ['😭', '6️⃣', '7️⃣', '❗️']);
 });
 
-test('Meilenstein-Sprüche und 67-Trend-Sprüche existieren in allen Sprachen', () => {
+test('Meilenstein-Sprüche, Hype-Salven und 67-Trend-Sprüche existieren in allen Sprachen', () => {
   const languages = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
   for (let i = 1; i <= MILESTONE_QUOTE_VARIANTS; i += 1) {
     for (const lang of languages) assert.ok(T[`milestoneQuote${i}`][lang], `milestoneQuote${i} fehlt in ${lang}`);
@@ -1783,6 +1797,22 @@ test('Meilenstein-Sprüche und 67-Trend-Sprüche existieren in allen Sprachen', 
   for (let i = 1; i <= TREND_RANT_VARIANTS; i += 1) {
     for (const lang of languages) assert.ok(T[`trend67Rant${i}`][lang], `trend67Rant${i} fehlt in ${lang}`);
   }
+  for (let i = 1; i <= TREND_WARN_VARIANTS; i += 1) {
+    for (const lang of languages) assert.ok(T[`trend67Warn${i}`][lang], `trend67Warn${i} fehlt in ${lang}`);
+  }
+  // Die Hype-Bausteine der 67 und der Meilensteine müssen vollständig sein.
+  for (let i = 1; i <= HYPE_VARIANTS; i += 1) {
+    for (const lang of languages) {
+      for (const key of ['count67HypeTitle', 'count67HypeChant', 'count67HypeMania', 'count67HypeCrown']) {
+        assert.ok(T[`${key}${i}`][lang], `${key}${i} fehlt in ${lang}`);
+      }
+      for (const key of ['milestoneHypeTitle', 'milestoneHypeFire', 'milestoneHypeCrown', 'milestoneHypeLegend']) {
+        assert.ok(T[`${key}${i}`][lang], `${key}${i} fehlt in ${lang}`);
+      }
+    }
+  }
+  for (const lang of languages) assert.ok(T.count67HypeGo[lang], `count67HypeGo fehlt in ${lang}`);
+
   assert.equal(
     milestoneQuote('de', 0),
     'Super! Jetzt bloß nicht versagen Leute, sonst müssen wir von vorn beginnen!'
@@ -1791,6 +1821,66 @@ test('Meilenstein-Sprüche und 67-Trend-Sprüche existieren in allen Sprachen', 
     trend67Text('de', 0),
     'Oh nein! Nicht schon wieder der blöde 67-Trend! Ich hasse ihn! Was ist daran so lustig?'
   );
+});
+
+test('Hype-Salven pingen nur die zählende Person und lassen keinen Platzhalter übrig', () => {
+  const languages = ['de', 'en', 'fr', 'es', 'pt', 'ru', 'ja', 'ko', 'zh', 'it'];
+  for (const lang of languages) {
+    for (let variant = 0; variant < HYPE_VARIANTS; variant += 1) {
+      const sixtySeven = build67HypeLines(lang, { user: '<@u42>' }, variant);
+      const milestone = buildMilestoneHypeLines(lang, { user: '<@u42>', count: 5000 }, variant);
+      for (const [label, lines] of [['67', sixtySeven], ['Meilenstein', milestone]]) {
+        assert.ok(lines.length >= 3, `${label}/${lang}/${variant}: zu wenige Nachrichten`);
+        assert.ok(lines.length <= MAX_HYPE_MESSAGES, `${label}/${lang}/${variant}: zu viele Nachrichten`);
+        const fullText = lines.join(' ');
+        assert.equal(fullText.split('<@u42>').length - 1, 2, `${label}/${lang}/${variant}: genau zwei Pings`);
+        assert.doesNotMatch(fullText, /\{\w+\}/, `${label}/${lang}/${variant}: Platzhalter übrig`);
+        assert.ok(lines.every((line) => line.length <= 2_000), `${label}/${lang}/${variant}: Discord-Limit`);
+      }
+      assert.match(sixtySeven.join(' '), /68/, 'die 67-Show schickt direkt zur nächsten Zahl');
+      assert.ok(
+        milestone.slice(3).some((line) => line.includes('5000')),
+        `${lang}/${variant}: der große Meilenstein nennt die Zahl`
+      );
+    }
+  }
+});
+
+test('Die Hype-Salve wächst mit dem Meilenstein: 100 → Basis, 500 → Spruch, 5000 → Legende', () => {
+  assert.equal(MILESTONE_QUOTE_FROM, 500);
+  assert.equal(MILESTONE_LEGEND_FROM, 5_000);
+  assert.equal(milestoneHypeTier(99), 0);
+  assert.equal(milestoneHypeTier(100), 1);
+  assert.equal(milestoneHypeTier(500), 2);
+  assert.equal(milestoneHypeTier(1000), 2);
+  assert.equal(milestoneHypeTier(5000), 3);
+  assert.equal(milestoneHypeTier(100000), 3);
+
+  const vars = { user: '<@u42>' };
+  const base = buildMilestoneHypeLines('de', { ...vars, count: 100 }, 0);
+  const middle = buildMilestoneHypeLines('de', { ...vars, count: 500 }, 0);
+  const big = buildMilestoneHypeLines('de', { ...vars, count: 5000 }, 0);
+  assert.equal(base.length, 3);
+  assert.equal(middle.length, 4);
+  assert.equal(big.length, MAX_HYPE_MESSAGES);
+  assert.ok(base.every((line) => !line.includes('Super!'), 'bei 100 bleibt die Basis-Show'));
+  assert.ok(middle.some((line) => line.includes('Super!')), 'ab 500 kommt der Meilenstein-Spruch');
+  assert.ok(big.some((line) => line.includes('LEGENDÄR')), 'ab 5000 wird es legendär');
+});
+
+test('Die Hype-Salve ist deutlich schneller als der Wut-Ausraster', () => {
+  assert.equal(hypeDelayForLine('egal', 0, () => 0.5), 0, 'in Tests abschaltbar');
+  const fast = hypeDelayForLine('kurz', HYPE_MESSAGE_DELAY_MS, () => 0);
+  const slow = hypeDelayForLine('eine deutlich längere Nachricht', HYPE_MESSAGE_DELAY_MS, () => 1);
+  assert.ok(fast >= 45);
+  assert.ok(slow > fast);
+  assert.ok(slow <= 600, 'eine Hype-Pause bleibt unter einer Sekunde');
+  assert.ok(
+    slow < rageDelayForLine('eine deutlich längere Nachricht', FREAKOUT_MESSAGE_DELAY_MS, () => 0),
+    'Hype ist schneller als der Ausraster'
+  );
+  // Selbst die längste Salve aus fünf Nachrichten bleibt unter drei Sekunden.
+  assert.ok(4 * slow < 3_000, 'fünf Nachrichten passen in deutlich unter vier Sekunden');
 });
 
 test('Der 67-Trend wird erkannt, ohne Zahlen wie 1267 falsch zu treffen', () => {
@@ -1805,12 +1895,16 @@ test('Der 67-Trend wird erkannt, ohne Zahlen wie 1267 falsch zu treffen', () => 
 function milestoneHarness(count, content, overrides = {}) {
   const reactions = [];
   const sent = [];
+  const payloads = [];
   const deleted = [];
   const channel = {
     id: 'counting',
     guildId: 'guild',
     topic: buildCountingTopic('', count, 'de'),
-    send: async (payload) => sent.push(payload.content),
+    send: async (payload) => {
+      payloads.push(payload);
+      sent.push(payload.content);
+    },
     setTopic: async () => {},
     sendTyping: async () => {},
   };
@@ -1829,48 +1923,79 @@ function milestoneHarness(count, content, overrides = {}) {
       logger: { warn() {} },
       store: { withLock: async (_key, fn) => fn(), getServerLang: () => 'de' },
     },
-    { random: () => 0.5, ...overrides }
+    { random: () => 0.5, hypeDelayMs: 0, ...overrides }
   );
-  return { manager, message, reactions, sent, deleted };
+  return { manager, message, reactions, sent, payloads, deleted };
 }
 
-test('Meilenstein 100 → ✅, fünf Zufalls-Emojis und ein Spruch', async () => {
-  const { manager, message, reactions, sent } = milestoneHarness(99, '100');
+test('Meilenstein 100 → ✅, volle Emoji-Ladung und eine Hype-Salve mit Pings', async () => {
+  const { manager, message, reactions, sent, payloads } = milestoneHarness(99, '100');
   const result = await manager.handleMessage(message);
   assert.equal(result.action, 'accept');
   assert.equal(reactions[0], '✅');
   assert.equal(reactions.length, 1 + MILESTONE_REACTION_COUNT);
   assert.equal(new Set(reactions.slice(1)).size, MILESTONE_REACTION_COUNT);
   for (const emoji of reactions.slice(1)) assert.ok(MILESTONE_EMOJIS.includes(emoji));
-  assert.equal(sent.length, 1, 'genau ein Spruch');
+
+  assert.equal(sent.length, 3, 'Alarm, Emoji-Explosion und Krönung');
+  assert.equal(sent.join(' ').split('<@player-1>').length - 1, 2, 'Titel und Krone pingen die Person');
+  for (const payload of payloads) {
+    assert.deepEqual(
+      payload.allowedMentions,
+      { users: ['player-1'], parse: [] },
+      'gepingt wird nur die zählende Person'
+    );
+    assert.doesNotMatch(payload.content, /\{\w+\}/, 'keine Platzhalter in der Nachricht');
+  }
   assert.ok(MILESTONE_QUOTE_VARIANTS >= 1);
 });
 
-test('Normale Zahl → nur ✅, kein Spruch', async () => {
+test('Meilenstein 5000 → maximale Hype-Salve mit Legende und Spruch', async () => {
+  const { manager, message, sent } = milestoneHarness(4999, '5000');
+  await manager.handleMessage(message);
+  assert.equal(sent.length, MAX_HYPE_MESSAGES);
+  assert.ok(sent.some((line) => line.includes('5000')), 'die Zahl wird gefeiert');
+  assert.match(sent.at(-1), /1/, 'am Ende ist klar, wie es weitergeht');
+});
+
+test('Normale Zahl → nur ✅, keine Show', async () => {
   const { manager, message, reactions, sent } = milestoneHarness(41, '42');
   await manager.handleMessage(message);
   assert.deepEqual(reactions, ['✅']);
   assert.deepEqual(sent, []);
 });
 
-test('67 → ✅ und genau 😭6️⃣7️⃣❗️ ohne Zufalls-Emojis', async () => {
-  const { manager, message, reactions, sent } = milestoneHarness(66, '67');
+test('67 → ✅, genau 😭6️⃣7️⃣❗️ und sofort die 67-Hype-Salve mit Ping', async () => {
+  const { manager, message, reactions, sent, payloads } = milestoneHarness(66, '67');
   await manager.handleMessage(message);
   assert.deepEqual(reactions, ['✅', ...SPECIAL_67_EMOJIS]);
-  assert.deepEqual(sent, []);
+  assert.equal(sent.length, MAX_HYPE_MESSAGES, 'fünf schnelle Nachrichten');
+  assert.equal(sent.join(' ').split('<@player-1>').length - 1, 2, 'zwei gezielte Pings');
+  assert.match(sent.at(-1), /68/, 'die Salve schickt direkt zur nächsten Zahl');
+  for (const payload of payloads) {
+    assert.deepEqual(payload.allowedMentions, { users: ['player-1'], parse: [] });
+  }
 });
 
-test('Falsche 67 bzw. Text mit 67-Trend bekommt die genervte Antwort', async () => {
+test('67-Trend bekommt zwei schnelle Antworten, die zweite mit Ping', async () => {
   const text = milestoneHarness(10, 'six seven!');
   await text.manager.handleMessage(text.message);
   assert.equal(text.deleted.length, 1, 'Text wird gelöscht');
-  assert.equal(text.sent.length, 1, 'genau eine Trend-Antwort');
+  assert.equal(text.sent.length, 2, 'Trend-Spruch plus persönliche Warnung');
   const trendTexts = [1, 2, 3].map((i) => T[`trend67Rant${i}`].de);
   assert.ok(trendTexts.includes(text.sent[0]), 'einer der 67-Trend-Sprüche');
+  assert.match(text.sent[1], /<@player-1>/, 'die Warnung spricht die Person an');
+  assert.deepEqual(text.payloads[1].allowedMentions, { users: ['player-1'], parse: [] });
 
   const wrong = milestoneHarness(10, '67');
   await wrong.manager.handleMessage(wrong.message);
   assert.ok(wrong.reactions.includes('❌'), 'falsche Zahl → ❌');
-  assert.ok(trendTexts.includes(wrong.sent.at(-1)), 'Trend-Antwort nach der Fehlermeldung');
+  const escalation = buildEscalationLines(
+    'de',
+    { user: '<@player-1>', expected: 11, got: 67, streak: 10 },
+    Math.floor(0.5 * RAGE_VARIANTS)
+  );
+  assert.equal(wrong.sent.length, escalation.length + 2, 'Ausraster plus zwei Trend-Antworten');
+  assert.match(wrong.sent.at(-1), /<@player-1>/, 'Trend-Warnung nach der Fehlermeldung');
 });
 
