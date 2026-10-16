@@ -277,19 +277,61 @@ async function callGroqWithFallback({ model, fetchFn, ...rest }) {
 /** Kurzer Live-Test des Keys (für Setup-Schritt 7). */
 async function validateGroqKey({ apiKey, model, fetchFn = globalThis.fetch, timeoutMs = 20_000 } = {}) {
   const started = Date.now();
-  const result = await callGroq({
-    apiKey,
-    model: model || DEFAULT_FAST_MODEL,
-    system: 'Antworte ausschließlich mit dem Wort OK.',
-    user: 'ping',
-    maxTokens: 16,
-    temperature: 0,
-    fetchFn,
-    timeoutMs,
-  });
+  const key = String(apiKey || '').trim();
+  if (!key) return { ok: false, ms: Date.now() - started, error: 'missing_api_key' };
+  if (typeof fetchFn !== 'function') return { ok: false, ms: Date.now() - started, error: 'fetch_unavailable' };
+
+  // Do not spend tokens or rely on generated text to validate credentials.
+  // Reasoning models can legitimately return an empty `content` field when the
+  // completion budget is small, even though the API key itself is valid.
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let response;
+  try {
+    response = await fetchFn(`${BASE_URL}/models`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${key}`,
+        'User-Agent': 'discord-security-bot/2.0',
+      },
+      signal: controller?.signal,
+    });
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    const timeout = err?.name === 'AbortError';
+    return {
+      ok: false,
+      ms: Date.now() - started,
+      error: timeout ? 'timeout' : 'network_error',
+      message: err?.message,
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
   const ms = Date.now() - started;
-  if (result.ok) return { ok: true, ms, model: result.model };
-  return { ok: false, ms, error: result.error, message: result.message, status: result.status };
+  const limits = readLimitInfo(response);
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    /* a malformed response is reported below without exposing the key */
+  }
+
+  if (response.ok) {
+    if (!Array.isArray(body?.data)) {
+      return { ok: false, ms, error: 'bad_json_response', status: response.status, limits };
+    }
+    return { ok: true, ms, model: model || DEFAULT_FAST_MODEL, modelCount: body.data.length };
+  }
+
+  const detail = String(body?.error?.message || body?.message || '').slice(0, 300);
+  const status = Number(response.status) || 0;
+  const common = { ok: false, ms, status, message: detail, limits };
+  if (status === 401 || status === 403) return { ...common, error: 'invalid_api_key' };
+  if (status === 429) return { ...common, error: 'rate_limited', retryAfterMs: limits.retryAfterMs || 20_000 };
+  if (status >= 500) return { ...common, error: 'server_error' };
+  return { ...common, error: `api_error_${status || 'unknown'}` };
 }
 
 /** Limiter fürs äußere Retry-Verhalten (429/5xx/Netz). */

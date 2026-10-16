@@ -262,6 +262,7 @@ test('Speicher: Standard-Konfiguration, Setup-Stand, Strafregister, Puffer', asy
   assert.equal(cfg.lang, 'de');
   assert.deepEqual(cfg.allow, { ban: false, kick: false, timeout: true });
   assert.equal(cfg.setup.step, 1);
+  assert.deepEqual(cfg.setup.configuredSteps, []);
   assert.equal(cfg.setup.done, false);
 
   store.updateGuild('g1', { lang: 'en', channels: ['c1'], setup: { step: 4, furthest: 4 } });
@@ -313,9 +314,10 @@ test('Server-Daten werden vollständig gelöscht', () => {
 
 test('Setup-Stand wird begrenzt (1–7) und sauber normalisiert', () => {
   const store = createSecurityStore({ logger: silent(), env: (k, d) => d, filePath: path.join(os.tmpdir(), `sec-norm-${Math.random()}.json`) });
-  const cfg = store.updateGuild('g1', { setup: { step: 99, furthest: -5, done: true } });
+  const cfg = store.updateGuild('g1', { setup: { step: 99, furthest: -5, configuredSteps: [1, 2, 2, 0, 8, '3'], done: true } });
   assert.equal(cfg.setup.step, 7);
   assert.equal(cfg.setup.furthest, 1);
+  assert.deepEqual(cfg.setup.configuredSteps, [1, 2, 3]);
   assert.equal(cfg.setup.done, true);
   assert.equal(store.updateGuild('g1', { rulesMode: 'quatsch' }).rulesMode, null);
 });

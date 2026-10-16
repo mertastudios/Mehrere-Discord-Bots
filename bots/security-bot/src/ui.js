@@ -82,8 +82,8 @@ function stringSelect({ id, placeholder, options, min = 1, max = 1, disabled = f
   };
 }
 
-function channelSelect({ id, placeholder, min = 0, max = 25, types = [0], disabled = false }) {
-  return {
+function channelSelect({ id, placeholder, min = 0, max = 25, types = [0], disabled = false, selected = [] }) {
+  const menu = {
     type: 8,
     custom_id: id,
     placeholder: placeholder ? String(placeholder).slice(0, 150) : undefined,
@@ -92,10 +92,12 @@ function channelSelect({ id, placeholder, min = 0, max = 25, types = [0], disabl
     max_values: max,
     disabled: Boolean(disabled),
   };
+  if (selected.length) menu.default_values = [...new Set(selected.map(String))].slice(0, 25).map((id) => ({ id, type: 'channel' }));
+  return menu;
 }
 
-function roleSelect({ id, placeholder, min = 0, max = 25, disabled = false }) {
-  return {
+function roleSelect({ id, placeholder, min = 0, max = 25, disabled = false, selected = [] }) {
+  const menu = {
     type: 6,
     custom_id: id,
     placeholder: placeholder ? String(placeholder).slice(0, 150) : undefined,
@@ -103,6 +105,8 @@ function roleSelect({ id, placeholder, min = 0, max = 25, disabled = false }) {
     max_values: max,
     disabled: Boolean(disabled),
   };
+  if (selected.length) menu.default_values = [...new Set(selected.map(String))].slice(0, 25).map((id) => ({ id, type: 'role' }));
+  return menu;
 }
 
 /** Fertige Nachricht (Normalnachricht oder ephemeral). */
