@@ -1,50 +1,37 @@
 /**
  * ============================================================================
- *  🛡️ Security Bot – KI-Sicherheitsbot mit Google Gemini
+ *  🛡️ Security Bot (v2) – KI-Moderation über Groq
  *
  *  Ablauf:
- *  - Sammelt Textnachrichten echter Nutzer (Admins sind immun), bis das
- *    Token-Budget für eine Gemini-Anfrage erreicht ist – zusätzlich wird der
- *    Verlauf ALLE 2 STUNDEN (Serversprache-Zeitzone, Raster 0/2/4…22 Uhr)
- *    ausgewertet, damit Verwarnungen nicht bis zum nächsten Tag liegen bleiben.
- *  - Sendet System-Prompt + Admin-Prompt (/set_prompt) + sauber formatierten
- *    Chat-Verlauf (IDs ab 1, mentions aufgelöst) an Gemini – standardmäßig an
- *    den von Google gepflegten Alias `gemini-flash-lite-latest` (zeigt immer
- *    auf die aktuell günstigste Flash-Lite-Generation; lehnt Google ein
- *    Modell mit 404 ab, wird automatisch das nächste aus einer Fallback-Kette
- *    versucht – siehe src/gemini.js).
- *  - Gemini entscheidet über Warnungen / Timeouts (1m–1w) mit persönlicher
- *    Nachricht; der Bot antwortet auf die schwerwiegendste Verstoßnachricht.
- *    Ohne Verstoß schreibt der Bot NICHTS in den Chat (kein Small-Talk).
- *  - Fehlgeschlagene Analysen werden NICHT verworfen: Retry-Queue mit Backoff,
- *    meanwhile läuft das Sammeln weiter. Log-Kanal informiert über alles.
- *    /security_check_now stellt alle wartenden Nachrichten sofort fällig –
- *    optional mit einem Nutzer, der dabei zwingend moderiert werden soll.
- *  - Anti-Delete (optional, /set_anti_delete_messages): Löscht ein echter
- *    Nutzer (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals,
- *    sendet der Bot sie per Webhook mit exakter Profil-Kopie erneut.
+ *   - Sammelt Textnachrichten echter Nutzer (Team-Nachrichten nur als Kontext).
+ *   - Lokaler Filter → günstige Vorprüfung → Urteil → Maßnahme.
+ *   - Antwort im Kanal mit Ping, DM an den Nutzer, Eintrag ins Strafregister,
+ *     Meldung ins Log (mit 👍/👎 und „Neuer Auftrag“).
+ *   - Alles wird über **einen** Befehl eingerichtet: `/setup` (7 Schritte).
  *
- *  Commands (alle nur für Administratoren):
- *  /set_gemini_api_key · /set_prompt · /set_log_channel ·
- *  /set_anti_delete_messages · /set_language · /security_check_now · /help
+ *  Harte Regeln:
+ *   - Ohne Administrator-Rechte macht der Bot NICHTS (mit Begründung).
+ *   - `/setup` nur für Owner/Admins.
+ *   - Log-Kanal wird immer wieder hergestellt; gelöschte Rollen/Kanäle werden
+ *     aus dem Speicher entfernt; verlässt der Bot den Server, wird alles
+ *     gelöscht.
  * ============================================================================
  */
 
-const { GatewayIntentBits, ActivityType, Events, REST } = require('discord.js');
+const { GatewayIntentBits, ActivityType, Events, REST, PermissionFlagsBits } = require('discord.js');
 
 const { createPresenceUpdater } = require('../../src/safe-presence');
 const { createSecurityStore } = require('./src/store');
-const {
-  registerCommands,
-  registerGuildCommands,
-  verifyCommandsLive,
-  formatDiscordError,
-} = require('./src/commands');
+const { createBudgetSet } = require('./src/budget');
+const { registerCommands } = require('./src/register');
 const { handleInteraction } = require('./src/interactions');
-const { handleIncoming } = require('./src/collector');
-const { handleMessageDelete, clearWebhookCache } = require('./src/anti-delete');
-const { sendJoinNotice } = require('./src/notices');
-const { startScheduler } = require('./src/scheduler');
+const { handleIncoming, startPipeline } = require('./src/pipeline');
+const { dmGuildOwner, notifyMissingAdmin } = require('./src/notices');
+const { ensureLogChannel } = require('./src/logging');
+const { botHasAdmin } = require('./src/guard');
+const maintenance = require('./src/maintenance');
+
+const REPAIR_INTERVAL_MS = 5 * 60 * 1000;
 
 module.exports = {
   id: 'security-bot',
@@ -57,83 +44,46 @@ module.exports = {
     GatewayIntentBits.GuildMembers,
   ],
 
-  async create({ client, token, logger, env }) {
+  /**
+   * @param {object} params
+   * @param {object} [params.rest] Optionaler REST-Client (Tests); sonst neu.
+   */
+  async create({ client, token, logger, env, rest = null }) {
     const store = createSecurityStore({ logger, env });
     await store.init();
-    store.startBackupInterval(5 * 60 * 1000);
+    store.startBackupInterval(30_000);
 
-    const flushAndLog = async (sig) => {
-      logger.info(`[security-bot] ${sig} – flushe RAM -> DB/File...`);
-      try {
-        await store.flush({ force: true });
-        logger.info('[security-bot] Flush ok vor Shutdown');
-      } catch (e) {
-        logger.error('[security-bot] Flush fail:', e.message);
-      }
-    };
-    process.on('SIGTERM', () => void flushAndLog('SIGTERM'));
-    process.on('SIGINT', () => void flushAndLog('SIGINT'));
-
-    const devGuildId =
-      String(env('SECURITY_BOT_GUILD_ID', '')).trim().replace(/^<@!?(\d+)>$/, '$1') || null;
+    const budget = createBudgetSet(env);
+    logger.info(`[security-bot] ${budget.summary()}`);
 
     const ctx = {
       client,
       token,
       logger,
       env,
-      ownerId: String(
-        env('SECURITY_BOT_OWNER_ID', '') ||
-          env('XP_BOT_OWNER_ID', '') ||
-          env('BIRTHDAY_BOT_OWNER_ID', '') ||
-          ''
-      )
-        .trim()
-        .replace(/^<@!?(\d+)>$/, '$1'),
-      devGuildId,
-      // Render exposes this automatically. Logging it makes stale deployments
-      // distinguishable without ever exposing a token or another secret.
-      deployCommit:
-        String(env('RENDER_GIT_COMMIT', '') || env('SOURCE_COMMIT', '') || '').trim() || null,
-      rest: new REST({ version: '10' }).setToken(token),
       store,
-      commandIds: {},
-      guildCommandIds: new Map(),
-      commandsRegistered: false,
-      schedulerState: null,
+      budget,
+      rest: rest || new REST({ version: '10' }).setToken(token),
+      pipeline: new Map(),
+      setupDraft: new Map(),
+      adminWarnAt: new Map(),
+      fetchFn: globalThis.fetch,
+      botHighestPosition(guild) {
+        return guild?.members?.me?.roles?.highest?.position ?? 0;
+      },
     };
 
-    let schedulerStop = null;
-    let commandRepairTimer = null;
-    let commandSyncRunning = false;
-
-    const syncCommands = async (options = {}) => {
-      if (commandSyncRunning) return ctx.commandsRegistered;
-      commandSyncRunning = true;
+    const flushAndLog = async (sig) => {
+      logger.info(`[security-bot] ${sig} – speichere Zwischenstand ...`);
       try {
-        const registered = await registerCommands(ctx, options);
-        // Never let a verification repair bypass the ordered registration
-        // transaction (global PUT first, Guild cleanup only afterwards).
-        if (!registered) return false;
-        // Der Rücklese-Check ist maßgeblich: Er erkennt leere/veraltete Sätze
-        // und schreibt fehlende Commands sofort noch einmal zu Discord.
-        return await verifyCommandsLive(ctx);
+        await store.flush({ force: true });
       } catch (err) {
-        ctx.commandsRegistered = false;
-        logger.error(
-          '[security-bot] Command-Synchronisierung fehlgeschlagen:',
-          formatDiscordError(err)
-        );
-        return false;
-      } finally {
-        commandSyncRunning = false;
+        logger.error('[security-bot] Speichern vor Shutdown fehlgeschlagen:', err.message);
       }
     };
+    process.on('SIGTERM', () => void flushAndLog('SIGTERM'));
+    process.on('SIGINT', () => void flushAndLog('SIGINT'));
 
-    // setPresence() liefert in discord.js v14 synchron ein ClientPresence-Objekt
-    // (kein Promise). Ein `.catch()` darauf warf in Produktion einen TypeError und
-    // brach den ClientReady-Handler ab, BEVOR registerCommands() lief.
-    // Der Helper isoliert jeden Presence-Fehler vollständig.
     const updatePresence = createPresenceUpdater({
       client,
       logger,
@@ -141,7 +91,7 @@ module.exports = {
       build: () => ({
         activities: [
           {
-            name: `Moderating ${client.guilds.cache.size} server(s) 🛡️ | /help`,
+            name: `${client.guilds.cache.size} Server 🛡️ · /setup`,
             type: ActivityType.Watching,
           },
         ],
@@ -149,28 +99,58 @@ module.exports = {
       }),
     });
 
-    client.once(Events.ClientReady, async () => {
-      // Presence darf niemals die nachfolgenden Schritte verhindern.
-      updatePresence();
-      schedulerStop = startScheduler({ ctx });
-      logger.info(
-        `[security-bot] Bereit auf ${client.guilds.cache.size} Servern, ${store.getAllGuilds().length} Gilden in RAM`
-      );
+    let pipelineStop = null;
+    let repairTimer = null;
+    let commandsRegistered = false;
 
-      const commandsLive = await syncCommands();
-      if (!commandsLive) {
-        logger.error(
-          '[security-bot] Commands sind noch nicht vollständig live – automatische Reparatur läuft alle 5 Minuten.'
-        );
+    async function syncCommands(options = {}) {
+      try {
+        const result = await registerCommands(ctx, options);
+        commandsRegistered = result.failed.length === 0;
+        return result;
+      } catch (err) {
+        commandsRegistered = false;
+        logger.error('[security-bot] Command-Registrierung fehlgeschlagen:', err.message);
+        return { global: false, guilds: 0, failed: [{ scope: 'all', error: err.message }] };
+      }
+    }
+
+    // ---------------- Ready ----------------
+    client.once(Events.ClientReady, async () => {
+      updatePresence();
+      pipelineStop = startPipeline(ctx);
+      await syncCommands();
+      logger.info(`[security-bot] Online: ${client.guilds.cache.size} Server, ${store.getAllGuilds().length} in RAM`);
+
+      // Server mit abgeschlossenem Setup: Log-Kanal prüfen (bzw. neu anlegen)
+      for (const guild of client.guilds.cache.values()) {
+        const cfg = store.getGuild(guild.id);
+        if (!botHasAdmin(guild)) {
+          void notifyMissingAdmin(ctx, guild);
+          continue;
+        }
+        if (cfg.setup.done) await ensureLogChannel(ctx, guild).catch(() => {});
       }
 
-      // Falls Discord beim Deployment vorübergehend nicht erreichbar war, darf
-      // der Bot nicht bis zum nächsten Render-Restart ohne Commands bleiben.
-      commandRepairTimer = setInterval(() => {
-        if (ctx.commandsRegistered || commandSyncRunning) return;
-        void syncCommands({ retryDelays: [0] });
-      }, 5 * 60 * 1000);
-      commandRepairTimer.unref?.();
+      repairTimer = setInterval(() => {
+        void (async () => {
+          if (!commandsRegistered) await syncCommands();
+          for (const guild of client.guilds.cache.values()) {
+            const cfg = store.getGuild(guild.id);
+            if (!botHasAdmin(guild)) {
+              await notifyMissingAdmin(ctx, guild);
+              continue;
+            }
+            if (cfg.setup.done) await ensureLogChannel(ctx, guild).catch(() => {});
+          }
+        })();
+      }, REPAIR_INTERVAL_MS);
+      repairTimer.unref?.();
+    });
+
+    // ---------------- Nachrichten ----------------
+    client.on('messageCreate', (message) => {
+      void handleIncoming({ ctx, message });
     });
 
     // ---------------- Interactions ----------------
@@ -178,47 +158,46 @@ module.exports = {
       void handleInteraction(ctx, interaction);
     });
 
-    // ---------------- Nachrichten-Sammlung ----------------
-    client.on('messageCreate', (msg) => {
-      void handleIncoming({ ctx, msg });
-    });
-
-    // ---------------- Anti-Delete (messageDelete) ----------------
-    client.on('messageDelete', (message) => {
-      void handleMessageDelete({ ctx, message });
-    });
-
-    // ---------------- Guild Create / Delete ----------------
+    // ---------------- Server betreten ----------------
     client.on('guildCreate', (guild) => {
-      void sendJoinNotice(ctx, guild);
       updatePresence();
-      // Global commands are authoritative. Only the explicitly configured
-      // Guild gets an additional immediate set while global propagation runs.
-      if (ctx.devGuildId && String(guild.id) === String(ctx.devGuildId)) {
-        void registerGuildCommands(ctx, guild.id).catch((e) => {
-          logger.warn(
-            '[security-bot] Optionale guildCreate-Sofortregistrierung fehlgeschlagen; ' +
-              `globale Commands bleiben aktiv: ${formatDiscordError(e)}`
-          );
-        });
+      void dmGuildOwner(ctx, guild);
+      void syncCommands({ onlyGuild: guild.id });
+      logger.info(`[security-bot] Server ${guild.name} hinzugefügt – Owner informiert.`);
+    });
+
+    // ---------------- Server verlassen / gekickt ----------------
+    client.on('guildDelete', (guild) => {
+      void maintenance.handleGuildDelete(ctx, guild).then(updatePresence);
+    });
+
+    // ---------------- Kanal gelöscht (Log-Kanal selbst heilt sich) ----------------
+    client.on('channelDelete', (channel) => {
+      void maintenance.handleChannelDelete(ctx, channel);
+    });
+
+    // ---------------- Rolle gelöscht (kein Müll im Speicher) ----------------
+    client.on('roleDelete', (role) => {
+      void maintenance.handleRoleDelete(ctx, role);
+    });
+
+    // ---------------- Rechte verloren → sofort melden ----------------
+    client.on('guildMemberUpdate', (before, after) => {
+      if (after?.user?.id !== client.user?.id) return;
+      if (before.permissions?.has?.(PermissionFlagsBits.Administrator) && !botHasAdmin(after.guild)) {
+        void notifyMissingAdmin(ctx, after.guild, { force: true });
       }
     });
 
-    client.on('guildDelete', (guild) => {
-      store.deleteGuild(guild.id);
-      void store.flush();
-      clearWebhookCache(); // Anti-Delete-Webhooks der alten Gilde verwerfen
-      logger.info(`[security-bot] Server ${guild.name} verlassen – Daten bereinigt`);
-      updatePresence();
-    });
-
-    // ---------------- Graceful shutdown ----------------
+    // ---------------- Shutdown ----------------
     const originalDestroy = client.destroy.bind(client);
     client.destroy = () => {
       try {
-        if (schedulerStop) schedulerStop();
-        if (commandRepairTimer) clearInterval(commandRepairTimer);
-      } catch {}
+        if (pipelineStop) pipelineStop();
+        if (repairTimer) clearInterval(repairTimer);
+      } catch {
+        /* egal */
+      }
       void store.flush({ force: true }).catch(() => {});
       store.stopBackupInterval();
       return originalDestroy();

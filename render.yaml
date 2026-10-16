@@ -40,12 +40,15 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
-      # --- Sicherheits-Bot 🛡️ ---
+      # --- Sicherheits-Bot 🛡️ (KI-Moderation über Groq) ---
       - key: SECURITY_BOT_TOKEN
         sync: false
       - key: SECURITY_BOT_OWNER_ID
         sync: false
       - key: SECURITY_BOT_GUILD_ID
+        sync: false
+      # Optional: Groq-Key zentral (sonst pro Server über /setup Schritt 7)
+      - key: SECURITY_GROQ_API_KEY
         sync: false
       # --- Self-Roles-Bot 🎭 (ohne Datenbank) ---
       - key: SELF_ROLES_BOT_TOKEN
