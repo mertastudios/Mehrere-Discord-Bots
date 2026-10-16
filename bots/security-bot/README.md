@@ -31,8 +31,8 @@ Ohne Verstoß ist der Bot **komplett still**.
 |---|---|---|
 | 1 | Sprache | 10 Sprachen; Auswahl aktualisiert Schritt 1, „Weiter“ klickst du selbst |
 | 2 | Kanäle | Mehrfachauswahl; mindestens ein Textkanal muss ausgewählt sein, der Log-Kanal wird ausgeschlossen |
-| 3 | Immune Rollen | Owner, Admins und Rollen über der Bot-Rolle sind automatisch immun; zusätzliche Rollen sind optional |
-| 4 | Regelwerk | selbst eingeben · bewusst überspringen · aus einem selbst gewählten Kanal importieren (genau **eine** Nachricht, Text wird aus Embeds/Containern geholt) – die **Discord-Systemregeln sind immer dabei** |
+| 3 | Immune Rollen | Owner, Admins und Rollen über der Bot-Rolle sind automatisch immun; zusätzliche Rollen sind optional – ohne Auswahl einfach „Weiter“ |
+| 4 | Regelwerk | selbst eingeben (bei gespeicherten Regeln: „Bearbeiten“) · bewusst überspringen · aus einem selbst gewählten Kanal importieren (genau **eine** Nachricht, Text wird aus Embeds/Containern geholt) – die **Discord-Systemregeln sind immer dabei** |
 | 5 | KI-Anweisungen | freier Text (bis 2.000 Zeichen) + Häkchen für Timeouts/Kicks/Bans (Verwarnen ist Pflicht; sichere Standardwerte sind vorbelegt) |
 | 6 | Log-Kanal | privaten Kanal anlegen lassen oder einen eigenen Textkanal auswählen; bekommt automatisch die richtigen Rechte |
 | 7 | Groq-API-Key | wird per Formular eingegeben und über den authentifizierten `/models`-Endpunkt geprüft – ohne tokenverbrauchende Testantwort |
@@ -44,9 +44,15 @@ nicht automatisch weiter. Nach einem vollständigen Setup startet `/setup` wiede
 bei Schritt 1; gespeicherte Werte sind vorausgefüllt.
 
 **Darstellung:** Jeder Schritt ist eine private Components-V2-Container-Nachricht
-mit `# Setup · Schritt n/7`, einer `##`-Schrittüberschrift und Beschreibung,
-Fortschrittsanzeige und echten Trennlinien – ohne Embed-Farbrand und ohne kaputte
-`[object Object]`-Formatierung.
+mit `# Setup · Schritt n/7`, direkt darunter dem Fortschritt (`⬜️⬛️`), einer
+`##`-Schrittüberschrift und Beschreibung sowie echten Trennlinien vor der Navigation – ohne Embed-Farbrand und ohne kaputte
+`[object Object]`-Formatierung. Die Kanalauswahl zeigt gespeicherte Kanäle direkt
+im Menü; zusätzliche Speicher-/Weiter-Hinweise entfallen.
+
+Auch alle anderen Nachrichten des Sicherheits-Bots (Moderation im Chat, DMs,
+Fehler und Team-Panels) verwenden Components-V2-Container. Jede vom Bot gesendete
+Nachricht im Log-Kanal hat einen grauen „Neuer Auftrag“-Button, einschließlich
+Hinweisen, Fehlern, Limits und der Ankündigung eines neu angelegten Log-Kanals.
 
 ---
 

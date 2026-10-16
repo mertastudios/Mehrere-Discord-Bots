@@ -69,8 +69,8 @@ function isStepComplete(ctx, guild, cfg, step) {
       // An empty list on an already-finished legacy setup means “all text channels”.
       return Boolean((cfg.channels || []).length || setup.done);
     case 3:
-      // Extra immune roles are optional, but an empty choice must be deliberate.
-      return Boolean((cfg.immuneRoles || []).length || configured.has(3) || setup.done);
+      // Extra immune roles are optional; “Next” accepts an empty selection.
+      return true;
     case 4:
       return ['manual', 'import', 'skip'].includes(cfg.rulesMode);
     case 5:
@@ -125,7 +125,7 @@ function keyErrorDescription(lang, result) {
 }
 
 function progressBar(step) {
-  return `${'▰'.repeat(step)}${'▱'.repeat(STEPS - step)}`;
+  return `${'⬜️'.repeat(step)}${'⬛️'.repeat(STEPS - step)}`;
 }
 
 function navRow(lang, step, { canNext = true } = {}) {
@@ -152,13 +152,12 @@ function renderStep(ctx, guild, cfg, step, { draft = null, note = null } = {}) {
   const copy = stepCopy(lang, safeStep);
   const header = [
     `# ${t(lang, 'setupTitle')} · ${t(lang, 'stepOf', { n: safeStep })}`,
+    progressBar(safeStep),
     `## ${STEP_EMOJI[safeStep]} ${copy.title}`,
     copy.description,
   ].filter(Boolean).join('\n');
   const components = [
     ui.text(header),
-    ui.separator(),
-    ui.text(`**Fortschritt**  ${progressBar(safeStep)}`),
     ui.separator(),
   ];
 
@@ -182,13 +181,7 @@ function renderStep(ctx, guild, cfg, step, { draft = null, note = null } = {}) {
 
   if (safeStep === 2) {
     const selected = (cfg.channels || []).map(String).filter((id) => id !== String(cfg.logChannelId || ''));
-    const selectedText = selected.length
-      ? selected.map((id) => `<#${id}>`).join(' · ')
-      : cfg.setup?.done
-        ? t(lang, 's2AllExisting')
-        : t(lang, 's2NoneSelected');
-    const status = `${t(lang, 's2Hint')}\n\n**${t(lang, 'selectedCount', { n: selected.length })}**\n${selectedText}`;
-    components.push(ui.text(withNote(status, note)));
+    components.push(ui.text(withNote(t(lang, 's2Hint'), note)));
     components.push(ui.row([
       ui.channelSelect({
         id: 'setup:sel:channels',
@@ -212,9 +205,6 @@ function renderStep(ctx, guild, cfg, step, { draft = null, note = null } = {}) {
     components.push(ui.text(withNote(status, note)));
     components.push(ui.row([
       ui.roleSelect({ id: 'setup:sel:roles', placeholder: copy.title, min: 0, max: 25, selected: selectedRoles }),
-    ]));
-    components.push(ui.row([
-      ui.button({ id: 'setup:btn:none_roles', label: t(lang, 'rolesNoExtra'), style: ui.STYLE.secondary, emoji: '⏭️' }),
     ]));
   }
 
@@ -255,7 +245,7 @@ function renderStep(ctx, guild, cfg, step, { draft = null, note = null } = {}) {
     } else {
       components.push(ui.separator());
       components.push(ui.row([
-        ui.button({ id: 'setup:btn:rules_manual', label: t(lang, 'rulesManual'), style: ui.STYLE.primary, emoji: '✍️' }),
+        ui.button({ id: 'setup:btn:rules_manual', label: t(lang, String(cfg.rules || '').trim() ? 'rulesEdit' : 'rulesManual'), style: ui.STYLE.primary, emoji: '✍️' }),
         ui.button({ id: 'setup:btn:rules_import', label: t(lang, 'rulesImport'), style: ui.STYLE.secondary, emoji: '📥' }),
         ui.button({ id: 'setup:btn:rules_skip', label: t(lang, 'rulesSkip'), style: ui.STYLE.secondary, emoji: '⏭️' }),
       ]));
@@ -318,6 +308,7 @@ function renderStep(ctx, guild, cfg, step, { draft = null, note = null } = {}) {
     ]));
   }
 
+  components.push(ui.separator());
   components.push(navRow(lang, safeStep, {
     canNext: firstIncompleteStep(ctx, guild, cfg, safeStep) === null,
   }));
@@ -417,6 +408,7 @@ async function handleComponent(ctx, interaction) {
         const next = await setStep(ctx, guild, blocker);
         return interaction.update(renderStep(ctx, guild, next, blocker, { note: t(lang, 'setupNeedFirst') }));
       }
+      if (currentStep === 3) updateConfiguredStep(ctx, guild, {}, 3);
       const next = await setStep(ctx, guild, currentStep + 1);
       return interaction.update(renderStep(ctx, guild, next, next.setup.step));
     }
@@ -442,7 +434,7 @@ async function handleComponent(ctx, interaction) {
       const next = updateConfiguredStep(ctx, guild, { lang: chosen }, 1);
       await ctx.store.commit();
       // Die Sprachauswahl aktualisiert die Seite, aber navigiert nie selbst weiter.
-      return interaction.update(renderStep(ctx, guild, next, 1, { note: t(chosen, 'setupLanguageSaved') }));
+      return interaction.update(renderStep(ctx, guild, next, 1));
     }
 
     if (action === 'channels') {
@@ -459,7 +451,7 @@ async function handleComponent(ctx, interaction) {
       const note = picked.some((id) => String(id) === String(cfg.logChannelId || ''))
         ? t(lang, 's2LogExcluded')
         : valid.length
-          ? t(lang, 'setupSaved')
+          ? null
           : t(lang, 's2NeedChannel');
       return interaction.update(renderStep(ctx, guild, next, 2, { note }));
     }
@@ -473,7 +465,7 @@ async function handleComponent(ctx, interaction) {
       });
       const next = updateConfiguredStep(ctx, guild, { immuneRoles: roles }, 3);
       await ctx.store.commit();
-      const note = requestedRoles.length !== roles.length ? t(lang, 'rolesExcluded') : t(lang, 'setupSaved');
+      const note = requestedRoles.length !== roles.length ? t(lang, 'rolesExcluded') : null;
       return interaction.update(renderStep(ctx, guild, next, 3, { note }));
     }
 
@@ -488,7 +480,7 @@ async function handleComponent(ctx, interaction) {
       const next = updateConfiguredStep(ctx, guild, { logChannelId: channelId, logAuto: false, channels }, 6);
       await applyLogPermissions(ctx, guild, channel, next);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 6, { note: t(lang, 'setupSaved') }));
+      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 6));
     }
 
     if (action === 'import') {
@@ -523,17 +515,18 @@ async function handleComponent(ctx, interaction) {
   }
 
   if (kind === 'btn') {
+    // Compatibility for buttons on wizard messages sent before this update.
     if (action === 'none_roles') {
       const next = updateConfiguredStep(ctx, guild, { immuneRoles: [] }, 3);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 3, { note: t(lang, 'setupSaved') }));
+      return interaction.update(renderStep(ctx, guild, next, 3));
     }
 
     if (action === 'rules_manual') {
       return interaction.showModal(
         ui.modal({
           id: 'setup:modal:rules',
-          title: t(lang, 'rulesManual'),
+          title: t(lang, String(cfg.rules || '').trim() ? 'rulesEdit' : 'rulesManual'),
           components: [
             ui.textInput({
               id: 'rules',
@@ -682,7 +675,7 @@ async function handleModal(ctx, interaction) {
     const next = updateConfiguredStep(ctx, guild, { instructions: clamped.text }, 5);
     await ctx.store.commit();
     return interaction.update(
-      renderStep(ctx, guild, next, 5, { note: clamped.truncated ? t(lang, 'instructionsTooLong', { max: MAX_INSTRUCTIONS_CHARS }) : t(lang, 'setupSaved') })
+      renderStep(ctx, guild, next, 5, { note: clamped.truncated ? t(lang, 'instructionsTooLong', { max: MAX_INSTRUCTIONS_CHARS }) : null })
     );
   }
 

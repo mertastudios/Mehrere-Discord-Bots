@@ -41,15 +41,16 @@ function readState(message) {
 
 /** Klont die Komponenten und schreibt Zähler + Zustand neu. */
 function patchComponents(components, state) {
-  const cloned = (components || []).map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c));
+  const cloned = structuredClone((components || []).map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c)));
+  let stateWritten = false;
   const blob = encodeLogState(state);
 
   const walk = (nodes) => {
     for (const node of nodes || []) {
       if (!node) continue;
-      if (node.type === 10 && typeof node.content === 'string' && !node.__patched) {
-        node.content = `${stripHidden(node.content)}${blob}`;
-        node.__patched = true;
+      if (node.type === 10 && typeof node.content === 'string') {
+        node.content = `${stripHidden(node.content)}${stateWritten ? '' : blob}`;
+        stateWritten = true;
       }
       if (node.type === 2 && typeof node.custom_id === 'string') {
         if (node.custom_id.startsWith('fb:up:')) node.label = `👍 (${state.up || 0})`;
@@ -59,7 +60,6 @@ function patchComponents(components, state) {
     }
   };
   walk(cloned);
-  for (const node of cloned) delete node.__patched;
   return cloned;
 }
 

@@ -37,7 +37,7 @@ async function handleInteraction(ctx, interaction) {
   if (!interaction?.guildId) {
     // Nur Server-basiert (Command ist ohnehin auf Gilden beschränkt)
     if (interaction.isRepliable?.()) {
-      await interaction.reply({ content: 'Bitte benutze mich auf einem Server.', ephemeral: true }).catch(() => {});
+      await interaction.reply(ui.payload([ui.container([ui.text('Bitte benutze mich auf einem Server.')])], { ephemeral: true })).catch(() => {});
     }
     return;
   }

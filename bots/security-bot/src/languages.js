@@ -89,20 +89,6 @@ const STRINGS = {
     ru: 'Недопустимый выбор. Выбери вариант из списка.', ja: '無効な選択です。リストから選んでください。',
     ko: '잘못된 선택입니다. 목록에서 선택하세요.', zh: '选项无效，请从列表中选择。',
   },
-  setupSaved: {
-    de: 'Auswahl gespeichert. Klicke auf „Weiter“, wenn du bereit bist.', en: 'Saved. Click “Next” when you are ready.',
-    fr: 'Enregistré. Clique sur « Suivant » quand tu es prêt.', es: 'Guardado. Pulsa «Siguiente» cuando estés listo.',
-    it: 'Salvato. Premi «Avanti» quando sei pronto.', pt: 'Guardado. Clica em «Seguinte» quando estiveres pronto.',
-    ru: 'Сохранено. Нажми «Далее», когда будешь готов.', ja: '保存しました。準備ができたら「次へ」を押してください。',
-    ko: '저장되었습니다. 준비되면 ‘다음’을 누르세요.', zh: '已保存，准备好后点击“下一步”。',
-  },
-  setupLanguageSaved: {
-    de: 'Sprache gespeichert. Klicke selbst auf „Weiter“, um fortzufahren.', en: 'Language saved. Click “Next” yourself to continue.',
-    fr: 'Langue enregistrée. Clique toi-même sur « Suivant » pour continuer.', es: 'Idioma guardado. Pulsa «Siguiente» para continuar.',
-    it: 'Lingua salvata. Premi «Avanti» per continuare.', pt: 'Idioma guardado. Clica em «Seguinte» para continuar.',
-    ru: 'Язык сохранён. Нажми «Далее», чтобы продолжить.', ja: '言語を保存しました。「次へ」を押して続けてください。',
-    ko: '언어가 저장되었습니다. ‘다음’을 눌러 계속하세요.', zh: '语言已保存，请点击“下一步”继续。',
-  },
   setupNotConfigured: {
     de: 'Noch nicht eingerichtet', en: 'Not configured yet', fr: 'Pas encore configuré', es: 'Aún sin configurar',
     it: 'Non ancora configurato', pt: 'Ainda não configurado', ru: 'Ещё не настроено', ja: '未設定', ko: '아직 설정되지 않음', zh: '尚未设置',

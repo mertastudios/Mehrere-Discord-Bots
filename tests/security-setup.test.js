@@ -61,7 +61,11 @@ test('Alle Setup-Schritte sind saubere Components-V2-Container mit Überschrifte
     assert.equal(payload.flags & FLAG_V2, FLAG_V2, `Schritt ${step} muss Components V2 sein`);
     assert.equal(container.type, 17);
     assert.ok(!Object.hasOwn(container, 'accent_color'), 'kein Embed-Farbrand');
-    assert.match(header, /^# .*Setup · Schritt \d\/7\n## /);
+    assert.match(header, /^# .*Setup · Schritt \d\/7\n[⬜⬛️]+\n## /);
+    assert.equal(header.split('\n')[1], '⬜️'.repeat(step) + '⬛️'.repeat(7 - step));
+    const navigationIndex = container.components.findIndex((c) => c.components?.some((b) => b.custom_id === 'setup:nav:back'));
+    assert.equal(container.components[navigationIndex - 1].type, 14);
+    assert.equal(container.components[navigationIndex - 1].divider, true);
     assert.doesNotMatch(textsOf(payload), /\[object Object\]/);
     assert.ok(components.filter((component) => component.type === 14 && component.divider).length >= 2);
   }
@@ -193,7 +197,7 @@ test('Schritt 1: Sprache wird gespeichert, bleibt auf Schritt 1 und zeigt kein O
   assert.equal(ctx.store.getGuild('g1').lang, 'en');
   const text = textsOf(select.updates[0]);
   assert.match(text, /Step 1\/7/);
-  assert.match(text, /Language saved/i);
+  assert.doesNotMatch(text, /Language saved|Click.*Next/i);
   assert.doesNotMatch(text, /\[object Object\]/);
 });
 
@@ -203,7 +207,7 @@ test('Schritt 2: Kanal-Auswahl speichert Kanäle ohne Alle-auswählen-/Leeren-Bu
   const pick = makeInteraction({ guild, member: admin, customId: 'setup:sel:channels', values: ['c1', 'c2'], kind: 'select' });
   await handleInteraction(ctx, pick);
   assert.deepEqual(ctx.store.getGuild('g1').channels, ['c1', 'c2']);
-  assert.match(textsOf(pick.updates[0]), /2 ausgewählt/);
+  assert.doesNotMatch(textsOf(pick.updates[0]), /ausgewählt|<#c1>|<#c2>|Auswahl gespeichert|Weiter.*bereit/);
 
   const componentIds = allComponentsOf(pick.updates[0]).map((component) => component.custom_id).filter(Boolean);
   assert.ok(!componentIds.includes('setup:btn:all_channels'));
@@ -235,17 +239,25 @@ test('Schritt 3: immune Rollen werden gespeichert, @everyone wird ausgeschlossen
   assert.match(textsOf(pick.updates[0]), /@everyone.*ignoriert/i);
 });
 
-test('Schritt 3: keine zusätzlichen Rollen ist eine bewusste, gültige Auswahl', async () => {
+test('Schritt 3: ohne zusätzliche Rollen reicht Weiter; die Auswahl bleibt beim Zurückgehen erhalten', async () => {
   const { guild, ctx, admin } = baseSetup();
   ctx.store.updateGuild('g1', { channels: ['c1'], setup: { step: 3, furthest: 3 } });
   const payload = setup.renderStep(ctx, guild, ctx.store.getGuild('g1'), 3);
-  assert.equal(allComponentsOf(payload).find((component) => component.custom_id === 'setup:nav:next').disabled, true);
+  assert.equal(allComponentsOf(payload).find((c) => c.custom_id === 'setup:nav:next').disabled, false);
+  assert.ok(!allComponentsOf(payload).some((c) => c.custom_id === 'setup:btn:none_roles'));
 
-  const none = makeInteraction({ guild, member: admin, customId: 'setup:btn:none_roles', kind: 'button' });
-  await handleInteraction(ctx, none);
+  const next = makeInteraction({ guild, member: admin, customId: 'setup:nav:next' });
+  await handleInteraction(ctx, next);
+  assert.equal(ctx.store.getGuild('g1').setup.step, 4);
   assert.deepEqual(ctx.store.getGuild('g1').immuneRoles, []);
   assert.ok(ctx.store.getGuild('g1').setup.configuredSteps.includes(3));
-  assert.equal(allComponentsOf(none.updates[0]).find((component) => component.custom_id === 'setup:nav:next').disabled, false);
+
+  guild.roles.cache.set('r1', makeRole({ id: 'r1' }));
+  ctx.store.updateGuild('g1', { immuneRoles: ['r1'] });
+  const back = makeInteraction({ guild, member: admin, customId: 'setup:nav:back' });
+  await handleInteraction(ctx, back);
+  await handleInteraction(ctx, next);
+  assert.deepEqual(ctx.store.getGuild('g1').immuneRoles, ['r1'], 'Weiter löscht vorhandene Rollen nicht');
 });
 
 // ------------------------------ Schritt 4: Regelwerk ------------------------------
@@ -338,6 +350,26 @@ test('Schritt 4: Import verlangt genau eine Nachricht im Kanal', async () => {
 
   assert.equal(ctx.setupDraft.get('g1'), undefined);
   assert.match(textsOf(pick.updates[0]), /eine/);
+});
+
+test('Schritt 4: gespeicherte Regeln werden über Bearbeiten geöffnet, leere über Selbst eingeben', async () => {
+  const { guild, ctx, admin } = baseSetup();
+  for (const [rulesMode, rules, label] of [['unset', '', 'Selbst eingeben'], ['manual', 'Respekt!', 'Bearbeiten'], ['import', 'Kein Spam!', 'Bearbeiten']]) {
+    const cfg = ctx.store.updateGuild('g1', { rulesMode, rules });
+    const payload = setup.renderStep(ctx, guild, cfg, 4);
+    assert.equal(allComponentsOf(payload).find((c) => c.custom_id === 'setup:btn:rules_manual').label, label);
+    const edit = makeInteraction({ guild, member: admin, customId: 'setup:btn:rules_manual' });
+    await handleInteraction(ctx, edit);
+    assert.equal(edit.modals[0].title, label);
+    assert.equal(edit.modals[0].components[0].component.value || '', rules);
+  }
+
+  for (const draft of ['choose', { text: 'Regeln', channelName: 'regeln' }]) {
+    const payload = setup.renderStep(ctx, guild, ctx.store.getGuild('g1'), 4, { draft });
+    const components = payload.components[0].components;
+    assert.equal(components.at(-2).type, 14, 'auch Importansichten trennen die Navigation ab');
+    assert.equal(components.at(-2).divider, true);
+  }
 });
 
 // ------------------------------ Schritt 5 ------------------------------

@@ -150,6 +150,7 @@ async function ensureLogChannel(ctx, guild, { createIfMissing = true } = {}) {
         try {
           await created.channel.send(
             buildNoticeLog({
+              lang: cfg.lang || 'de',
               lines: [t(cfg.lang || 'de', 'logRecreated', { channel: created.channel.name })],
               accentColor: ACCENT.warn,
             })
@@ -178,12 +179,34 @@ async function ensureLogChannel(ctx, guild, { createIfMissing = true } = {}) {
 
 // ------------------------------ Bausteine ------------------------------
 
+function orderButton({ lang = 'de', penaltyId = 'none', disabled = false } = {}) {
+  return ui.button({ id: `ord:new:${penaltyId}`, label: t(lang, 'orderButton'), style: ui.STYLE.secondary, disabled });
+}
+
+/** Adds the log action once, without mutating the caller's payload. */
+function withOrderButton(payload, lang = 'de') {
+  const hasOrderButton = (nodes) => (nodes || []).some((node) =>
+    node.custom_id?.startsWith('ord:new') || hasOrderButton(node.components)
+  );
+  if (hasOrderButton(payload.components)) return payload;
+
+  const components = [...payload.components];
+  const index = components.findLastIndex((node) => node.type === 17);
+  const actions = [ui.separator(), ui.row([orderButton({ lang })])];
+  if (index >= 0) {
+    components[index] = { ...components[index], components: [...components[index].components, ...actions] };
+  } else {
+    components.push(ui.container(actions));
+  }
+  return { ...payload, components };
+}
+
 function buttonRow({ state, penaltyIds = [], lang = 'de', disabled = false }) {
   const firstId = penaltyIds[0] || 'none';
   return ui.row([
     ui.button({ id: `fb:up:${firstId}`, label: `👍 (${state?.up || 0})`, style: ui.STYLE.success, disabled }),
     ui.button({ id: `fb:down:${firstId}`, label: `👎 (${state?.down || 0})`, style: ui.STYLE.danger, disabled }),
-    ui.button({ id: `ord:new:${firstId}`, label: t(lang, 'orderButton'), style: ui.STYLE.secondary, disabled }),
+    orderButton({ lang, penaltyId: firstId, disabled }),
   ]);
 }
 
@@ -193,8 +216,6 @@ function buttonRow({ state, penaltyIds = [], lang = 'de', disabled = false }) {
  */
 function buildModerationLog({ lang = 'de', userLine, actionLine, ruleLine, quoteLine, reasonLine, extraLines = [], state }) {
   const body = [
-    t(lang, 'modTitle'),
-    ui.separator(),
     `${actionLine}`,
     userLine ? `👤 ${userLine}` : '',
     ruleLine ? `📜 ${ruleLine}` : '',
@@ -212,15 +233,18 @@ function buildModerationLog({ lang = 'de', userLine, actionLine, ruleLine, quote
   });
 
   const components = [
+    ui.text(t(lang, 'modTitle')),
+    ui.separator(),
     ui.text(`${body}\n${extraLines.filter(Boolean).join('\n')}${stateText}`),
+    ui.separator(),
     buttonRow({ state, penaltyIds: state?.penalties || [], lang }),
   ];
   return ui.payload([ui.container(components, { accentColor: ACCENT.mod })]);
 }
 
 /** Baut einen einfachen Log-Eintrag (Fehler, Hinweise, Limits). */
-function buildNoticeLog({ lines, accentColor = ACCENT.neutral }) {
-  return ui.payload([ui.container([ui.text(lines.join('\n'))], { accentColor })]);
+function buildNoticeLog({ lang = 'de', lines, accentColor = ACCENT.neutral }) {
+  return withOrderButton(ui.payload([ui.container([ui.text(lines.join('\n'))], { accentColor })]), lang);
 }
 
 // ------------------------------ Senden ------------------------------
@@ -232,7 +256,7 @@ async function sendToLog(ctx, guild, payload) {
     return null;
   }
   try {
-    return await channel.send({ ...payload, allowed_mentions: { parse: [] } });
+    return await channel.send({ ...withOrderButton(payload, cfg.lang || 'de'), allowedMentions: { parse: [] } });
   } catch (err) {
     ctx.logger?.warn?.('[security-bot] Log-Nachricht fehlgeschlagen:', err.message);
     return null;
@@ -247,7 +271,7 @@ async function logModeration(ctx, guild, details) {
 
 async function logNotice(ctx, guild, { lang = 'de', title = null, lines = [], accentColor = ACCENT.neutral }) {
   const content = [title, ...lines].filter(Boolean).join('\n');
-  return sendToLog(ctx, guild, buildNoticeLog({ lines: [content], accentColor }));
+  return sendToLog(ctx, guild, buildNoticeLog({ lang, lines: [content], accentColor }));
 }
 
 async function logError(ctx, guild, { lang = 'de', detail, hint = null }) {
@@ -290,6 +314,7 @@ module.exports = {
   buildModerationLog,
   buildNoticeLog,
   buttonRow,
+  withOrderButton,
   sendToLog,
   logModeration,
   logNotice,

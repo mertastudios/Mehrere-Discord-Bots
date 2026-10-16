@@ -19,7 +19,7 @@ const ui = require('./ui');
 const { t } = require('./languages');
 const { DURATIONS } = require('./prompts');
 const { ruleLabel } = require('./rules');
-const { actionEmoji, logModeration } = require('./logging');
+const { actionEmoji, logModeration, withOrderButton } = require('./logging');
 
 const MEASURE_RANK = { warn: 1, timeout: 2, kick: 3, ban: 4 };
 const ORDER_RANK = ['warn', 'timeout', 'kick', 'ban'];
@@ -108,14 +108,14 @@ async function channelOf(guild, channelId) {
   return guild.channels?.cache?.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null));
 }
 
-async function sendPublicNotice({ guild, record, text, accentColor }) {
+async function sendPublicNotice({ ctx, guild, record, text, accentColor }) {
   const channel = await channelOf(guild, record.channelId);
   if (!channel) return null;
-  const body = {
-    flags: ui.FLAG_V2,
-    components: [ui.container([ui.text(text)], { accentColor })],
-    allowed_mentions: { users: [record.authorId] },
-  };
+  let body = ui.payload([ui.container([ui.text(text)], { accentColor })], {
+    allowedMentions: { parse: [], users: [record.authorId], repliedUser: false },
+  });
+  const cfg = ctx?.store.getGuild(guild.id);
+  if (String(channel.id) === String(cfg?.logChannelId)) body = withOrderButton(body, cfg.lang || 'de');
   const original = await channel.messages?.fetch?.(record.messageId).catch(() => null);
   if (original?.reply) {
     try {
@@ -224,7 +224,7 @@ async function applyModerations({
 
     // 3) Öffentliche Antwort mit Ping auf die Verstoß-Nachricht
     const publicText = `<@${record.authorId}> ${ui.clip(userText, 1200)}`;
-    const publicMessage = await sendPublicNotice({ guild, record, text: publicText, accentColor: 0xed4245 });
+    const publicMessage = await sendPublicNotice({ ctx, guild, record, text: publicText, accentColor: 0xed4245 });
 
     // 4) DM an den Nutzer
     await sendDirectMessage({
