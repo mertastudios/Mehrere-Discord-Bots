@@ -14,26 +14,30 @@
  */
 
 const SLUR_AND_INSULT = [
-  // Beleidigungen (de/en) – bewusst grob, die KI urteilt danach genau
-  /\b(hurensohn|hurensöhne|wichser|arschloch|fotze|missgeburt|spast|spasti|behinderter|idiot|vollidiot|depp|trottel)\b/i,
-  /\b(fick|fickt|ficke|verpiss|halt die fresse|halt deine fresse|fresse halten)\b/i,
-  /\b(idiot|moron|retard|bastard|asshole|bitch|whore|slut|cunt|faggot|nigg(er|a))\b/i,
-  /\b(kys|kill yourself|you should die|drop dead|darfst dich umbringen)\b/i,
+  // Beleidigungen (de/en) – bewusst nur die HARTEN, die IMMER ein Verstoß sind.
+  // Weichere Beleidigungen wie "depp", "idiot" werden NUR von der KI bewertet, um False Positives zu vermeiden.
+  /\b(hurensohn|hurensöhne|wichser|arschloch|fotze|missgeburt|spast|spasti|schlampe|huren(sohn|tochter))\b/i,
+  /\b(fick dich|fick dich|fickt euch|verpiss dich|halt die fresse|halt deine fresse|fresse halten|scheißer|scheiße dich)\b/i,
+  /\b(motherfucker|retard|bastard|asshole|son of a bitch|dickhead|cunt|faggot|nigg(er|a)|whore|slut)\b/i,
+  /\b(kys|kill yourself|you should die|drop dead|darfst dich umbringen|bring dich um)\b/i,
+  // Rassistische/extremistische Beleidigungen (sofortige Prüfung)
+  /\b(afd|naz|hitler|judensau|kanacke|ausländer raus|scheiß ausländer)\b/i,
 ];
 const THREATS = [
-  /\b(ich bring dich um|ich ficke dich|ich mach dich fertig|ich finde dich|pass auf dich auf|du bist tot|bist du tot|hoffe du stirbst|verrecke|stirb)\b/i,
-  /\b(i will kill you|i will find you|you are dead|i hope you die|watch your back)\b/i,
-  /\b(nudes?|nacktbilder|schick nackt|sex(t)?ing)\b/i,
-  /\b(adresse|handynummer|wohnort)\b.*\b(raus|sag|post)\b/i,
+  /\b(ich bring dich um|ich schlag dich tot|ich mach dich fertig|ich finde dich|pass auf dich auf|du bist tot|bist du tot|hoffe du stirbst|verrecke|stirb du|ich stech dich|ich tret dich)\b/i,
+  /\b(i will kill you|i will find you|you are dead|i hope you die|watch your back|i'm gonna beat you)\b/i,
+  /\b(nudes?|nacktbilder|schick nackt|schick mir bilder von dir|sex(t)?ing|cyber)|schick mir (?:deine|mir) nudes\b/i,
+  /\b(adresse|handynummer|wohnort|ip|ip-addresse)\b.*\b(raus|sag|post|geben|haben will|veröffentliche|leak)\b/i,
 ];
 const SCAM = [
-  /(discord(?:app)?\.(?:com|gg)\/gift|steamcommunity\.com\/gift|free-?nitro|nitro-?gift|csgo-?skins?\.)/i,
-  /(bit\.ly|tinyurl|shorturl|linktr\.ee)\/[\w-]*(nitro|gift)/i,
-  /\b(crypto|investment|verdopple|gewinnspiel)\b.*\b(link|klick|sende|dm)\b/i,
+  /(discord(?:app)?\.(?:com|gg)\/gift|steamcommunity\.com\/gift|free-?nitro|nitro-?gift|csgo-?skins?\.|free.*robux|free.*steam|free.*giftcard)/i,
+  /(bit\.ly|tinyurl|shorturl|linktr\.ee|t\.me)\/[\w-]*(nitro|gift|free|steam|robux)/i,
+  /\b(crypto|investment|verdopple|2x|gewinnspiel|schnell geld)\b.*\b(link|klick|sende|dm|schick|pn|melde dich)\b/i,
 ];
 const SPAM = [
-  /(?:discord\.gg|discord\.com\/invite)\/[\w-]+/i,
+  /(?:discord\.gg|discord\.com\/invite|dsc\.gg)\/[\w-]+/i,
   /@everyone|@here/i,
+  // Massen-Mentions (mehr als 4 Mentions in einer Nachricht, wird im Code geprüft)
 ];
 
 /** Ist die Nachricht inhaltlich überhaupt prüfbar? */
@@ -91,16 +95,23 @@ function localSignals(record) {
   const signals = [];
   const push = (kind, weight) => signals.push({ kind, weight, messageId: record.messageId });
 
-  if (SLUR_AND_INSULT.some((re) => re.test(text))) push('beleidigung', 45);
-  if (THREATS.some((re) => re.test(text))) push('drohung', 60);
-  if (SCAM.some((re) => re.test(text))) push('scam', 55);
+  if (SLUR_AND_INSULT.some((re) => re.test(text))) push('harte_beleidigung', 50);
+  if (THREATS.some((re) => re.test(text))) push('drohung', 65);
+  if (SCAM.some((re) => re.test(text))) push('scam', 60);
   if (SPAM.some((re) => re.test(text))) push('spam', 25);
+
+  // Massen-Mentions
+  const mentionCount = (text.match(/<@!?\d+>/g) || []).length;
+  if (mentionCount >= 5) push('massen_mentions', 40);
+  else if (mentionCount >= 3) push('mehrere_mentions', 10);
 
   // Schreien (viele Großbuchstaben)
   const letters = text.replace(/[^A-Za-zÄÖÜäöüß]/g, '');
-  if (letters.length >= 12 && (text.match(/[A-ZÄÖÜ]/g)?.length || 0) / letters.length > 0.7) push('schreien', 12);
+  if (letters.length >= 15 && (text.match(/[A-ZÄÖÜ]/g)?.length || 0) / letters.length > 0.75) push('schreien', 15);
   // Wand aus Zeichen / Flood
-  if (/(.)\1{9,}/.test(text)) push('flood', 15);
+  if (/(.)\1{12,}/.test(text)) push('flood', 20);
+  // Exzessive Nutzung von Sonderzeichen
+  if ((text.match(/[^\w\s]/g)?.length || 0) / text.length > 0.6 && text.length > 20) push('sonderzeichen_spam', 15);
 
   return signals;
 }

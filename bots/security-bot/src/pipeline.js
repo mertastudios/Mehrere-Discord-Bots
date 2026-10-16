@@ -27,11 +27,11 @@ const { logError, logRateLimit, ensureLogChannel } = require('./logging');
 const { botHasAdmin } = require('./guard');
 const { t } = require('./languages');
 
-const TICK_MS = 10_000;
-const MAX_BATCH_MESSAGES = 40;
-const MAX_TRANSCRIPT_TOKENS = 3000; // pro Anfrage – hält uns im Free-Plan
-const SCREEN_MIN_MESSAGES = 8;
-const SCREEN_THRESHOLD = 35; // darunter: kein Urteil nötig
+const TICK_MS = 15_000; // 15s statt 10s Ticks → weniger Overhead
+const MAX_BATCH_MESSAGES = 25; // Kleinere Batches = weniger Token pro Anfrage
+const MAX_TRANSCRIPT_TOKENS = 2200; // pro Anfrage – hält uns im Free-Plan
+const SCREEN_MIN_MESSAGES = 15; // Vorprüfung NUR bei >= 15 Nachrichten, sonst direkt urteilen oder warten
+const SCREEN_THRESHOLD = 45; // Höhere Schwelle für Vorprüfung
 const KEY_WARN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const LIMIT_WARN_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -141,9 +141,12 @@ async function analyse({ ctx, guild, cfg, records }) {
   const smartModel = modelFromEnv(ctx.env, 'smart');
 
   let screened = { ran: false };
+  // Vorprüfung nur, wenn wir WIRKLICH genug Budget haben – sonst lieber direkt
+  // mit dem Urteil anfangen, oder warten.
+  const screenCost = estimateTokens(system) + transcript.tokens + 400;
   const wantScreen = selected.length >= SCREEN_MIN_MESSAGES && risk.score < 60;
   if (wantScreen) {
-    const check = ctx.budget.fast.canSpend(estimateTokens(system) + transcript.tokens + 300);
+    const check = ctx.budget.fast.canSpend(screenCost, { priority: risk.score >= 40 });
     if (check.ok && !check.waitMs) {
       const result = await callGroqWithFallback({
         apiKey,
@@ -164,7 +167,8 @@ async function analyse({ ctx, guild, cfg, records }) {
         fetchFn: ctx.fetchFn,
       });
       if (result.ok) {
-        ctx.budget.fast.spend(result.usage.totalTokens || 400);
+        const usedScreenTokens = result.usage.totalTokens || 400;
+        ctx.budget.fast.spend(usedScreenTokens);
         screened = {
           ran: true,
           risiko: Number(result.json?.risiko) || 0,
@@ -183,6 +187,9 @@ async function analyse({ ctx, guild, cfg, records }) {
             idMap: transcript.idMap,
           };
         }
+        // Wir haben schon Tokens fürs Screening ausgegeben – ziehe die von den
+        // geschätzten Urteils-Tokens ab, damit wir das Global-Limit nicht doppelt belasten.
+        baseTokens = Math.max(800, baseTokens - Math.floor(usedScreenTokens * 0.7));
       } else if (result.error === 'invalid_api_key') {
         return { ok: false, error: 'invalid_api_key' };
       } else if (result.error === 'rate_limited') {
@@ -334,9 +341,9 @@ async function tickGuild(ctx, guildId, { now = Date.now(), force = false } = {})
     now,
     limits: {
       maxBatch: MAX_BATCH_MESSAGES,
-      minBatch: intEnv(ctx.env, 'SECURITY_AI_MIN_BATCH', 4),
-      quietMs: intEnv(ctx.env, 'SECURITY_AI_QUIET_MS', 30_000),
-      maxAgeMs: intEnv(ctx.env, 'SECURITY_AI_MAX_AGE_MS', 180_000),
+      minBatch: intEnv(ctx.env, 'SECURITY_AI_MIN_BATCH', 3),
+      quietMs: intEnv(ctx.env, 'SECURITY_AI_QUIET_MS', 45_000), // Längere Ruhephase: 45s statt 30s → weniger unnötige Aufrufe
+      maxAgeMs: intEnv(ctx.env, 'SECURITY_AI_MAX_AGE_MS', 240_000), // Maximal 4 Minuten warten statt 3
     },
   });
   if (force) decision.run = true;
