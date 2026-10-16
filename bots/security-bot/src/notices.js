@@ -1,78 +1,85 @@
 /**
- * Hinweis-Versand für den Sicherheitsbot:
- *  - Log-Kanal-Nachrichten (Moderationen, API-Fehler, Sonstiges)
- *  - Join-Notice an den Bot-Owner
+ * ============================================================================
+ *  Hinweise (kein Command)
+ *
+ *  - Beim Beitritt schreibt der Bot den Server-Owner direkt an: er braucht
+ *    Administrator-Rechte und danach einfach /setup.
+ *  - Ist die DM zu, versucht er den System-Kanal, sonst bleibt nur das Log
+ *    auf der Konsole.
+ *  - Nach dem ersten Setup meldet er sich menschlich im Log-Kanal (siehe
+ *    logging.js → logSetupDone).
+ *  - Fehlen die Administrator-Rechte, sagt er das klar (höchstens alle 12 h).
+ * ============================================================================
  */
 
-const { ChannelType } = require('discord.js');
-const { componentsV2Payload } = require('./message-payload');
-const { smallContainer } = require('./embed-builder');
+const ui = require('./ui');
 const { t } = require('./languages');
+const { logNotice, ACCENT } = require('./logging');
 
-/** Löst die konfigurierte Log-Kanal-ID in ein sendbares Channel-Objekt auf. */
-async function resolveLogChannel(ctx, guildId) {
-  const channelId = ctx.store?.getLogChannelId?.(guildId);
-  if (!channelId) return null;
-  const guild = ctx.client?.guilds?.cache?.get?.(String(guildId));
-  if (!guild) return null;
-  let channel = guild.channels?.cache?.get?.(channelId) || null;
-  if (!channel && typeof guild.channels?.fetch === 'function') {
-    channel = await guild.channels.fetch(channelId).catch(() => null);
+async function dmGuildOwner(ctx, guild) {
+  const lang = ctx.store.getGuild(guild.id).lang || 'de';
+  const owner = await guild.fetchOwner?.().catch(() => null);
+  const botName = ctx.client.user?.username || 'Sentinel';
+  const text = t(lang, 'joinDm', { bot: botName, guild: guild.name });
+
+  if (owner?.send) {
+    try {
+      await owner.send(ui.payload([ui.container([ui.text(text)], { accentColor: 0x5865f2 })]));
+      ctx.logger?.info?.(`[security-bot] Owner von ${guild.name} angeschrieben.`);
+      return { ok: true, via: 'dm' };
+    } catch {
+      /* DMs zu → System-Kanal versuchen */
+    }
   }
-  if (!channel || typeof channel.send !== 'function') return null;
-  if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) return null;
-  return channel;
+
+  const channel =
+    guild.systemChannel ||
+    guild.channels?.cache?.find?.((c) => c.isTextBased?.() && c.permissionsFor?.(guild.members.me)?.has?.('SendMessages'));
+
+  if (channel?.send) {
+    try {
+      await channel.send(ui.payload([ui.container([ui.text(t(lang, 'joinDmNoDm'))], { accentColor: 0x5865f2 })]));
+      return { ok: true, via: 'channel' };
+    } catch {
+      /* ignorieren */
+    }
+  }
+
+  ctx.logger?.warn?.(`[security-bot] Konnte den Owner von ${guild.name} nicht anschreiben.`);
+  return { ok: false };
 }
 
-/** Sendet einen Components-V2-Container in den Log-Kanal (schlägt still fehl). */
-async function sendLogNotice(ctx, guildId, container) {
-  try {
-    const channel = await resolveLogChannel(ctx, guildId);
-    if (!channel) return false;
-    // Discord kann bei einem kurzen Netzwerk-/Rate-Limit-Fehler ablehnen.
-    // Fehler beim Loggen dürfen nicht still verschwinden: drei kurze Retries.
-    let lastError;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+/**
+ * Meldet, dass dem Bot die Administrator-Rechte fehlen (höchstens alle 12 h).
+ * Ohne diese Rechte macht der Bot bewusst gar nichts.
+ */
+async function notifyMissingAdmin(ctx, guild, { force = false } = {}) {
+  const last = ctx.adminWarnAt?.get(guild.id) || 0;
+  if (!force && Date.now() - last < 12 * 60 * 60 * 1000) return { ok: false, reason: 'throttled' };
+  ctx.adminWarnAt?.set(guild.id, Date.now());
+
+  const lang = ctx.store.getGuild(guild.id).lang || 'de';
+  const lines = [t(lang, 'needBotAdmin'), t(lang, 'needBotAdminWhy'), '', t(lang, 'needBotAdminFix')];
+
+  let delivered = false;
+  const cfg = ctx.store.getGuild(guild.id);
+  if (cfg.logChannelId) {
+    const sent = await logNotice(ctx, guild, { lang, lines, accentColor: ACCENT.error }).catch(() => null);
+    delivered = Boolean(sent);
+  }
+  if (!delivered) {
+    const owner = await guild.fetchOwner?.().catch(() => null);
+    if (owner?.send) {
       try {
-        await channel.send(componentsV2Payload([container]));
-        return true;
-      } catch (err) {
-        lastError = err;
-        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 750 * (attempt + 1)));
+        await owner.send(ui.payload([ui.container([ui.text(lines.join('\n'))], { accentColor: 0xed4245 })]));
+        delivered = true;
+      } catch {
+        /* DMs zu */
       }
     }
-    throw lastError;
-  } catch (err) {
-    ctx.logger?.warn?.('[security-bot] Log-Kanal-Nachricht fehlgeschlagen:', err?.message || err);
-    return false;
   }
+  ctx.logger?.warn?.(`[security-bot] Keine Administrator-Rechte auf ${guild.name} – Bot ist inaktiv.`);
+  return { ok: true, delivered };
 }
 
-/** Kurze DM an den Bot-Owner, wenn der Bot einem neuen Server beitritt. */
-async function sendJoinNotice(ctx, guild) {
-  if (!ctx.ownerId) return;
-  try {
-    const ownerUser =
-      ctx.client.users.cache.get(ctx.ownerId) || (await ctx.client.users.fetch(ctx.ownerId));
-    const dm = await ownerUser.createDM();
-    const text = [
-      `🏷️ **${guild.name}**`,
-      `👥 **${(guild.memberCount || 0).toLocaleString('de-DE')} Mitglieder**`,
-      `👑 **Server-Owner:** ${guild.ownerId ? `<@${guild.ownerId}>` : 'unbekannt'}`,
-      '',
-      'Der Server ist jetzt im **/adminpanel** verfügbar. Dort siehst du den Sicherheitsstatus, kannst eine einmalige Einladung erstellen oder den Server verlassen.',
-      '',
-      t('joinDesc', 'de', {}),
-    ].join('\n');
-    try {
-      await dm.send(componentsV2Payload([smallContainer(t('joinTitle', 'de'), text)]));
-    } catch {
-      await dm.send({ content: `${t('joinTitle', 'de')}\n\n${text.replace(/[*_`>|]/g, '')}` });
-    }
-    ctx.logger?.info?.(`[security-bot] Join-Notice an Owner für ${guild.name} gesendet.`);
-  } catch (err) {
-    ctx.logger?.warn?.('[security-bot] Join-Notice fehlgeschlagen:', err?.message || err);
-  }
-}
-
-module.exports = { resolveLogChannel, sendLogNotice, sendJoinNotice };
+module.exports = { dmGuildOwner, notifyMissingAdmin };

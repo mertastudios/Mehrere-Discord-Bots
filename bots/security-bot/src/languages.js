@@ -1,1117 +1,1007 @@
 /**
  * ============================================================================
- *  🛡️ Security Bot – Sprachdatei (10 Sprachen)
+ *  Sprachen – nur noch die Texte, die der Bot selbst zeigt
  *
- *  Unterstützte Sprachen:
- *  - de (Deutsch)      - en (English)     - fr (Français)
- *  - es (Español)      - pt (Português)   - ru (Русский)
- *  - ja (日本語)        - ko (한국어)       - zh (中文)   - it (Italiano)
- *
- *  Die Sprache steuert:
- *  - Alle Bot-Antworten & Log-Hinweise
- *  - Den Standardtext für /set_prompt (Formular-Vorbelegung)
- *  - Die Zeitzone für adaptive Auswertung und 2-Stunden-Sicherheits-Flush
+ *  Der Bot hat genau EINEN Befehl (/setup) plus die Log- und Feedback-Texte,
+ *  daher bleibt diese Datei bewusst klein. Fehlt ein Schlüssel in einer
+ *  Sprache, fällt der Bot automatisch auf Deutsch zurück.
  * ============================================================================
  */
 
-const LANGS = {
-  de: {
-    name: 'Deutsch',
-    names: { de: 'Deutsch', en: 'German', fr: 'Allemand', es: 'Alemán', pt: 'Alemão', ru: 'Немецкий', ja: 'ドイツ語', ko: '독일어', zh: '德语', it: 'Tedesco' },
-    flag: '🇩🇪',
-    locale: 'de-DE',
-    tz: 'Europe/Berlin',
-  },
-  en: {
-    name: 'English',
-    names: { de: 'Englisch', en: 'English', fr: 'Anglais', es: 'Inglés', pt: 'Inglês', ru: 'Английский', ja: '英語', ko: '영어', zh: '英语', it: 'Inglese' },
-    flag: '🇬🇧',
-    locale: 'en-US',
-    tz: 'America/New_York',
-  },
-  fr: {
-    name: 'Français',
-    names: { de: 'Französisch', en: 'French', fr: 'Français', es: 'Francés', pt: 'Francês', ru: 'Французский', ja: 'フランス語', ko: '프랑스어', zh: '法语', it: 'Francese' },
-    flag: '🇫🇷',
-    locale: 'fr-FR',
-    tz: 'Europe/Paris',
-  },
-  es: {
-    name: 'Español',
-    names: { de: 'Spanisch', en: 'Spanish', fr: 'Espagnol', es: 'Español', pt: 'Espanhol', ru: 'Испанский', ja: 'スペイン語', ko: '스페인어', zh: '西班牙语', it: 'Spagnolo' },
-    flag: '🇪🇸',
-    locale: 'es-ES',
-    tz: 'Europe/Madrid',
-  },
-  pt: {
-    name: 'Português',
-    names: { de: 'Portugiesisch', en: 'Portuguese', fr: 'Portugais', es: 'Portugués', pt: 'Português', ru: 'Португальский', ja: 'ポルトガル語', ko: '포르투갈어', zh: '葡萄牙语', it: 'Portoghese' },
-    flag: '🇧🇷',
-    locale: 'pt-BR',
-    tz: 'America/Sao_Paulo',
-  },
-  ru: {
-    name: 'Русский',
-    names: { de: 'Russisch', en: 'Russian', fr: 'Russe', es: 'Ruso', pt: 'Russo', ru: 'Русский', ja: 'ロシア語', ko: '러시아어', zh: '俄语', it: 'Russo' },
-    flag: '🇷🇺',
-    locale: 'ru-RU',
-    tz: 'Europe/Moscow',
-  },
-  ja: {
-    name: '日本語',
-    names: { de: 'Japanisch', en: 'Japanese', fr: 'Japonais', es: 'Japonés', pt: 'Japonês', ru: 'Японский', ja: '日本語', ko: '일본어', zh: '日语', it: 'Giapponese' },
-    flag: '🇯🇵',
-    locale: 'ja-JP',
-    tz: 'Asia/Tokyo',
-  },
-  ko: {
-    name: '한국어',
-    names: { de: 'Koreanisch', en: 'Korean', fr: 'Coréen', es: 'Coreano', pt: 'Coreano', ru: 'Корейский', ja: '韓国語', ko: '한국어', zh: '韩语', it: 'Coreano' },
-    flag: '🇰🇷',
-    locale: 'ko-KR',
-    tz: 'Asia/Seoul',
-  },
-  zh: {
-    name: '中文',
-    names: { de: 'Chinesisch', en: 'Chinese', fr: 'Chinois', es: 'Chino', pt: 'Chinês', ru: 'Китайский', ja: '中国語', ko: '중국어', zh: '中文', it: 'Cinese' },
-    flag: '🇨🇳',
-    locale: 'zh-CN',
-    tz: 'Asia/Shanghai',
-  },
-  it: {
-    name: 'Italiano',
-    names: { de: 'Italienisch', en: 'Italian', fr: 'Italien', es: 'Italiano', pt: 'Italiano', ru: 'Итальянский', ja: 'イタリア語', ko: '이탈리아어', zh: '意大利语', it: 'Italiano' },
-    flag: '🇮🇹',
-    locale: 'it-IT',
-    tz: 'Europe/Rome',
-  },
-};
+const LANGS = [
+  { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
+  { code: 'en', name: 'English', flag: '🇬🇧' },
+  { code: 'fr', name: 'Français', flag: '🇫🇷' },
+  { code: 'es', name: 'Español', flag: '🇪🇸' },
+  { code: 'it', name: 'Italiano', flag: '🇮🇹' },
+  { code: 'pt', name: 'Português', flag: '🇵🇹' },
+  { code: 'ru', name: 'Русский', flag: '🇷🇺' },
+  { code: 'ja', name: '日本語', flag: '🇯🇵' },
+  { code: 'ko', name: '한국어', flag: '🇰🇷' },
+  { code: 'zh', name: '中文', flag: '🇨🇳' },
+];
 
-const DEFAULT_LANG = 'de';
-
+const LANG_NAMES = LANGS.reduce((acc, l) => ({ ...acc, [l.code]: l.name }), {});
 
 const STRINGS = {
-
-  de: {
-    errGuildOnly: '🔒 Dieser Befehl funktioniert nur in einem Server.',
-    errNoPermission: '🔒 Nur Server-Administratoren können diesen Befehl nutzen.',
-
-    apiKeySet: '✅ **Gemini API-Key gespeichert** ({key}).\nDie KI-Überwachung ist ab jetzt aktiv – gesammelte Nachrichten werden jetzt deutlich häufiger analysiert: bei Risikosignalen sofort, bei kleinen Verläufen nach kurzer Wartezeit und weiterhin spätestens per 2-Stunden-Sicherheits-Flush.',
-    apiKeyInvalid: '❌ **Google hat den API-Key abgelehnt** ({error}). Der Key wurde **nicht** gespeichert. Erstelle einen Schlüssel auf [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ Der bestehende API-Key wurde unverändert beibehalten.',
-    apiKeyRemoved: '🗑️ **Gemini API-Key gelöscht.** Es werden keine Nachrichten mehr gesammelt oder analysiert.',
-    apiKeyUnverified: '⚠️ **API-Key gespeichert** ({key}), aber die Prüfung bei Google schlug fehl ({error}). Der Key wird trotzdem verwendet.',
-
-    promptModalTitle: '🛡️ KI-Anweisungen (Prompt)',
-    promptModalLabel: 'Regeln, Strenge & Maßnahmen für Gemini',
-    promptSaved: '✅ **KI-Anweisungen gespeichert** ({chars} Zeichen).\nSie gelten für die nächste Chat-Analyse.',
-    promptReset: '♻️ **KI-Anweisungen auf den Standardtext zurückgesetzt.**',
-
-    logChannelSet: '✅ **Log-Kanal gesetzt:** {channel}\nDorthin sendet der Bot Moderations-Hinweise, API-Fehler und sonstige Meldungen.',
-    logChannelRemoved: '🗑️ **Log-Kanal entfernt.** Es werden keine Hinweise mehr versendet.',
-    antiDeleteEnabled: '✅ **Anti-Delete aktiviert.** Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, sendet der Bot sie per Webhook mit exakter Profil-Kopie (Anzeigename & Avatar) erneut. Erwähnungen pingen dabei niemanden.',
-    antiDeleteDisabled: '⛔ **Anti-Delete deaktiviert.** Gelöschte Nachrichten werden nicht mehr erneut gesendet.',
-
-    langChanged: '✅ Sprache geändert: {name}',
-
-    descApiKey: 'Google Gemini API-Key für diesen Server hinterlegen',
-    descPrompt: 'KI-Anweisungen per Formular festlegen (Regeln, Strenge, Maßnahmen)',
-    descLogChannel: 'Log-Kanal für Moderations-Hinweise & API-Fehler setzen',
-    descLanguage: 'Sprache des Bots dauerhaft ändern',
-    descHelp: 'Zeigt alle Befehle und Funktionen',
-    descCheckNow: 'Startet sofort eine KI-Prüfung der gesammelten Nachrichten (nur Admins)',
-    descCheckNowUser: 'Nutzer, der bei dieser Prüfung zwangsmoderiert werden soll (optional)',
-    descAntiDelete: 'Anti-Delete: gelöschte letzte Nachrichten per Webhook erneut senden',
-    descAntiDeleteOption: 'true = Anti-Delete einschalten, false = ausschalten',
-
-    helpTitle: '🛡️ Security Bot – KI-Moderation mit Gemini',
-    helpDesc: 'Dieser Bot sammelt **Textnachrichten echter Nutzer** (Admins sind immun) und wertet sie mit Gemini jetzt **adaptiv** aus: sofort bei Risikosignalen wie Beleidigung, Dogpiling oder wiederholten Mentions, bei kleineren Verläufen nach kurzer Wartezeit und zusätzlich spätestens per 2-Stunden-Sicherheits-Flush. Gemini erhält System-Prompt, eure Server-Regeln, Reply-/Mention-Kontext und echte Server-/Global-/Usernamen und entscheidet über Warnungen & Timeouts. Bei API-Fehlern geht **nichts verloren**: Es wird so lange wiederholt, bis es klappt.',
-    helpApiKey: 'Hinterlegt den Google Gemini API-Key für diesen Server. Muss vor der Überwachung einmal gesetzt werden.',
-    helpPrompt: 'Öffnet ein Formular mit euren KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der letzte gespeicherte Text ist bereits eingetragen.',
-    helpLogChannel: 'Setzt den Log-Kanal für Moderations-Hinweise, API-Fehler und Meldungen. Ohne Kanal-Angabe wird der Log-Kanal entfernt.',
-    helpLanguage: 'Ändert die Sprache des Bots dauerhaft (steuert auch die Zeitzone des Sicherheits-Flushs & die Standardsprache der KI).',
-    helpHelp: 'Zeigt diese Übersicht.',
-    helpCheckNow: 'Wertet die bisher gesammelten Nachrichten sofort aus, ohne auf den adaptiven Auto-Flush zu warten. Mit der Option `user` lässt sich ein Nutzer wählen, der bei dieser Prüfung zwingend moderiert werden soll.',
-    helpAntiDelete: 'Schaltet Anti-Delete ein oder aus: Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, sendet der Bot sie per Webhook mit exakter Profil-Kopie (Name & Avatar) erneut. Erwähnungen pingen dabei niemanden.',
-
-    logModTitle: '🛡️ KI-Moderation',
-    logFieldUser: 'Nutzer',
-    logFieldAction: 'Maßnahme',
-    logFieldReason: 'Begründung von Gemini',
-    logFieldMessage: 'Nachricht',
-    logActionWarn: '⚠️ Warnung',
-    logActionTimeout: '⏱️ Timeout',
-    logPrimary: '💥 Hauptverstoß (darauf hat der Bot geantwortet)',
-    logNormal: 'Verstoß',
-    logImmune: '🛡️ **Übersprungen:** Gemini wollte {user} moderieren, aber Administratoren bleiben immer verschont.',
-    logBatchSize: 'Verlauf: {count} Nachrichten',
-
-    logApiTitle: '⚠️ Gemini API-Fehler',
-    logApiDesc: 'Die Analyse von **{count} gesammelten Nachrichten** ist fehlgeschlagen.\nFehler: `{error}`\n\n🔁 Versuch {attempt} – nächste Wiederholung: **{retry}**.\n💾 Die Nachrichten bleiben vollständig erhalten und werden **nicht verworfen** – neue Nachrichten sammeln sich derweil ganz normal weiter.',
-    logNoKeyTitle: '🔑 Kein Gemini API-Key hinterlegt',
-    logNoKeyDesc: '{count} gesammelte Nachrichten warten auf Analyse. Ein Administrator muss erst `/set_gemini_api_key` ausführen.',
-    logDropTitle: '🗑️ Veralteter Chat-Verlauf verworfen',
-    logDropDesc: '{count} Nachrichten konnten über 30 Tage lang nicht analysiert werden (dauerhafter API-Fehler) und wurden zur Datenhygiene gelöscht.',
-    checkNowNoKey: '🔑 Kein Gemini API-Key hinterlegt. Führe zuerst `/set_gemini_api_key` aus.',
-    checkNowEmpty: 'ℹ️ Aktuell liegen keine gesammelten Nachrichten vor – nichts zu prüfen.',
-    checkNowDone: '✅ **Sofort-Prüfung abgeschlossen** ({count} Nachrichten analysiert). Ergebnisse siehe Log-Kanal.',
-    checkNowPartial: '⚠️ **Sofort-Prüfung gestartet** ({count} Nachrichten), aber {remaining} davon konnten nicht abgeschlossen werden (API-Fehler) – Details im Log-Kanal, es wird automatisch weiter versucht.',
-    checkNowForcedActive: '🎯 Zwangsmoderation angefordert: {user} wird bei dieser Prüfung zwingend moderiert – Details siehe Log-Kanal.',
-    checkNowForcedNoMsgs: '⚠️ {user} kommt in den gesammelten Nachrichten nicht vor – es gab keine Nachricht, die moderiert werden könnte.',
-    checkNowForcedInvalid: '⚠️ {user} ist ein Bot oder Administrator und kann nicht moderiert werden. Wähle ein reguläres Mitglied.',
-
-    joinTitle: '👋 Security Bot ist beigelegt!',
-    joinDesc: 'Danke fürs Einladen! So startest du:\n\n1️⃣ `/set_gemini_api_key` – Google Gemini Key hinterlegen ([kostenlos erstellen](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – Regeln & Strenge der KI festlegen (Standardtext ist vorbelegt)\n3️⃣ `/set_log_channel` – Log-Kanal für Moderations-Hinweise wählen\n\nAb dann überwacht die KI automatisch alle Textnachrichten. **Alle Commands sind nur für Administratoren sichtbar.**',
-
-    defaultPrompt: `Moderiere diesen Server als faires, freundliches, aber konsequentes OP-Team.
-
-=== REGELN ===
-- Keine Beleidigungen, Hass, Diskriminierung oder extreme Toxizität
-- Keine sexistischen, rassistischen, homophoben oder transphoben Aussagen
-- Kein Spam, keine Werbung, kein Account-/Nitro-Handel, keine verdächtigen Links
-- Respektvoller Umgang – auch bei Meinungsverschiedenheiten
-- Keine gefährlichen oder illegalen Inhalte
-
-=== STRENGE & KONTEXT (weder zu lasch noch zu streng) ===
-- Freundschaftliche Frotzeleien, Sarkasmus unter Freunden, Selbstironie und einvernehmliche Insider NIEMALS bestrafen
-- Nur über andere zu sprechen (z. B. Streamer, Gegner oder fiktive Rollen) ist KEIN Verstoß
-- Nutze den gesamten Verlauf: Reply-Ketten, Mentions, Server-Nicknames, globale Namen und Usernames zeigen, wer gemeint ist
-- Eine frühere Strafe allein ist KEIN Grund für eine neue Strafe
-- Erst bei echten, klaren, eindeutigen Verstößen eingreifen
-- Im Zweifel: lieber eine Warnung als ein Timeout
-
-=== MOBBING / DOGPILING / NACHTRETEN ===
-- Wiederholtes Pingen/Ansprechen einer Person, die nicht antwortet oder ausweicht, ist Belästigung – besonders bei Druck wie "antworte" oder Beleidigungen
-- Wenn mehrere Personen dieselbe Zielperson öffentlich lächerlich machen, nach einem Timeout/Drama nachtreten oder private Konflikte ausschlachten, ist das Dogpiling/Mobbing
-- "RIP"-/Todessprüche über ein reales Mitglied im Kontext von Streit, Timeout, Mobbing oder wiederholtem Pingen sind nicht als harmloser Joke zu behandeln
-- Moderiere nicht die Zielperson für Schweigen, defensive Antworten oder Unsicherheit; moderiere die Nachrichten, die Druck/Angriff erzeugen
-
-=== ESKALATION (Warnungen zuerst) ===
-- Erster Verstoß: immer Warnung (warn), kein Timeout
-- Timeout erst nach wiederholten Warnungen (Strafenregister) oder bei schweren Verstößen
-- Pro Person höchstens EIN Timeout pro Analyse – weitere Verstöße derselben Person als warn
-- Der schwerwiegendste Verstoß ist primary=true und bekommt die längste (oder gleichlängste) Dauer
-
-=== MASSNAHMEN ===
-- Leichte Verstöße: warn mit freundlichem Hinweis
-- Klare Beleidigung oder Provokation: warn, bei Wiederholung timeout 5m–10m
-- Wiederholter Verstoß trotz Warnung: timeout 10m–1h
-- Diskriminierung, Hate Speech, Drohungen: timeout 1d–1w
-- Gefährliche Inhalte, Phishing-/Betrugs-Links: timeout 1w
-- Spam/Werbung: erstes Mal warn, Wiederholung timeout 1h
-- Kein Verstoß: niemanden moderieren und NICHTS in den Chat schreiben – der Bot bleibt still
-- Niemals Grüße, Small-Talk, Entwarnungen oder Statusmeldungen posten`,
+  // ---- Allgemein / Rechte ----
+  needBotAdmin: {
+    de: '🛑 **Ich brauche Administrator-Rechte.**',
+    en: '🛑 **I need Administrator permission.**',
+    fr: "🛑 **J'ai besoin de la permission Administrateur.**",
+    es: '🛑 **Necesito el permiso de Administrador.**',
+    it: '🛑 **Ho bisogno del permesso di Amministratore.**',
+    pt: '🛑 **Preciso da permissão de Administrador.**',
+    ru: '🛑 **Мне нужны права Администратора.**',
+    ja: '🛑 **管理者権限が必要です。**',
+    ko: '🛑 **관리자 권한이 필요합니다.**',
+    zh: '🛑 **我需要管理员权限。**',
+  },
+  needBotAdminWhy: {
+    de: 'Ohne Administrator kann ich nichts tun – keine Kanäle verwalten, keine Timeouts setzen, keinen Log-Kanal anlegen, nicht mal das Setup öffnen.',
+    en: 'Without it I cannot do anything – no channel management, no timeouts, no log channel, not even the setup.',
+    fr: "Sans cela, je ne peux rien faire – ni gérer les salons, ni les exclusions, ni créer le salon de logs.",
+    es: 'Sin eso no puedo hacer nada: ni gestionar canales, ni aplicar sanciones, ni crear el canal de logs.',
+    it: 'Senza di esso non posso fare nulla: né gestire canali, né applicare timeout, né creare il canale dei log.',
+    pt: 'Sem isso não posso fazer nada: nem gerir canais, nem aplicar castigos, nem criar o canal de registo.',
+    ru: 'Без них я ничего не могу: ни управлять каналами, ни выдавать тайм-ауты, ни создавать канал логов.',
+    ja: 'これがないと、チャンネル管理・タイムアウト・ログチャンネル作成など、何もできません。',
+    ko: '없으면 채널 관리, 타임아웃, 로그 채널 생성 등 아무것도 할 수 없습니다.',
+    zh: '没有它我什么都做不了：无法管理频道、无法禁言、无法创建日志频道。',
+  },
+  needBotAdminFix: {
+    de: '→ Servereinstellungen → Rollen → meine Rolle → **Administrator** aktivieren. Danach `/setup`.',
+    en: '→ Server Settings → Roles → my role → enable **Administrator**. Then `/setup`.',
+    fr: '→ Paramètres du serveur → Rôles → mon rôle → activer **Administrateur**. Puis `/setup`.',
+    es: '→ Ajustes del servidor → Roles → mi rol → activar **Administrador**. Luego `/setup`.',
+    it: '→ Impostazioni server → Ruoli → il mio ruolo → attiva **Amministratore**. Poi `/setup`.',
+    pt: '→ Configurações do servidor → Cargos → meu cargo → ativar **Administrador**. Depois `/setup`.',
+    ru: '→ Настройки сервера → Роли → моя роль → включить **Администратор**. Затем `/setup`.',
+    ja: '→ サーバー設定 → ロール → 自分のロール → **管理者**を有効に。その後 `/setup`。',
+    ko: '→ 서버 설정 → 역할 → 내 역할 → **관리자** 활성화. 그런 다음 `/setup`.',
+    zh: '→ 服务器设置 → 身份组 → 我的身份组 → 开启**管理员**。然后 `/setup`。',
+  },
+  onlyTeam: {
+    de: '⛔ Das dürfen nur der Server-Owner oder Admins benutzen.',
+    en: '⛔ Only the server owner or admins can use this.',
+    fr: "⛔ Seuls le propriétaire du serveur ou les admins peuvent l'utiliser.",
+    es: '⛔ Solo el propietario del servidor o los admins pueden usarlo.',
+    it: '⛔ Solo il proprietario del server o gli admin possono usarlo.',
+    pt: '⛔ Apenas o dono do servidor ou admins podem usar isto.',
+    ru: '⛔ Это доступно только владельцу сервера или админам.',
+    ja: '⛔ サーバー所有者または管理者のみ使用できます。',
+    ko: '⛔ 서버 소유자나 관리자만 사용할 수 있습니다.',
+    zh: '⛔ 只有服务器所有者或管理员可以使用。',
   },
 
-  en: {
-    errGuildOnly: '🔒 This command only works inside a server.',
-    errNoPermission: '🔒 Only server administrators can use this command.',
-
-    apiKeySet: '✅ **Gemini API key saved** ({key}).\nAI moderation is now active – collected messages are analyzed much more often: immediately on risk signals, after a short wait for small conversations, and still at least by the 2-hour safety flush.',
-    apiKeyInvalid: '❌ **Google rejected the API key** ({error}). The key was **not** saved. Create one at [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ The existing API key was kept unchanged.',
-    apiKeyRemoved: '🗑️ **Gemini API key removed.** Messages are no longer collected or analyzed.',
-    apiKeyUnverified: '⚠️ **API key saved** ({key}), but verification with Google failed ({error}). The key will be used anyway.',
-
-    promptModalTitle: '🛡️ AI Instructions (Prompt)',
-    promptModalLabel: 'Rules, strictness & measures for Gemini',
-    promptSaved: '✅ **AI instructions saved** ({chars} characters).\nThey apply from the next chat analysis onward.',
-    promptReset: '♻️ **AI instructions reset to the default text.**',
-
-    logChannelSet: '✅ **Log channel set:** {channel}\nThe bot will post moderation notices, API errors and other reports there.',
-    logChannelRemoved: '🗑️ **Log channel removed.** No more notices will be sent.',
-    antiDeleteEnabled: '✅ **Anti-delete enabled.** When someone (not a bot/webhook) deletes their own last message of a channel, the bot resends it via webhook with an exact profile copy (display name & avatar). Mentions never ping anyone.',
-    antiDeleteDisabled: '⛔ **Anti-delete disabled.** Deleted messages are no longer resent.',
-
-    langChanged: '✅ Language changed: {name}',
-
-    descApiKey: 'Set the Google Gemini API key for this server',
-    descPrompt: 'Set AI instructions via form (rules, strictness, measures)',
-    descLogChannel: 'Set the log channel for moderation notices & API errors',
-    descLanguage: 'Change the bot language permanently',
-    descHelp: 'Shows all commands and features',
-    descCheckNow: 'Immediately runs an AI check on the collected messages (admins only)',
-    descCheckNowUser: 'User who must definitely be moderated in this check (optional)',
-    descAntiDelete: 'Anti-delete: resend users\' deleted last messages via webhook',
-    descAntiDeleteOption: 'true = turn anti-delete on, false = turn it off',
-
-    helpTitle: '🛡️ Security Bot – AI Moderation with Gemini',
-    helpDesc: 'This bot collects **text messages from real users** (admins are immune) and analyzes them with Gemini **adaptively**: immediately on risk signals such as insults, dogpiling or repeated mentions, after a short wait for small conversations, and still at least by the 2-hour safety flush. Gemini receives the system prompt, your server rules, reply/mention context and real server/global/user names, then decides on warnings & timeouts. If the API fails, **nothing is lost**: retries continue until it succeeds.',
-    helpApiKey: 'Stores the Google Gemini API key for this server. Must be set once before monitoring starts.',
-    helpPrompt: 'Opens a form with your AI instructions: server rules, how strictly to moderate and which measures Gemini should use. Your last saved text is already filled in.',
-    helpLogChannel: 'Sets the log channel for moderation notices, API errors and reports. Calling it without a channel removes the log channel.',
-    helpLanguage: 'Permanently changes the bot language (also controls the timezone of the safety flush and the AI default language).',
-    helpHelp: 'Shows this overview.',
-    helpCheckNow: 'Analyzes the currently collected messages right away, without waiting for the adaptive auto flush. The `user` option lets you pick a user who must be moderated during this check.',
-    helpAntiDelete: 'Turns anti-delete on or off: if someone (not a bot/webhook) deletes their own last message of a channel, the bot resends it via webhook with an exact profile copy (name & avatar). Mentions never ping anyone.',
-
-    logModTitle: '🛡️ AI Moderation',
-    logFieldUser: 'User',
-    logFieldAction: 'Measure',
-    logFieldReason: 'Reason from Gemini',
-    logFieldMessage: 'Message',
-    logActionWarn: '⚠️ Warning',
-    logActionTimeout: '⏱️ Timeout',
-    logPrimary: '💥 Primary violation (the bot replied to this message)',
-    logNormal: 'Violation',
-    logImmune: '🛡️ **Skipped:** Gemini wanted to moderate {user}, but administrators are always immune.',
-    logBatchSize: 'History: {count} messages',
-
-    logApiTitle: '⚠️ Gemini API error',
-    logApiDesc: 'The analysis of **{count} collected messages** failed.\nError: `{error}`\n\n🔁 Attempt {attempt} – next retry: **{retry}**.\n💾 The messages are fully preserved and **not discarded** – new messages keep collecting normally in the meantime.',
-    logNoKeyTitle: '🔑 No Gemini API key configured',
-    logNoKeyDesc: '{count} collected messages are waiting for analysis. An administrator needs to run `/set_gemini_api_key` first.',
-    logDropTitle: '🗑️ Stale chat history discarded',
-    logDropDesc: '{count} messages could not be analyzed for over 30 days (persistent API failure) and were deleted for data hygiene.',
-    checkNowNoKey: '🔑 No Gemini API key configured. Run `/set_gemini_api_key` first.',
-    checkNowEmpty: 'ℹ️ There are currently no collected messages – nothing to check.',
-    checkNowDone: '✅ **Instant check complete** ({count} messages analyzed). See the log channel for results.',
-    checkNowPartial: '⚠️ **Instant check started** ({count} messages), but {remaining} of them could not be completed (API error) – see the log channel for details, retries continue automatically.',
-    checkNowForcedActive: '🎯 Forced moderation requested: {user} will definitely be moderated in this check – see the log channel for details.',
-    checkNowForcedNoMsgs: '⚠️ {user} does not appear in the collected messages – there was no message to moderate.',
-    checkNowForcedInvalid: '⚠️ {user} is a bot or an administrator and cannot be moderated. Please pick a regular member.',
-
-    joinTitle: '👋 Security Bot has arrived!',
-    joinDesc: 'Thanks for inviting me! Getting started:\n\n1️⃣ `/set_gemini_api_key` – add a Google Gemini key ([create one free](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – define the AI rules & strictness (a default text is pre-filled)\n3️⃣ `/set_log_channel` – pick a log channel for moderation notices\n\nAfter that the AI automatically monitors all text messages. **All commands are visible to administrators only.**',
-
-    defaultPrompt: `Moderate this server like a fair, friendly but firm OP team.
-
-=== RULES ===
-- No insults, hate, discrimination or extreme toxicity
-- No sexist, racist, homophobic or transphobic statements
-- No spam, no advertising, no account/Nitro trading, no suspicious links
-- Treat each other with respect – even when disagreeing
-- No dangerous or illegal content
-
-=== STRICTNESS & CONTEXT (neither too lenient nor too strict) ===
-- NEVER punish friendly banter, sarcasm among friends, self-deprecating jokes or clearly mutual inside jokes
-- Merely talking ABOUT others (e.g. streamers, opponents or fictional characters) is NOT a violation
-- Use the full history: reply chains, mentions, server nicknames, global names and usernames show who is being targeted
-- A previous penalty alone is NOT a reason for a new penalty
-- Only step in on real, clear, unambiguous violations
-- When in doubt: prefer a warning over a timeout
-
-=== BULLYING / DOGPILING / PILING ON ===
-- Repeatedly pinging/addressing someone who does not answer or visibly avoids the topic is harassment, especially with pressure like "answer" or insults
-- If several people mock the same target, pile on after a timeout/drama, or drag private conflict into public chat, treat it as dogpiling/bullying
-- "RIP"/death jokes about a real member in the context of conflict, timeout, bullying or repeated pings are not harmless banter
-- Do not moderate the target for silence, defensive replies or uncertainty; moderate the messages creating pressure/attacks
-
-=== ESCALATION (warnings first) ===
-- First violation: always a warning (warn), no timeout
-- Timeout only after repeated warnings (penalty register) or for severe violations
-- At most ONE timeout per person per analysis – further violations of the same person as warn
-- The most severe violation is primary=true and gets the longest (or equal) duration
-
-=== MEASURES ===
-- Minor violations: warn with a friendly hint
-- Clear insult or provocation: warn, on repetition timeout 5m–10m
-- Repeated violation despite warning: timeout 10m–1h
-- Discrimination, hate speech, threats: timeout 1d–1w
-- Dangerous content, phishing/scam links: timeout 1w
-- Spam/advertising: first time warn, repetition timeout 1h
-- No violation: moderate nobody and write NOTHING into the chat – the bot stays silent
-- Never post greetings, small talk, all-clear notes or status updates`,
+  // ---- Setup: Rahmen ----
+  setupTitle: {
+    de: '🛡️ Setup',
+    en: '🛡️ Setup',
+    fr: '🛡️ Configuration',
+    es: '🛡️ Configuración',
+    it: '🛡️ Configurazione',
+    pt: '🛡️ Configuração',
+    ru: '🛡️ Настройка',
+    ja: '🛡️ セットアップ',
+    ko: '🛡️ 설정',
+    zh: '🛡️ 设置',
+  },
+  stepOf: {
+    de: 'Schritt {n}/7',
+    en: 'Step {n}/7',
+    fr: 'Étape {n}/7',
+    es: 'Paso {n}/7',
+    it: 'Passo {n}/7',
+    pt: 'Passo {n}/7',
+    ru: 'Шаг {n}/7',
+    ja: 'ステップ {n}/7',
+    ko: '단계 {n}/7',
+    zh: '第 {n}/7 步',
+  },
+  back: {
+    de: 'Zurück',
+    en: 'Back',
+    fr: 'Retour',
+    es: 'Atrás',
+    it: 'Indietro',
+    pt: 'Voltar',
+    ru: 'Назад',
+    ja: '戻る',
+    ko: '뒤로',
+    zh: '上一步',
+  },
+  next: {
+    de: 'Weiter',
+    en: 'Next',
+    fr: 'Suivant',
+    es: 'Siguiente',
+    it: 'Avanti',
+    pt: 'Seguinte',
+    ru: 'Далее',
+    ja: '次へ',
+    ko: '다음',
+    zh: '下一步',
+  },
+  finish: {
+    de: 'Fertig',
+    en: 'Finish',
+    fr: 'Terminer',
+    es: 'Finalizar',
+    it: 'Fine',
+    pt: 'Concluir',
+    ru: 'Готово',
+    ja: '完了',
+    ko: '완료',
+    zh: '完成',
+  },
+  // ---- Setup: Schritte ----
+  s1Title: {
+    de: '**Sprache** – in welcher Sprache soll ich schreiben?',
+    en: '**Language** – which language should I speak?',
+    fr: '**Langue** – dans quelle langue dois-je écrire ?',
+    es: '**Idioma** – ¿en qué idioma debo escribir?',
+    it: '**Lingua** – in che lingua devo scrivere?',
+    pt: '**Idioma** – em que idioma devo escrever?',
+    ru: '**Язык** – на каком языке мне писать?',
+    ja: '**言語** – どの言語で書きますか？',
+    ko: '**언어** – 어떤 언어로 쓸까요?',
+    zh: '**语言** – 我用哪种语言？',
+  },
+  s2Title: {
+    de: '**Kanäle** – welche soll ich überwachen?',
+    en: '**Channels** – which ones should I watch?',
+    fr: '**Salons** – lesquels dois-je surveiller ?',
+    es: '**Canales** – ¿cuáles debo vigilar?',
+    it: '**Canali** – quali devo controllare?',
+    pt: '**Canais** – quais devo vigiar?',
+    ru: '**Каналы** – за какими следить?',
+    ja: '**チャンネル** – どれを監視しますか？',
+    ko: '**채널** – 어디를 감시할까요?',
+    zh: '**频道** – 我该监控哪些？',
+  },
+  s2Hint: {
+    de: 'Nur hier lese ich mit. Ohne Auswahl überwache ich alle Textkanäle.',
+    en: 'I only read here. With no selection I watch all text channels.',
+    fr: 'Je ne lis que là. Sans sélection, je surveille tous les salons textuels.',
+    es: 'Solo leo aquí. Sin selección vigilo todos los canales de texto.',
+    it: 'Leggo solo qui. Senza selezione controllo tutti i canali di testo.',
+    pt: 'Só leio aqui. Sem seleção vigio todos os canais de texto.',
+    ru: 'Я читаю только здесь. Без выбора слежу за всеми текстовыми каналами.',
+    ja: 'ここだけ読みます。未選択なら全テキストチャンネルを監視します。',
+    ko: '여기만 읽습니다. 선택하지 않으면 모든 텍스트 채널을 감시합니다.',
+    zh: '我只在这里读取。不选则监控所有文字频道。',
+  },
+  s3Title: {
+    de: '**Immun** – wer darf nicht bestraft werden?',
+    en: '**Immune** – who must never be punished?',
+    fr: '**Immunisé** – qui ne doit jamais être sanctionné ?',
+    es: '**Inmune** – ¿quién no debe ser sancionado?',
+    it: '**Immuni** – chi non deve essere punito?',
+    pt: '**Imunes** – quem nunca deve ser castigado?',
+    ru: '**Иммунитет** – кого нельзя наказывать?',
+    ja: '**免除** – 誰を罰しない？',
+    ko: '**면제** – 누구를 처벌하지 않을까요?',
+    zh: '**豁免** – 谁不应被处罚？',
+  },
+  s3Auto: {
+    de: 'Automatisch immun: Server-Owner, Admins und alle Rollen über meiner Rolle.',
+    en: 'Automatically immune: owner, admins and all roles above mine.',
+    fr: "Immunisés d'office : propriétaire, admins et tous les rôles au-dessus du mien.",
+    es: 'Inmunes automáticamente: dueño, admins y todos los roles por encima del mío.',
+    it: 'Immuni automaticamente: owner, admin e tutti i ruoli sopra il mio.',
+    pt: 'Imunes automaticamente: dono, admins e todos os cargos acima do meu.',
+    ru: 'Автоматически: владелец, админы и все роли выше моей.',
+    ja: '自動で免除：所有者、管理者、自分の上位ロールすべて。',
+    ko: '자동 면제: 소유자, 관리자, 내 상위 역할 전부.',
+    zh: '自动豁免：所有者、管理员以及所有高于我的身份组。',
+  },
+  s4Title: {
+    de: '**Regelwerk** – wie sollen eure Regeln rein?',
+    en: '**Rules** – how should your rules get in?',
+    fr: '**Règlement** – comment intégrer vos règles ?',
+    es: '**Reglas** – ¿cómo entran vuestras reglas?',
+    it: '**Regole** – come inserire le vostre regole?',
+    pt: '**Regras** – como entram as vossas regras?',
+    ru: '**Правила** – как добавить ваши правила?',
+    ja: '**ルール** – どの方法で入れますか？',
+    ko: '**규칙** – 어떻게 넣을까요?',
+    zh: '**规则** – 如何加入你们的规则？',
+  },
+  s4Base: {
+    de: 'Die normalen Discord-Regeln (Hass, Drohungen, NSFW, Spam, Doxxing …) habe ich immer dabei – die kann niemand abschalten.',
+    en: 'The standard Discord rules (hate, threats, NSFW, spam, doxxing …) are always active – nobody can turn them off.',
+    fr: "Les règles Discord de base (haine, menaces, NSFW, spam, doxxing …) sont toujours actives – non désactivables.",
+    es: 'Las reglas básicas de Discord (odio, amenazas, NSFW, spam, doxxing…) siempre están activas.',
+    it: 'Le regole base di Discord (odio, minacce, NSFW, spam, doxxing…) sono sempre attive.',
+    pt: 'As regras básicas do Discord (ódio, ameaças, NSFW, spam, doxxing…) estão sempre ativas.',
+    ru: 'Базовые правила Discord (ненависть, угрозы, NSFW, спам, доксинг…) действуют всегда.',
+    ja: 'Discordの基本ルール（ヘイト、脅迫、NSFW、スパム、晒し行為など）は常に有効です。',
+    ko: 'Discord 기본 규칙(혐오, 협박, NSFW, 스팸, 신상털기 등)은 항상 적용됩니다.',
+    zh: 'Discord 基础规则（仇恨、威胁、NSFW、刷屏、人肉搜索等）始终生效。',
+  },
+  rulesManual: {
+    de: 'Selbst eingeben',
+    en: 'Enter manually',
+    fr: 'Saisir',
+    es: 'Escribir',
+    it: 'Scrivere',
+    pt: 'Escrever',
+    ru: 'Ввести вручную',
+    ja: '自分で入力',
+    ko: '직접 입력',
+    zh: '手动输入',
+  },
+  rulesSkip: {
+    de: 'Überspringen',
+    en: 'Skip',
+    fr: 'Passer',
+    es: 'Omitir',
+    it: 'Salta',
+    pt: 'Saltar',
+    ru: 'Пропустить',
+    ja: 'スキップ',
+    ko: '건너뛰기',
+    zh: '跳过',
+  },
+  rulesImport: {
+    de: 'Aus Kanal importieren',
+    en: 'Import from channel',
+    fr: 'Importer du salon',
+    es: 'Importar de un canal',
+    it: 'Importa da canale',
+    pt: 'Importar de canal',
+    ru: 'Импорт из канала',
+    ja: 'チャンネルから取り込む',
+    ko: '채널에서 가져오기',
+    zh: '从频道导入',
+  },
+  rulesImportHint: {
+    de: 'Wähle einen Kanal, in dem euer Regelwerk als **eine einzige Nachricht** steht.',
+    en: 'Pick a channel where your rules are posted as **one single message**.',
+    fr: 'Choisis un salon où vos règles sont **un seul message**.',
+    es: 'Elige un canal donde vuestras reglas sean **un único mensaje**.',
+    it: 'Scegli un canale dove le regole sono **un solo messaggio**.',
+    pt: 'Escolhe um canal onde as regras estejam numa **única mensagem**.',
+    ru: 'Выбери канал, где правила опубликованы **одним сообщением**.',
+    ja: 'ルールが**1つのメッセージ**としてあるチャンネルを選んでください。',
+    ko: '규칙이 **하나의 메시지**로 있는 채널을 선택하세요.',
+    zh: '选择一个规则以**单条消息**发布的频道。',
+  },
+  rulesImported: {
+    de: 'Das habe ich gefunden – passt das so?',
+    en: 'Found this – does it look right?',
+    fr: "J'ai trouvé ceci – c'est bon ?",
+    es: 'He encontrado esto: ¿está bien?',
+    it: 'Ho trovato questo: va bene?',
+    pt: 'Encontrei isto: está bem?',
+    ru: 'Нашёл это – всё верно?',
+    ja: 'これを見つけました。合っていますか？',
+    ko: '이렇게 찾았습니다. 맞나요?',
+    zh: '我找到了这些，可以吗？',
+  },
+  rulesNotFound: {
+    de: 'In dem Kanal ist keine Regel-Nachricht zu finden (genau **eine** Nachricht erwartet).',
+    en: 'No rule message found there (exactly **one** message expected).',
+    fr: 'Aucun message de règles trouvé (exactement **un** message attendu).',
+    es: 'No encontré ningún mensaje de reglas (se espera **uno** exacto).',
+    it: 'Nessun messaggio di regole trovato (serve **un** solo messaggio).',
+    pt: 'Não encontrei mensagem de regras (é esperada **uma**).',
+    ru: 'Сообщение с правилами не найдено (нужно ровно **одно**).',
+    ja: 'ルールのメッセージが見つかりません（**1つ**だけ必要）。',
+    ko: '규칙 메시지를 찾을 수 없습니다 (**하나**만 필요).',
+    zh: '没找到规则消息（需要**恰好一条**）。',
+  },
+  rulesTooLong: {
+    de: 'Das Regelwerk ist zu lang – ich habe es auf {max} Zeichen gekürzt.',
+    en: 'Rules are too long – trimmed to {max} characters.',
+    fr: 'Règlement trop long – réduit à {max} caractères.',
+    es: 'Las reglas son demasiado largas: recortadas a {max} caracteres.',
+    it: 'Regole troppo lunghe: ridotte a {max} caratteri.',
+    pt: 'Regras demasiado longas: cortadas para {max} caracteres.',
+    ru: 'Правила слишком длинные – сокращено до {max} символов.',
+    ja: 'ルールが長すぎるため {max} 文字に短縮しました。',
+    ko: '규칙이 너무 길어 {max}자로 줄였습니다.',
+    zh: '规则太长，已截断到 {max} 字符。',
+  },
+  rulesUse: {
+    de: 'Übernehmen',
+    en: 'Use it',
+    fr: 'Utiliser',
+    es: 'Usar',
+    it: 'Usa',
+    pt: 'Usar',
+    ru: 'Использовать',
+    ja: 'これを使う',
+    ko: '사용',
+    zh: '使用',
+  },
+  rulesEdit: {
+    de: 'Bearbeiten',
+    en: 'Edit',
+    fr: 'Modifier',
+    es: 'Editar',
+    it: 'Modifica',
+    pt: 'Editar',
+    ru: 'Изменить',
+    ja: '編集',
+    ko: '편집',
+    zh: '编辑',
+  },
+  rulesAnother: {
+    de: 'Anderer Kanal',
+    en: 'Other channel',
+    fr: 'Autre salon',
+    es: 'Otro canal',
+    it: 'Altro canale',
+    pt: 'Outro canal',
+    ru: 'Другой канал',
+    ja: '別のチャンネル',
+    ko: '다른 채널',
+    zh: '其他频道',
+  },
+  s5Title: {
+    de: '**KI-Anweisungen** – wie soll ich moderieren?',
+    en: '**AI instructions** – how should I moderate?',
+    fr: '**Consignes IA** – comment modérer ?',
+    es: '**Instrucciones IA** – ¿cómo debo moderar?',
+    it: '**Istruzioni IA** – come devo moderare?',
+    pt: '**Instruções IA** – como devo moderar?',
+    ru: '**Инструкции ИИ** – как мне модерировать?',
+    ja: '**AI指示** – どう取り締まりますか？',
+    ko: '**AI 지시** – 어떻게 관리할까요?',
+    zh: '**AI 指令** – 我该如何管理？',
+  },
+  s5Hint: {
+    de: 'Schreib frei: Strenge, Ton, Sonderfälle, wann welche Maßnahme. Alles in normaler Sprache.',
+    en: 'Write freely: strictness, tone, special cases, which action when. Plain language.',
+    fr: 'Écris librement : sévérité, ton, cas particuliers, quelle sanction quand.',
+    es: 'Escribe libre: severidad, tono, casos especiales, qué sanción y cuándo.',
+    it: 'Scrivi liberamente: severità, tono, casi particolari, quale azione e quando.',
+    pt: 'Escreve livremente: rigor, tom, casos especiais, que castigo e quando.',
+    ru: 'Пиши свободно: строгость, тон, особые случаи, какая мера когда.',
+    ja: '自由に書けます：厳しさ、口調、例外、どの措置をいつ。',
+    ko: '자유롭게 작성하세요: 엄격함, 말투, 예외, 언제 어떤 조치를.',
+    zh: '自由填写：严格程度、语气、特殊情况、何时采取何种措施。',
+  },
+  s5Write: {
+    de: 'Anweisung schreiben',
+    en: 'Write instruction',
+    fr: 'Écrire la consigne',
+    es: 'Escribir instrucción',
+    it: 'Scrivi istruzione',
+    pt: 'Escrever instrução',
+    ru: 'Написать инструкцию',
+    ja: '指示を書く',
+    ko: '지시 작성',
+    zh: '编写指令',
+  },
+  s5AllowTitle: {
+    de: 'Was darf ich tun? (Verwarnen ist Pflicht)',
+    en: 'What may I do? (Warning is mandatory)',
+    fr: 'Que puis-je faire ? (Avertir est obligatoire)',
+    es: '¿Qué puedo hacer? (Advertir es obligatorio)',
+    it: 'Cosa posso fare? (Avvisare è obbligatorio)',
+    pt: 'O que posso fazer? (Avisar é obrigatório)',
+    ru: 'Что мне разрешено? (Предупреждение обязательно)',
+    ja: '何をしてよい？（警告は必須）',
+    ko: '무엇을 할 수 있나요? (경고는 필수)',
+    zh: '我可以做什么？（警告为必需）',
+  },
+  s6Title: {
+    de: '**Log-Kanal** – wohin schreibe ich alles?',
+    en: '**Log channel** – where do I report?',
+    fr: '**Salon de logs** – où je consigne tout ?',
+    es: '**Canal de logs** – ¿dónde lo registro?',
+    it: '**Canale log** – dove scrivo tutto?',
+    pt: '**Canal de registo** – onde registo tudo?',
+    ru: '**Канал логов** – куда я пишу?',
+    ja: '**ログチャンネル** – どこに書く？',
+    ko: '**로그 채널** – 어디에 기록할까요?',
+    zh: '**日志频道** – 我写到哪里？',
+  },
+  s6Auto: {
+    de: 'Kanal für mich anlegen',
+    en: 'Create a channel for me',
+    fr: 'Créer un salon pour moi',
+    es: 'Crear un canal para mí',
+    it: 'Crea un canale per me',
+    pt: 'Criar um canal para mim',
+    ru: 'Создать канал для меня',
+    ja: 'チャンネルを作って',
+    ko: '채널 만들어줘',
+    zh: '为我创建频道',
+  },
+  s7Title: {
+    de: '**Groq API-Key** – damit ich denken kann.',
+    en: '**Groq API key** – so I can think.',
+    fr: "**Clé API Groq** – pour que je puisse réfléchir.",
+    es: '**Clave API de Groq** – para poder pensar.',
+    it: '**Chiave API Groq** – per poter pensare.',
+    pt: '**Chave API Groq** – para poder pensar.',
+    ru: '**API-ключ Groq** – чтобы я мог думать.',
+    ja: '**Groq APIキー** – 考えるために必要です。',
+    ko: '**Groq API 키** – 생각하려면 필요해요.',
+    zh: '**Groq API 密钥** – 我才能思考。',
+  },
+  keySet: {
+    de: 'Key hinterlegt ✅',
+    en: 'Key stored ✅',
+    fr: 'Clé enregistrée ✅',
+    es: 'Clave guardada ✅',
+    it: 'Chiave salvata ✅',
+    pt: 'Chave guardada ✅',
+    ru: 'Ключ сохранён ✅',
+    ja: 'キー保存済み ✅',
+    ko: '키 저장됨 ✅',
+    zh: '密钥已保存 ✅',
+  },
+  keyMissing: {
+    de: 'Noch kein Key hinterlegt ⚠️',
+    en: 'No key yet ⚠️',
+    fr: 'Aucune clé ⚠️',
+    es: 'Sin clave todavía ⚠️',
+    it: 'Nessuna chiave ⚠️',
+    pt: 'Sem chave ⚠️',
+    ru: 'Ключа ещё нет ⚠️',
+    ja: 'キーがありません ⚠️',
+    ko: '키 없음 ⚠️',
+    zh: '还没有密钥 ⚠️',
+  },
+  keyEnter: {
+    de: 'Key eingeben',
+    en: 'Enter key',
+    fr: 'Saisir la clé',
+    es: 'Introducir clave',
+    it: 'Inserisci chiave',
+    pt: 'Inserir chave',
+    ru: 'Ввести ключ',
+    ja: 'キーを入力',
+    ko: '키 입력',
+    zh: '输入密钥',
+  },
+  keyHelp: {
+    de: 'Key holen',
+    en: 'Get a key',
+    fr: 'Obtenir une clé',
+    es: 'Obtener clave',
+    it: 'Ottieni chiave',
+    pt: 'Obter chave',
+    ru: 'Получить ключ',
+    ja: 'キーを取得',
+    ko: '키 받기',
+    zh: '获取密钥',
+  },
+  keyClear: {
+    de: 'Key löschen',
+    en: 'Delete key',
+    fr: 'Supprimer la clé',
+    es: 'Borrar clave',
+    it: 'Elimina chiave',
+    pt: 'Apagar chave',
+    ru: 'Удалить ключ',
+    ja: 'キーを削除',
+    ko: '키 삭제',
+    zh: '删除密钥',
+  },
+  keyChecking: {
+    de: 'Ich prüfe den Key …',
+    en: 'Checking the key …',
+    fr: 'Je vérifie la clé …',
+    es: 'Comprobando la clave …',
+    it: 'Controllo la chiave …',
+    pt: 'A verificar a chave …',
+    ru: 'Проверяю ключ …',
+    ja: 'キーを確認中 …',
+    ko: '키 확인 중 …',
+    zh: '正在检查密钥 …',
+  },
+  keyOk: {
+    de: 'Key gültig ✅ Antwort in {ms} ms.',
+    en: 'Key valid ✅ replied in {ms} ms.',
+    fr: 'Clé valide ✅ réponse en {ms} ms.',
+    es: 'Clave válida ✅ respuesta en {ms} ms.',
+    it: 'Chiave valida ✅ risposta in {ms} ms.',
+    pt: 'Chave válida ✅ resposta em {ms} ms.',
+    ru: 'Ключ действителен ✅ ответ за {ms} мс.',
+    ja: 'キー有効 ✅ {ms} msで応答。',
+    ko: '키 유효 ✅ {ms} ms 응답.',
+    zh: '密钥有效 ✅ {ms} ms 内响应。',
+  },
+  keyBad: {
+    de: 'Der Key funktioniert nicht: {err}',
+    en: 'The key does not work: {err}',
+    fr: 'La clé ne fonctionne pas : {err}',
+    es: 'La clave no funciona: {err}',
+    it: 'La chiave non funziona: {err}',
+    pt: 'A chave não funciona: {err}',
+    ru: 'Ключ не работает: {err}',
+    ja: 'キーが機能しません: {err}',
+    ko: '키가 작동하지 않습니다: {err}',
+    zh: '密钥无效：{err}',
+  },
+  doneTitle: {
+    de: '✅ **Fertig!** Ich bin einsatzbereit.',
+    en: '✅ **Done!** I am on duty.',
+    fr: '✅ **Terminé !** Je suis en service.',
+    es: '✅ **¡Listo!** Estoy en servicio.',
+    it: '✅ **Fatto!** Sono in servizio.',
+    pt: '✅ **Concluído!** Estou em serviço.',
+    ru: '✅ **Готово!** Я на службе.',
+    ja: '✅ **完了！** 稼働できます。',
+    ko: '✅ **완료!** 준비됐습니다.',
+    zh: '✅ **完成！** 我已上岗。',
+  },
+  doneWarning: {
+    de: '⚠️ Ohne Groq-Key bleibe ich stumm – nachtragen kannst du ihn jederzeit über `/setup` → Schritt 7.',
+    en: '⚠️ Without a Groq key I stay silent – add it anytime via `/setup` → step 7.',
+    fr: "⚠️ Sans clé Groq je reste muet – ajoute-la via `/setup` → étape 7.",
+    es: '⚠️ Sin clave de Groq me quedo callado: añádela en `/setup` → paso 7.',
+    it: '⚠️ Senza chiave Groq resto muto – aggiungila in `/setup` → passo 7.',
+    pt: '⚠️ Sem chave Groq fico em silêncio – adiciona em `/setup` → passo 7.',
+    ru: '⚠️ Без ключа Groq я молчу – добавь его через `/setup` → шаг 7.',
+    ja: '⚠️ Groqキーがないと黙ります – `/setup` → ステップ7で追加できます。',
+    ko: '⚠️ Groq 키가 없으면 조용히 있습니다 – `/setup` → 7단계에서 추가하세요.',
+    zh: '⚠️ 没有 Groq 密钥我会保持沉默 – 可在 `/setup` → 第7步添加。',
+  },
+  all: {
+    de: 'Alle auswählen',
+    en: 'Select all',
+    fr: 'Tout sélectionner',
+    es: 'Seleccionar todo',
+    it: 'Seleziona tutto',
+    pt: 'Selecionar tudo',
+    ru: 'Выбрать все',
+    ja: 'すべて選択',
+    ko: '전체 선택',
+    zh: '全选',
+  },
+  none: {
+    de: 'Leeren',
+    en: 'Clear',
+    fr: 'Vider',
+    es: 'Vaciar',
+    it: 'Svuota',
+    pt: 'Limpar',
+    ru: 'Очистить',
+    ja: 'クリア',
+    ko: '지우기',
+    zh: '清空',
+  },
+  selectedCount: {
+    de: '{n} ausgewählt',
+    en: '{n} selected',
+    fr: '{n} sélectionné(s)',
+    es: '{n} seleccionado(s)',
+    it: '{n} selezionati',
+    pt: '{n} selecionados',
+    ru: 'выбрано: {n}',
+    ja: '{n} 件選択中',
+    ko: '{n}개 선택됨',
+    zh: '已选 {n} 项',
+  },
+  inheritFromReport: {
+    de: 'Gespeichert.',
+    en: 'Saved.',
+    fr: 'Enregistré.',
+    es: 'Guardado.',
+    it: 'Salvato.',
+    pt: 'Guardado.',
+    ru: 'Сохранено.',
+    ja: '保存しました。',
+    ko: '저장했습니다.',
+    zh: '已保存。',
   },
 
-  fr: {
-    errGuildOnly: '🔒 Cette commande ne fonctionne que dans un serveur.',
-    errNoPermission: '🔒 Seuls les administrateurs du serveur peuvent utiliser cette commande.',
-    apiKeySet: '✅ **Clé API Gemini enregistrée** ({key}).\nLa modération IA est désormais active – les messages collectés sont analysés plus souvent : immédiatement en cas de signaux à risque, après une courte attente pour les petits échanges, et au plus tard via le flush de sécurité de 2 heures.',
-    apiKeyInvalid: '❌ **Google a refusé la clé API** ({error}). La clé n’a **pas** été enregistrée. Créez-en une sur [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ La clé API existante a été conservée.',
-    apiKeyRemoved: '🗑️ **Clé API Gemini supprimée.** Les messages ne sont plus collectés ni analysés.',
-    apiKeyUnverified: '⚠️ **Clé API enregistrée** ({key}), mais la vérification auprès de Google a échoué ({error}). La clé sera quand même utilisée.',
-    promptModalTitle: '🛡️ Instructions IA (Prompt)',
-    promptModalLabel: 'Règles, strictesse et mesures pour Gemini',
-    promptSaved: '✅ **Instructions IA enregistrées** ({chars} caractères).\nElles s’appliquent à partir de la prochaine analyse.',
-    promptReset: '♻️ **Instructions IA réinitialisées au texte par défaut.**',
-    logChannelSet: '✅ **Salon de journal défini :** {channel}\nLe bot y publiera les avis de modération, les erreurs API et autres rapports.',
-    logChannelRemoved: '🗑️ **Salon de journal supprimé.** Plus aucun avis ne sera envoyé.',
-    antiDeleteEnabled: '✅ **Anti-suppression activée.** Si quelqu’un (ni bot ni webhook) supprime son propre dernier message d’un salon, le bot le renvoie via webhook avec une copie exacte du profil (nom d’affichage et avatar). Les mentions ne pingent personne.',
-    antiDeleteDisabled: '⛔ **Anti-suppression désactivée.** Les messages supprimés ne sont plus renvoyés.',
-    langChanged: '✅ Langue modifiée : {name}',
-
-    descApiKey: 'Définir la clé API Google Gemini pour ce serveur',
-    descPrompt: 'Définir les instructions IA (règles, sévérité, mesures)',
-    descLogChannel: 'Définir le salon de journal (avis de modération, erreurs API)',
-    descLanguage: 'Changer définitivement la langue du bot',
-    descHelp: 'Affiche toutes les commandes et fonctions',
-    descCheckNow: 'Lance immédiatement une analyse IA des messages collectés (admins uniquement)',
-    descCheckNowUser: 'Utilisateur à modérer obligatoirement lors de ce contrôle (optionnel)',
-    descAntiDelete: 'Anti-suppression : renvoyer les derniers messages supprimés via webhook',
-    descAntiDeleteOption: 'true = activer l’anti-suppression, false = désactiver',
-
-    helpTitle: '🛡️ Security Bot – Modération IA avec Gemini',
-    helpDesc: 'Ce bot collecte les **messages texte des vrais utilisateurs** (les admins sont immunisés) et les analyse avec Gemini de façon **adaptative** : immédiatement en cas d’insultes, dogpiling ou mentions répétées, après une courte attente pour les petits échanges, et au plus tard via le flush de sécurité de 2 heures. Gemini reçoit le prompt système, vos règles, le contexte des réponses/mentions et les vrais noms serveur/globaux/utilisateur, puis décide des avertissements et timeouts. En cas d’erreur API, **rien n’est perdu** : les tentatives continuent jusqu’au succès.',
-    helpApiKey: 'Enregistre la clé API Google Gemini pour ce serveur. À définir une fois avant de démarrer la surveillance.',
-    helpPrompt: 'Ouvre un formulaire avec vos instructions IA : règles du serveur, strictesse de modération et mesures à employer. Votre dernier texte est déjà prérempli.',
-    helpLogChannel: 'Définit le salon de journal pour les avis de modération et erreurs API. Sans salon, le journal est supprimé.',
-    helpLanguage: 'Change définitivement la langue du bot (contrôle aussi le fuseau horaire du flush de sécurité et la langue par défaut de l’IA).',
-    helpHelp: 'Affiche cet aperçu.',
-    helpCheckNow: 'Analyse immédiatement les messages déjà collectés, sans attendre la limite de tokens ni la prochaine analyse bihoraire. L’option `user` permet de choisir un utilisateur qui sera obligatoirement modéré lors de ce contrôle.',
-    helpAntiDelete: 'Active ou désactive l’anti-suppression : si quelqu’un (ni bot ni webhook) supprime son propre dernier message d’un salon, le bot le renvoie via webhook avec une copie exacte du profil (nom et avatar). Les mentions ne pingent personne.',
-    logModTitle: '🛡️ Modération IA',
-    logFieldUser: 'Utilisateur',
-    logFieldAction: 'Mesure',
-    logFieldReason: 'Raison de Gemini',
-    logFieldMessage: 'Message',
-    logActionWarn: '⚠️ Avertissement',
-    logActionTimeout: '⏱️ Timeout',
-    logPrimary: '💥 Violation principale (le bot a répondu à ce message)',
-    logNormal: 'Violation',
-    logImmune: '🛡️ **Ignoré :** Gemini voulait modérer {user}, mais les administrateurs sont toujours épargnés.',
-    logBatchSize: 'Historique : {count} messages',
-    logApiTitle: '⚠️ Erreur de l’API Gemini',
-    logApiDesc: 'L’analyse de **{count} messages collectés** a échoué.\nErreur : `{error}`\n\n🔁 Tentative {attempt} – prochaine répétition : **{retry}**.\n💾 Les messages sont conservés et **pas supprimés** – la collecte continue normalement.',
-    logNoKeyTitle: '🔑 Aucune clé API Gemini configurée',
-    logNoKeyDesc: '{count} messages collectés attendent une analyse. Un administrateur doit d’abord exécuter `/set_gemini_api_key`.',
-    logDropTitle: '🗑️ Historique périmé supprimé',
-    logDropDesc: '{count} messages n’ont pas pu être analysés pendant plus de 30 jours (échec API persistant) et ont été supprimés par hygiène des données.',
-    checkNowNoKey: '🔑 Aucune clé API Gemini configurée. Exécutez d’abord `/set_gemini_api_key`.',
-    checkNowEmpty: 'ℹ️ Aucun message collecté pour le moment – rien à analyser.',
-    checkNowDone: '✅ **Analyse immédiate terminée** ({count} messages analysés). Voir le salon de journal pour les résultats.',
-    checkNowPartial: '⚠️ **Analyse immédiate lancée** ({count} messages), mais {remaining} d’entre eux n’ont pas pu être terminés (erreur API) – détails dans le salon de journal, nouvelles tentatives automatiques.',
-    checkNowForcedActive: '🎯 Modération forcée demandée : {user} sera obligatoirement modéré lors de ce contrôle – détails dans le salon de journal.',
-    checkNowForcedNoMsgs: '⚠️ {user} n’apparaît pas dans les messages collectés – aucun message à modérer.',
-    checkNowForcedInvalid: '⚠️ {user} est un bot ou un administrateur et ne peut pas être modéré. Choisissez un membre régulier.',
-    joinTitle: '👋 Security Bot est arrivé !',
-    joinDesc: 'Merci pour l’invitation ! Pour commencer :\n\n1️⃣ `/set_gemini_api_key` – ajoutez une clé Google Gemini ([création gratuite](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – définissez les règles et la strictesse de l’IA (texte par défaut prérempli)\n3️⃣ `/set_log_channel` – choisissez un salon de journal\n\nEnsuite, l’IA surveille automatiquement tous les messages texte. **Toutes les commandes sont réservées aux administrateurs.**',
-    defaultPrompt: `Modère ce serveur comme une équipe d’OP juste, aimable mais ferme.
-
-=== RÈGLES ===
-- Pas d’insultes, de haine, de discrimination ni de toxicité extrême
-- Pas de propos sexistes, racistes, homophobes ou transphobes
-- Pas de spam, de publicité, de revente de comptes/Nitro, pas de liens suspects
-- Respect mutuel, même en cas de désaccord
-- Aucun contenu dangereux ou illégal
-
-=== SÉVÉRITÉ (ni trop laxiste ni trop stricte) ===
-- Ne JAMAIS punir les taquineries amicales, le sarcasme entre amis ou l’autodérision
-- Parler D’autres (p. ex. streamers ou adversaires) n’est PAS une infraction
-- Une sanction passée ne justifie PAS à elle seule une nouvelle sanction
-- N’intervenir qu’en cas de violations réelles, claires et sans ambiguïté
-- En cas de doute : préférer un avertissement à un timeout
-
-=== ESCALADE (avertissements d’abord) ===
-- Première infraction : toujours un avertissement (warn), pas de timeout
-- Timeout seulement après avertissements répétés (registre) ou pour violations graves
-- Au plus UN timeout par personne et par analyse – les autres infractions de la même personne en warn
-- L’infraction la plus grave est primary=true et reçoit la durée la plus longue (ou égale)
-
-=== MESURES ===
-- Infractions légères : warn avec un conseil amical
-- Insulte ou provocation claire : warn, en cas de répétition timeout 5m–10m
-- Infraction répétée malgré avertissement : timeout 10m–1h
-- Discrimination, discours de haine, menaces : timeout 1d–1w
-- Contenus dangereux, liens de phishing/arnaque : timeout 1w
-- Spam/publicité : première fois warn, répétition timeout 1h
-- Aucune infraction : ne modérer personne et n’écrire RIEN dans le chat – le bot reste silencieux
-- Ne jamais publier de salutations, de bavardages, de messages rassurants ou d’états`,
+  // ---- Log-Kanal ----
+  logWelcomeSetupDone: {
+    de: '{bot} ist jetzt hier im Dienst 🫡\nIch melde mich in diesem Kanal, sobald ich jemanden moderiere – mit Grund und Maßnahme. Fehler und API-Limits landen hier auch.',
+    en: '{bot} is now on duty here 🫡\nI report in this channel whenever I moderate someone – with reason and action. Errors and API limits show up here too.',
+    fr: "{bot} est en service ici 🫡\nJe préviens ici quand je modère quelqu'un – avec motif et sanction.",
+    es: '{bot} ya está de servicio aquí 🫡\nAviso aquí cuando modero a alguien, con motivo y sanción.',
+    it: '{bot} è in servizio qui 🫡\nScrivo qui quando moderò qualcuno, con motivo e azione.',
+    pt: '{bot} está de serviço aqui 🫡\nAviso aqui quando moderar alguém – com motivo e castigo.',
+    ru: '{bot} заступил на службу 🫡\nПишу сюда, когда кого-то модерирую – с причиной и мерой.',
+    ja: '{bot} がここで勤務開始 🫡\n誰かを処罰したら理由と措置をここに書きます。',
+    ko: '{bot}가 여기서 근무 시작 🫡\n누군가를 제재하면 이유와 조치를 여기에 씁니다.',
+    zh: '{bot} 已在此上岗 🫡\n我处罚某人时会在这里说明原因和措施。',
+  },
+  logRecreated: {
+    de: 'Mein Log-Kanal war weg – ich habe **#{channel}** neu angelegt. Ich bleibe dran. 🛠️',
+    en: 'My log channel disappeared – I recreated **#{channel}**. Still on it. 🛠️',
+    fr: 'Mon salon de logs a disparu – j’ai recréé **#{channel}**. 🛠️',
+    es: 'Mi canal de logs desapareció: he recreado **#{channel}**. 🛠️',
+    it: 'Il mio canale log è sparito – ho ricreato **#{channel}**. 🛠️',
+    pt: 'O meu canal de registo desapareceu – recriei **#{channel}**. 🛠️',
+    ru: 'Мой канал логов исчез – я создал **#{channel}** заново. 🛠️',
+    ja: 'ログチャンネルが消えたので **#{channel}** を作り直しました。🛠️',
+    ko: '로그 채널이 사라져 **#{channel}** 을 다시 만들었습니다. 🛠️',
+    zh: '日志频道不见了，我已重建 **#{channel}**。🛠️',
+  },
+  logNeedPermission: {
+    de: '⚠️ Ich kann keinen Log-Kanal anlegen – mir fehlt **Kanal verwalten**. Bitte gebt mir Administrator.',
+    en: '⚠️ I cannot create a log channel – I lack **Manage Channels**. Please give me Administrator.',
+    fr: '⚠️ Je ne peux pas créer de salon de logs – il me manque **Gérer les salons**.',
+    es: '⚠️ No puedo crear un canal de logs: me falta **Gestionar canales**.',
+    it: '⚠️ Non posso creare un canale log – mi manca **Gestisci canali**.',
+    pt: '⚠️ Não consigo criar um canal de registo – falta-me **Gerir canais**.',
+    ru: '⚠️ Не могу создать канал логов – не хватает **Управление каналами**.',
+    ja: '⚠️ ログチャンネルを作成できません – **チャンネル管理**がありません。',
+    ko: '⚠️ 로그 채널을 만들 수 없습니다 – **채널 관리** 권한이 없습니다.',
+    zh: '⚠️ 我无法创建日志频道 – 缺少**管理频道**权限。',
+  },
+  modTitle: {
+    de: '🛡️ **Moderation**',
+    en: '🛡️ **Moderation**',
+    fr: '🛡️ **Modération**',
+    es: '🛡️ **Moderación**',
+    it: '🛡️ **Moderazione**',
+    pt: '🛡️ **Moderação**',
+    ru: '🛡️ **Модерация**',
+    ja: '🛡️ **モデレーション**',
+    ko: '🛡️ **제재**',
+    zh: '🛡️ **管理**',
+  },
+  modUser: { de: 'Nutzer', en: 'User', fr: 'Membre', es: 'Usuario', it: 'Utente', pt: 'Utilizador', ru: 'Пользователь', ja: 'ユーザー', ko: '사용자', zh: '用户' },
+  modAction: { de: 'Maßnahme', en: 'Action', fr: 'Sanction', es: 'Sanción', it: 'Azione', pt: 'Castigo', ru: 'Мера', ja: '措置', ko: '조치', zh: '措施' },
+  modRule: { de: 'Regel', en: 'Rule', fr: 'Règle', es: 'Regla', it: 'Regola', pt: 'Regra', ru: 'Правило', ja: 'ルール', ko: '규칙', zh: '规则' },
+  modQuote: { de: 'Zitat', en: 'Quote', fr: 'Citation', es: 'Cita', it: 'Citazione', pt: 'Citação', ru: 'Цитата', ja: '引用', ko: '인용', zh: '引用' },
+  modReason: { de: 'Begründung', en: 'Reason', fr: 'Motif', es: 'Motivo', it: 'Motivo', pt: 'Motivo', ru: 'Причина', ja: '理由', ko: '이유', zh: '原因' },
+  modRegister: { de: 'Strafregister', en: 'Record', fr: 'Casier', es: 'Registro', it: 'Registro', pt: 'Registo', ru: 'Реестр', ja: '記録', ko: '기록', zh: '记录' },
+  modOrderBy: { de: 'Auftrag von', en: 'Ordered by', fr: 'Sur ordre de', es: 'Ordenado por', it: 'Su ordine di', pt: 'Por ordem de', ru: 'По заказу', ja: '指示者', ko: '지시자', zh: '指令者' },
+  warnLabel: { de: 'Verwarnung', en: 'Warning', fr: 'Avertissement', es: 'Advertencia', it: 'Avviso', pt: 'Aviso', ru: 'Предупреждение', ja: '警告', ko: '경고', zh: '警告' },
+  timeoutLabel: { de: 'Timeout', en: 'Timeout', fr: 'Exclusion', es: 'Silencio', it: 'Timeout', pt: 'Silenciamento', ru: 'Тайм-аут', ja: 'タイムアウト', ko: '타임아웃', zh: '禁言' },
+  kickLabel: { de: 'Kick', en: 'Kick', fr: 'Expulsion', es: 'Expulsión', it: 'Kick', pt: 'Expulsão', ru: 'Кик', ja: 'キック', ko: '추방', zh: '踢出' },
+  banLabel: { de: 'Ban', en: 'Ban', fr: 'Bannissement', es: 'Expulsión permanente', it: 'Ban', pt: 'Banimento', ru: 'Бан', ja: 'BAN', ko: '차단', zh: '封禁' },
+  forDuration: { de: 'für {d}', en: 'for {d}', fr: 'pour {d}', es: 'por {d}', it: 'per {d}', pt: 'por {d}', ru: 'на {d}', ja: '{d}間', ko: '{d} 동안', zh: '持续 {d}' },
+  errorTitle: {
+    de: '⚠️ **Fehler**', en: '⚠️ **Error**', fr: '⚠️ **Erreur**', es: '⚠️ **Error**', it: '⚠️ **Errore**',
+    pt: '⚠️ **Erro**', ru: '⚠️ **Ошибка**', ja: '⚠️ **エラー**', ko: '⚠️ **오류**', zh: '⚠️ **错误**',
+  },
+  rateLimitTitle: {
+    de: '⏳ **Groq-Limit erreicht**', en: '⏳ **Groq limit reached**', fr: '⏳ **Limite Groq atteinte**',
+    es: '⏳ **Límite de Groq alcanzado**', it: '⏳ **Limite Groq raggiunto**', pt: '⏳ **Limite Groq atingido**',
+    ru: '⏳ **Достигнут лимит Groq**', ja: '⏳ **Groqの上限に到達**', ko: '⏳ **Groq 한도 도달**', zh: '⏳ **已达 Groq 上限**',
+  },
+  rateLimitBody: {
+    de: 'Ich warte automatisch und moderiere weiter, sobald es wieder geht.\n**Limit erneuert sich:** {reset}\nOffene Nachrichten: **{pending}** (gehen nicht verloren).',
+    en: 'I wait automatically and continue as soon as it works again.\n**Limit resets:** {reset}\nPending messages: **{pending}** (nothing is lost).',
+    fr: "J'attends et je reprends dès que possible.\n**Réinitialisation :** {reset}\nMessages en attente : **{pending}**.",
+    es: 'Espero y continúo en cuanto vuelva a funcionar.\n**El límite se renueva:** {reset}\nMensajes pendientes: **{pending}**.',
+    it: 'Aspetto e riprendo appena possibile.\n**Il limite si rinnova:** {reset}\nMessaggi in attesa: **{pending}**.',
+    pt: 'Espero e continuo assim que voltar.\n**O limite renova-se:** {reset}\nMensagens pendentes: **{pending}**.',
+    ru: 'Я подожду и продолжу, как только лимит снимется.\n**Лимит обновится:** {reset}\nВ очереди: **{pending}**.',
+    ja: '自動で待機し、復旧したら続けます。\n**上限リセット:** {reset}\n待機中: **{pending}**。',
+    ko: '자동으로 기다렸다가 풀리면 계속합니다.\n**한도 갱신:** {reset}\n대기 중: **{pending}**개.',
+    zh: '我会自动等待，恢复后继续。\n**额度重置：**{reset}\n待处理消息：**{pending}**。',
+  },
+  keyInvalidLog: {
+    de: '🔑 Mein Groq-Key wird abgelehnt. Bitte in `/setup` Schritt 7 neu hinterlegen.',
+    en: '🔑 My Groq key is rejected. Please re-enter it in `/setup` step 7.',
+    fr: '🔑 Ma clé Groq est refusée. Réinscris-la dans `/setup` étape 7.',
+    es: '🔑 Mi clave de Groq es rechazada. Vuelve a ponerla en `/setup` paso 7.',
+    it: '🔑 La mia chiave Groq è rifiutata. Reinseriscila in `/setup` passo 7.',
+    pt: '🔑 A minha chave Groq é rejeitada. Volta a colocá-la em `/setup` passo 7.',
+    ru: '🔑 Мой ключ Groq отклонён. Введи его заново в `/setup` шаг 7.',
+    ja: '🔑 Groqキーが拒否されました。`/setup` ステップ7で再入力してください。',
+    ko: '🔑 Groq 키가 거부되었습니다. `/setup` 7단계에서 다시 입력하세요.',
+    zh: '🔑 我的 Groq 密钥被拒绝。请在 `/setup` 第7步重新输入。',
   },
 
-  es: {
-    errGuildOnly: '🔒 Este comando solo funciona dentro de un servidor.',
-    errNoPermission: '🔒 Solo los administradores del servidor pueden usar este comando.',
-    apiKeySet: '✅ **Clave API de Gemini guardada** ({key}).\nLa moderación IA ya está activa: los mensajes recopilados se analizan mucho más a menudo, de inmediato ante señales de riesgo, tras una breve espera en conversaciones pequeñas y, como máximo, con el flush de seguridad de 2 horas.',
-    apiKeyInvalid: '❌ **Google rechazó la clave API** ({error}). La clave **no** se guardó. Crea una en [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ La clave API existente se mantuvo sin cambios.',
-    apiKeyRemoved: '🗑️ **Clave API de Gemini eliminada.** Ya no se recopilan ni analizan mensajes.',
-    apiKeyUnverified: '⚠️ **Clave API guardada** ({key}), pero la verificación con Google falló ({error}). Se usará de todos modos.',
-    promptModalTitle: '🛡️ Instrucciones de IA (Prompt)',
-    promptModalLabel: 'Reglas, rigor y medidas para Gemini',
-    promptSaved: '✅ **Instrucciones de IA guardadas** ({chars} caracteres).\nSe aplicarán a partir del próximo análisis del chat.',
-    promptReset: '♻️ **Instrucciones de IA restablecidas al texto predeterminado.**',
-    logChannelSet: '✅ **Canal de registro establecido:** {channel}\nEl bot publicará allí avisos de moderación, errores de API y otros informes.',
-    logChannelRemoved: '🗑️ **Canal de registro eliminado.** Ya no se enviarán avisos.',
-    antiDeleteEnabled: '✅ **Anti-borrado activado.** Si alguien (ni bot ni webhook) elimina su propio último mensaje de un canal, el bot lo reenvía vía webhook con una copia exacta del perfil (nombre visible y avatar). Las menciones no notifican a nadie.',
-    antiDeleteDisabled: '⛔ **Anti-borrado desactivado.** Los mensajes eliminados ya no se reenvían.',
-    langChanged: '✅ Idioma cambiado: {name}',
-
-    descApiKey: 'Configura la clave API de Google Gemini para este servidor',
-    descPrompt: 'Define las instrucciones de IA (reglas, rigor, medidas)',
-    descLogChannel: 'Configura el canal de registro para avisos y errores de API',
-    descLanguage: 'Cambia el idioma del bot de forma permanente',
-    descHelp: 'Muestra todos los comandos y funciones',
-    descCheckNow: 'Ejecuta de inmediato un análisis de IA de los mensajes recopilados (solo admins)',
-    descCheckNowUser: 'Usuario que debe ser moderado obligatoriamente en esta revisión (opcional)',
-    descAntiDelete: 'Anti-borrado: reenviar los últimos mensajes eliminados vía webhook',
-    descAntiDeleteOption: 'true = activar anti-borrado, false = desactivar',
-
-    helpTitle: '🛡️ Security Bot – Moderación IA con Gemini',
-    helpDesc: 'Este bot recopila **mensajes de texto de usuarios reales** (los admins son inmunes) y los analiza con Gemini de forma **adaptativa**: de inmediato ante insultos, dogpiling o menciones repetidas, tras una breve espera en conversaciones pequeñas y, como máximo, con el flush de seguridad de 2 horas. Gemini recibe el prompt del sistema, las reglas del servidor, contexto de respuestas/menciones y nombres reales del servidor/globales/usuario, y decide advertencias y timeouts. Si la API falla, **no se pierde nada**: se reintenta hasta lograrlo.',
-    helpApiKey: 'Guarda la clave API de Google Gemini para este servidor. Debe configurarse una vez antes de empezar la vigilancia.',
-    helpPrompt: 'Abre un formulario con tus instrucciones de IA: reglas del servidor, rigor de moderación y medidas que debe usar Gemini. Tu último texto ya está rellenado.',
-    helpLogChannel: 'Establece el canal de registro para avisos de moderación y errores de API. Sin canal, se elimina el registro.',
-    helpLanguage: 'Cambia el idioma del bot de forma permanente (también controla la zona horaria del flush de seguridad y el idioma predeterminado de la IA).',
-    helpHelp: 'Muestra este resumen.',
-    helpCheckNow: 'Analiza de inmediato los mensajes ya recopilados, sin esperar el límite de tokens ni el próximo análisis bihorario. La opción `user` permite elegir un usuario que será moderado obligatoriamente en esta revisión.',
-    helpAntiDelete: 'Activa o desactiva el anti-borrado: si alguien (ni bot ni webhook) elimina su propio último mensaje de un canal, el bot lo reenvía vía webhook con una copia exacta del perfil (nombre y avatar). Las menciones no notifican a nadie.',
-    logModTitle: '🛡️ Moderación IA',
-    logFieldUser: 'Usuario',
-    logFieldAction: 'Medida',
-    logFieldReason: 'Razón de Gemini',
-    logFieldMessage: 'Mensaje',
-    logActionWarn: '⚠️ Advertencia',
-    logActionTimeout: '⏱️ Timeout',
-    logPrimary: '💥 Infracción principal (el bot respondió a este mensaje)',
-    logNormal: 'Infracción',
-    logImmune: '🛡️ **Omitido:** Gemini quiso moderar a {user}, pero los administradores siempre están inmunes.',
-    logBatchSize: 'Historial: {count} mensajes',
-    logApiTitle: '⚠️ Error de la API de Gemini',
-    logApiDesc: 'El análisis de **{count} mensajes recopilados** falló.\nError: `{error}`\n\n🔁 Intento {attempt} – próximo reintento: **{retry}**.\n💾 Los mensajes se conservan y **no se descartan** – la recopilación sigue con normalidad.',
-    logNoKeyTitle: '🔑 Sin clave API de Gemini configurada',
-    logNoKeyDesc: '{count} mensajes recopilados esperan análisis. Un administrador debe ejecutar primero `/set_gemini_api_key`.',
-    logDropTitle: '🗑️ Historial obsoleto descartado',
-    logDropDesc: '{count} mensajes no pudieron analizarse durante más de 30 días (fallo persistente de la API) y se borraron por higiene de datos.',
-    checkNowNoKey: '🔑 No hay clave API de Gemini configurada. Ejecuta primero `/set_gemini_api_key`.',
-    checkNowEmpty: 'ℹ️ Actualmente no hay mensajes recopilados – nada que analizar.',
-    checkNowDone: '✅ **Análisis inmediato completado** ({count} mensajes analizados). Consulta el canal de registro para ver los resultados.',
-    checkNowPartial: '⚠️ **Análisis inmediato iniciado** ({count} mensajes), pero {remaining} de ellos no se pudieron completar (error de API) – detalles en el canal de registro, los reintentos continúan automáticamente.',
-    checkNowForcedActive: '🎯 Moderación forzada solicitada: {user} será moderado obligatoriamente en esta revisión – detalles en el canal de registro.',
-    checkNowForcedNoMsgs: '⚠️ {user} no aparece en los mensajes recopilados – no hubo ningún mensaje que moderar.',
-    checkNowForcedInvalid: '⚠️ {user} es un bot o un administrador y no puede ser moderado. Elige un miembro normal.',
-    joinTitle: '👋 ¡Security Bot ha llegado!',
-    joinDesc: '¡Gracias por invitarme! Para empezar:\n\n1️⃣ `/set_gemini_api_key` – añade una clave de Google Gemini ([crea una gratis](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – define las reglas y el rigor de la IA (texto predeterminado rellenado)\n3️⃣ `/set_log_channel` – elige un canal de registro\n\nDespués la IA vigila automáticamente todos los mensajes de texto. **Todos los comandos son solo para administradores.**',
-    defaultPrompt: `Modera este servidor como un equipo de OP justo, amable pero firme.
-
-=== REGLAS ===
-- Sin insultos, odio, discriminación ni toxicidad extrema
-- Sin comentarios sexistas, racistas, homófobos ni tránsfobos
-- Sin spam, publicidad, venta de cuentas/Nitro ni enlaces sospechosos
-- Respeto mutuo, incluso en desacuerdos
-- Nada de contenido peligroso o ilegal
-
-=== RIGOR (ni laxo ni estricto en exceso) ===
-- NUNCA castigar bromas amistosas, sarcasmo entre amigos ni autocrítica
-- Hablar SOBRE otros (p. ej. streamers o rivales) NO es una infracción
-- Una sanción previa por sí sola NO justifica una nueva sanción
-- Intervenir solo ante infracciones reales, claras e inequívocas
-- En caso de duda: preferir una advertencia a un timeout
-
-=== ESCALADA (advertencias primero) ===
-- Primera infracción: siempre una advertencia (warn), sin timeout
-- Timeout solo tras advertencias repetidas (registro) o en infracciones graves
-- Como máximo UN timeout por persona y análisis – el resto de infracciones de esa persona como warn
-- La infracción más grave es primary=true y recibe la duración más larga (o igual)
-
-=== MEDIDAS ===
-- Infracciones leves: warn con un consejo amable
-- Insulto o provocación clara: warn, en repetición timeout 5m–10m
-- Infracción repetida pese a la advertencia: timeout 10m–1h
-- Discriminación, discurso de odio, amenazas: timeout 1d–1w
-- Contenido peligroso, enlaces de phishing/estafa: timeout 1w
-- Spam/publicidad: primera vez warn, repetición timeout 1h
-- Sin infracción: no moderar a nadie y NO escribir nada en el chat – el bot permanece en silencio
-- Nunca publicar saludos, charla trivial, avisos de «todo en orden» ni mensajes de estado`,
+  // ---- Feedback ----
+  fbThanks: {
+    de: 'Danke für dein Feedback! Das hilft beim Verbessern der Entscheidungen! 🙏',
+    en: 'Thanks for your feedback! It helps improve the decisions! 🙏',
+    fr: 'Merci pour ton retour ! Ça aide à améliorer les décisions ! 🙏',
+    es: '¡Gracias por tu opinión! ¡Ayuda a mejorar las decisiones! 🙏',
+    it: 'Grazie per il feedback! Aiuta a migliorare le decisioni! 🙏',
+    pt: 'Obrigado pelo feedback! Ajuda a melhorar as decisões! 🙏',
+    ru: 'Спасибо за отзыв! Это помогает улучшать решения! 🙏',
+    ja: 'フィードバックありがとうございます！判断の改善に役立ちます！🙏',
+    ko: '피드백 감사합니다! 판단 개선에 도움이 됩니다! 🙏',
+    zh: '感谢你的反馈！这有助于改进判断！🙏',
+  },
+  fbQuestionUp: {
+    de: 'Warum fandest du diese Entscheidung gut?',
+    en: 'Why did you like this decision?',
+    fr: 'Pourquoi as-tu trouvé cette décision bonne ?',
+    es: '¿Por qué te pareció buena esta decisión?',
+    it: 'Perché hai trovato buona questa decisione?',
+    pt: 'Porque achaste boa esta decisão?',
+    ru: 'Почему ты считаешь это решение хорошим?',
+    ja: 'この判断を良いと思った理由は？',
+    ko: '이 판단이 좋다고 생각한 이유는?',
+    zh: '你为什么觉得这个决定好？',
+  },
+  fbQuestionDown: {
+    de: 'Warum fandest du diese Entscheidung schlecht?',
+    en: 'Why did you dislike this decision?',
+    fr: 'Pourquoi as-tu trouvé cette décision mauvaise ?',
+    es: '¿Por qué te pareció mala esta decisión?',
+    it: 'Perché hai trovato cattiva questa decisione?',
+    pt: 'Porque achaste má esta decisão?',
+    ru: 'Почему ты считаешь это решение плохим?',
+    ja: 'この判断を良くないと思った理由は？',
+    ko: '이 판단이 나쁘다고 생각한 이유는?',
+    zh: '你为什么觉得这个决定不好？',
+  },
+  fbOptional: {
+    de: 'Du kannst auch einfach leer absenden.',
+    en: 'You can also just send it empty.',
+    fr: 'Tu peux aussi envoyer vide.',
+    es: 'También puedes enviarlo vacío.',
+    it: 'Puoi anche inviare vuoto.',
+    pt: 'Também podes enviar vazio.',
+    ru: 'Можно отправить и пустым.',
+    ja: '空のまま送信もできます。',
+    ko: '비워서 보내도 됩니다.',
+    zh: '也可以直接留空提交。',
+  },
+  fbAlready: {
+    de: 'Du hast hier schon abgestimmt. 👍',
+    en: 'You already voted here. 👍',
+    fr: 'Tu as déjà voté ici. 👍',
+    es: 'Ya has votado aquí. 👍',
+    it: 'Hai già votato qui. 👍',
+    pt: 'Já votaste aqui. 👍',
+    ru: 'Ты уже голосовал здесь. 👍',
+    ja: 'すでに投票済みです。👍',
+    ko: '이미 투표했습니다. 👍',
+    zh: '你已经投过票了。👍',
+  },
+  fbReasonLabel: {
+    de: 'Dein Grund',
+    en: 'Your reason',
+    fr: 'Ta raison',
+    es: 'Tu motivo',
+    it: 'Il tuo motivo',
+    pt: 'O teu motivo',
+    ru: 'Причина',
+    ja: '理由',
+    ko: '이유',
+    zh: '你的理由',
+  },
+  fbRemoveLabel: {
+    de: 'Aktionen',
+    en: 'Actions',
+    fr: 'Actions',
+    es: 'Acciones',
+    it: 'Azioni',
+    pt: 'Ações',
+    ru: 'Действия',
+    ja: 'アクション',
+    ko: '작업',
+    zh: '操作',
+  },
+  fbRemoveOption: {
+    de: 'Aus dem Strafregister entfernen',
+    en: 'Remove from the record',
+    fr: 'Retirer du casier',
+    es: 'Quitar del registro',
+    it: 'Rimuovi dal registro',
+    pt: 'Remover do registo',
+    ru: 'Убрать из реестра',
+    ja: '記録から削除',
+    ko: '기록에서 삭제',
+    zh: '从记录中移除',
+  },
+  fbRemoveLog: {
+    de: '🗑️ {mod} hat den Eintrag von {user} aus dem Strafregister entfernt.',
+    en: '🗑️ {mod} removed {user}’s entry from the record.',
+    fr: '🗑️ {mod} a retiré l’entrée de {user} du casier.',
+    es: '🗑️ {mod} ha quitado la entrada de {user} del registro.',
+    it: '🗑️ {mod} ha rimosso la voce di {user} dal registro.',
+    pt: '🗑️ {mod} removeu o registo de {user}.',
+    ru: '🗑️ {mod} убрал запись {user} из реестра.',
+    ja: '🗑️ {mod} が {user} の記録を削除しました。',
+    ko: '🗑️ {mod}님이 {user}의 기록을 삭제했습니다.',
+    zh: '🗑️ {mod} 已将 {user} 的记录移除。',
+  },
+  fbNone: {
+    de: '—',
+    en: '—',
+    fr: '—',
+    es: '—',
+    it: '—',
+    pt: '—',
+    ru: '—',
+    ja: '—',
+    ko: '—',
+    zh: '—',
   },
 
-  pt: {
-    errGuildOnly: '🔒 Este comando só funciona dentro de um servidor.',
-    errNoPermission: '🔒 Apenas administradores do servidor podem usar este comando.',
-    apiKeySet: '✅ **Chave de API do Gemini salva** ({key}).\nA moderação por IA já está ativa – as mensagens coletadas são analisadas com muito mais frequência: imediatamente em sinais de risco, após uma breve espera em conversas pequenas e, no máximo, pelo flush de segurança de 2 horas.',
-    apiKeyInvalid: '❌ **O Google rejeitou a chave de API** ({error}). A chave **não** foi salva. Crie uma em [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ A chave de API existente foi mantida.',
-    apiKeyRemoved: '🗑️ **Chave de API do Gemini removida.** As mensagens não são mais coletadas nem analisadas.',
-    apiKeyUnverified: '⚠️ **Chave de API salva** ({key}), mas a verificação com o Google falhou ({error}). Ela será usada mesmo assim.',
-    promptModalTitle: '🛡️ Instruções da IA (Prompt)',
-    promptModalLabel: 'Regras, rigor e medidas para o Gemini',
-    promptSaved: '✅ **Instruções da IA salvas** ({chars} caracteres).\nVale a partir da próxima análise do chat.',
-    promptReset: '♻️ **Instruções da IA redefinidas para o texto padrão.**',
-    logChannelSet: '✅ **Canal de registro definido:** {channel}\nO bot publicará lá avisos de moderação, erros de API e outros relatórios.',
-    logChannelRemoved: '🗑️ **Canal de registro removido.** Nenhum aviso será mais enviado.',
-    antiDeleteEnabled: '✅ **Anti-exclusão ativada.** Se alguém (não bot/webhook) apagar a própria última mensagem de um canal, o bot a reenvia via webhook com uma cópia exata do perfil (nome de exibição e avatar). Menções nunca notificam ninguém.',
-    antiDeleteDisabled: '⛔ **Anti-exclusão desativada.** Mensagens apagadas não são mais reenviadas.',
-    langChanged: '✅ Idioma alterado: {name}',
-
-    descApiKey: 'Define a chave de API do Google Gemini para este servidor',
-    descPrompt: 'Define as instruções da IA (regras, rigor, medidas)',
-    descLogChannel: 'Define o canal de registro para avisos e erros de API',
-    descLanguage: 'Muda o idioma do bot permanentemente',
-    descHelp: 'Mostra todos os comandos e funções',
-    descCheckNow: 'Executa imediatamente uma verificação de IA das mensagens coletadas (somente admins)',
-    descCheckNowUser: 'Usuário que deve ser moderado obrigatoriamente nesta verificação (opcional)',
-    descAntiDelete: 'Anti-exclusão: reenviar últimas mensagens apagadas via webhook',
-    descAntiDeleteOption: 'true = ativar anti-exclusão, false = desativar',
-
-    helpTitle: '🛡️ Security Bot – Moderação por IA com Gemini',
-    helpDesc: 'Este bot coleta **mensagens de texto de usuários reais** (admins são imunes) e os analisa com o Gemini de forma **adaptativa**: imediatamente em insultos, dogpiling ou menções repetidas, após uma breve espera em conversas pequenas e, no máximo, pelo flush de segurança de 2 horas. O Gemini recebe o prompt do sistema, as regras do servidor, contexto de respostas/menções e nomes reais do servidor/globais/usuário, e decide avisos e timeouts. Se a API falhar, **nada se perde**: as tentativas continuam até dar certo.',
-    helpApiKey: 'Salva a chave de API do Google Gemini para este servidor. Precisa ser definida uma vez antes do monitoramento começar.',
-    helpPrompt: 'Abre um formulário com suas instruções para a IA: regras do servidor, rigor da moderação e medidas que o Gemini deve usar. Seu último texto já vem preenchido.',
-    helpLogChannel: 'Define o canal de registro para avisos de moderação e erros de API. Sem canal, o registro é removido.',
-    helpLanguage: 'Muda o idioma do bot permanentemente (também controla o fuso horário do flush de segurança e o idioma padrão da IA).',
-    helpHelp: 'Mostra este resumo.',
-    helpCheckNow: 'Analisa imediatamente as mensagens já coletadas, sem esperar o flush automático adaptativo. A opção `user` permite escolher um usuário que será moderado obrigatoriamente nesta verificação.',
-    helpAntiDelete: 'Ativa ou desativa o anti-exclusão: se alguém (não bot/webhook) apagar a própria última mensagem de um canal, o bot a reenvia via webhook com uma cópia exata do perfil (nome e avatar). Menções nunca notificam ninguém.',
-    logModTitle: '🛡️ Moderação por IA',
-    logFieldUser: 'Usuário',
-    logFieldAction: 'Medida',
-    logFieldReason: 'Motivo do Gemini',
-    logFieldMessage: 'Mensagem',
-    logActionWarn: '⚠️ Aviso',
-    logActionTimeout: '⏱️ Timeout',
-    logPrimary: '💥 Violação principal (o bot respondeu a esta mensagem)',
-    logNormal: 'Violação',
-    logImmune: '🛡️ **Pulado:** o Gemini quis moderar {user}, mas administradores são sempre imunes.',
-    logBatchSize: 'Histórico: {count} mensagens',
-    logApiTitle: '⚠️ Erro da API do Gemini',
-    logApiDesc: 'A análise de **{count} mensagens coletadas** falhou.\nErro: `{error}`\n\n🔁 Tentativa {attempt} – próxima repetição: **{retry}**.\n💾 As mensagens permanecem guardadas e **não são descartadas** – a coleta continua normalmente.',
-    logNoKeyTitle: '🔑 Nenhuma chave de API do Gemini configurada',
-    logNoKeyDesc: '{count} mensagens coletadas aguardam análise. Um administrador precisa executar `/set_gemini_api_key` primeiro.',
-    logDropTitle: '🗑️ Histórico antigo descartado',
-    logDropDesc: '{count} mensagens não puderam ser analisadas por mais de 30 dias (falha persistente da API) e foram apagadas por higiene de dados.',
-    checkNowNoKey: '🔑 Nenhuma chave de API do Gemini configurada. Execute `/set_gemini_api_key` primeiro.',
-    checkNowEmpty: 'ℹ️ No momento não há mensagens coletadas – nada para analisar.',
-    checkNowDone: '✅ **Verificação imediata concluída** ({count} mensagens analisadas). Veja o canal de registro para os resultados.',
-    checkNowPartial: '⚠️ **Verificação imediata iniciada** ({count} mensagens), mas {remaining} delas não puderam ser concluídas (erro de API) – detalhes no canal de registro, as novas tentativas continuam automaticamente.',
-    checkNowForcedActive: '🎯 Moderação forçada solicitada: {user} será obrigatoriamente moderado nesta verificação – detalhes no canal de registro.',
-    checkNowForcedNoMsgs: '⚠️ {user} não aparece nas mensagens coletadas – não houve mensagem para moderar.',
-    checkNowForcedInvalid: '⚠️ {user} é um bot ou administrador e não pode ser moderado. Escolha um membro comum.',
-    joinTitle: '👋 O Security Bot chegou!',
-    joinDesc: 'Obrigado por me convidar! Para começar:\n\n1️⃣ `/set_gemini_api_key` – adicione uma chave do Google Gemini ([crie grátis](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – defina as regras e o rigor da IA (texto padrão já preenchido)\n3️⃣ `/set_log_channel` – escolha um canal de registro\n\nDepois disso a IA monitora automaticamente todas as mensagens de texto. **Todos os comandos são só para administradores.**',
-    defaultPrompt: `Modere este servidor como uma equipe de OP justa, simpática, mas firme.
-
-=== REGRAS ===
-- Sem insultos, ódio, discriminação ou toxicidade extrema
-- Sem declarações sexistas, racistas, homofóbicas ou transfóbicas
-- Sem spam, publicidade, venda de contas/Nitro ou links suspeitos
-- Respeito mútuo, mesmo em divergências
-- Nada de conteúdo perigoso ou ilegal
-
-=== RIGOR (nem frouxo nem rígido demais) ===
-- NUNCA punir brincadeiras amigáveis, sarcasmo entre amigos ou autodepreciação
-- Falar SOBRE outros (ex.: streamers ou adversários) NÃO é infração
-- Uma punição anterior por si só NÃO justifica uma nova punição
-- Intervir apenas em infrações reais, claras e inequívocas
-- Na dúvida: prefira um aviso a um timeout
-
-=== ESCALADA (avisos primeiro) ===
-- Primeira infração: sempre um aviso (warn), sem timeout
-- Timeout só após avisos repetidos (registro) ou em infrações graves
-- No máximo UM timeout por pessoa por análise – demais infrações da mesma pessoa como warn
-- A infração mais grave é primary=true e recebe a maior duração (ou igual)
-
-=== MEDIDAS ===
-- Infrações leves: warn com uma dica amigável
-- Insulto ou provocação clara: warn, em repetição timeout 5m–10m
-- Infração repetida apesar do aviso: timeout 10m–1h
-- Discriminação, discurso de ódio, ameaças: timeout 1d–1w
-- Conteúdo perigoso, links de phishing/golpe: timeout 1w
-- Spam/publicidade: primeira vez warn, repetição timeout 1h
-- Sem infração: não moderar ninguém e NÃO escrever nada no chat – o bot fica em silêncio
-- Nunca publicar saudações, conversa fiada, avisos de «está tudo bem» ou mensagens de status`,
+  // ---- Aufträge ----
+  orderButton: {
+    de: 'Neuer Auftrag',
+    en: 'New order',
+    fr: 'Nouvel ordre',
+    es: 'Nueva orden',
+    it: 'Nuovo ordine',
+    pt: 'Nova ordem',
+    ru: 'Новый заказ',
+    ja: '新しい指示',
+    ko: '새 지시',
+    zh: '新指令',
+  },
+  orderPanelTitle: {
+    de: '📋 **Auftrag an mich**',
+    en: '📋 **Order for me**',
+    fr: '📋 **Ordre pour moi**',
+    es: '📋 **Orden para mí**',
+    it: '📋 **Ordine per me**',
+    pt: '📋 **Ordem para mim**',
+    ru: '📋 **Заказ для меня**',
+    ja: '📋 **私への指示**',
+    ko: '📋 **나에게 지시**',
+    zh: '📋 **给我的指令**',
+  },
+  orderPanelHint: {
+    de: 'Bis zu 3 Nachrichten-IDs + eine Anweisung. Ich sehe mir die Nachrichten mit Kontext an und führe aus, was du willst.',
+    en: 'Up to 3 message IDs + one instruction. I look at them with context and do what you ask.',
+    fr: "Jusqu'à 3 IDs de message + une consigne. Je regarde avec contexte et j'exécute.",
+    es: 'Hasta 3 IDs de mensajes + una instrucción. Los reviso con contexto y ejecuto.',
+    it: 'Fino a 3 ID di messaggi + un’istruzione. Li guardo con contesto ed eseguo.',
+    pt: 'Até 3 IDs de mensagens + uma instrução. Vejo com contexto e executo.',
+    ru: 'До 3 ID сообщений + инструкция. Посмотрю с контекстом и выполню.',
+    ja: '最大3件のメッセージID＋指示。前後関係を見て実行します。',
+    ko: '최대 3개 메시지 ID + 지시. 맥락과 함께 보고 실행합니다.',
+    zh: '最多 3 个消息 ID + 一条指令。我会结合上下文执行。',
+  },
+  orderCreate: {
+    de: 'Auftrag erstellen',
+    en: 'Create order',
+    fr: 'Créer l’ordre',
+    es: 'Crear orden',
+    it: 'Crea ordine',
+    pt: 'Criar ordem',
+    ru: 'Создать заказ',
+    ja: '指示を作成',
+    ko: '지시 생성',
+    zh: '创建指令',
+  },
+  orderIdsLabel: {
+    de: 'Nachrichten-IDs (max. 3, mit Komma)',
+    en: 'Message IDs (max 3, comma separated)',
+    fr: 'IDs de message (max 3, virgules)',
+    es: 'IDs de mensajes (máx. 3, con comas)',
+    it: 'ID messaggi (max 3, virgole)',
+    pt: 'IDs de mensagens (máx. 3, vírgulas)',
+    ru: 'ID сообщений (до 3, через запятую)',
+    ja: 'メッセージID（最大3つ、カンマ区切り）',
+    ko: '메시지 ID (최대 3개, 쉼표)',
+    zh: '消息 ID（最多3个，逗号分隔）',
+  },
+  orderWhatLabel: {
+    de: 'Was soll ich tun?',
+    en: 'What should I do?',
+    fr: 'Que dois-je faire ?',
+    es: '¿Qué debo hacer?',
+    it: 'Cosa devo fare?',
+    pt: 'O que devo fazer?',
+    ru: 'Что мне сделать?',
+    ja: '何をすべき？',
+    ko: '무엇을 할까요?',
+    zh: '我该做什么？',
+  },
+  orderWhatPlaceholder: {
+    de: 'z. B. „Banne ihn“ oder „Verwarnen, war ein schlechter Scherz“',
+    en: 'e.g. "Ban him" or "Warn him, bad joke"',
+    fr: 'ex. « Bannis-le » ou « Avertis-le, mauvaise blague »',
+    es: 'ej. «Baneadle» o «Advertidle, mal chiste»',
+    it: 'es. «Bannalo» o «Avvisalo, brutto scherzo»',
+    pt: 'ex. «Bane-o» ou «Avisa-o, má piada»',
+    ru: 'напр. «Забань его» или «Предупреди, плохая шутка»',
+    ja: '例：「BANして」「警告で、悪い冗談だった」',
+    ko: '예: "차단해" 또는 "경고, 나쁜 농담이었어"',
+    zh: '例如“封禁他”或“警告即可，只是糟糕的玩笑”',
+  },
+  orderStarted: {
+    de: 'Alles klar, ich kümmere mich darum. 🫡',
+    en: 'Alright, on it. 🫡',
+    fr: 'D’accord, je m’en occupe. 🫡',
+    es: 'Vale, me encargo. 🫡',
+    it: 'Va bene, me ne occupo. 🫡',
+    pt: 'Certo, trato disso. 🫡',
+    ru: 'Хорошо, займусь. 🫡',
+    ja: '了解、対応します。🫡',
+    ko: '알겠습니다, 처리하겠습니다. 🫡',
+    zh: '好的，我来处理。🫡',
+  },
+  orderNoMsg: {
+    de: 'Keine dieser Nachrichten-IDs habe ich hier gefunden.',
+    en: 'I could not find any of those message IDs.',
+    fr: "Je n'ai trouvé aucun de ces IDs.",
+    es: 'No he encontrado ninguno de esos IDs.',
+    it: 'Non ho trovato nessuno di quegli ID.',
+    pt: 'Não encontrei nenhum desses IDs.',
+    ru: 'Ни одного из этих ID я не нашёл.',
+    ja: 'どのメッセージIDも見つかりませんでした。',
+    ko: '해당 메시지 ID를 찾지 못했습니다.',
+    zh: '这些消息 ID 我都没找到。',
+  },
+  orderUnclear: {
+    de: '„Keine klare Anweisung verstanden“',
+    en: '"No clear instruction understood"',
+    fr: '« Consigne pas claire »',
+    es: '«No entendí una instrucción clara»',
+    it: '«Istruzione non chiara»',
+    pt: '«Instrução pouco clara»',
+    ru: '«Инструкция непонятна»',
+    ja: '「明確な指示が理解できませんでした」',
+    ko: '"명확한 지시를 이해하지 못했습니다"',
+    zh: '“未能理解明确指令”',
+  },
+  orderUnclearBody: {
+    de: 'Ich habe den Kontext gelesen, aber keine Anweisung erkannt, die eine Maßnahme rechtfertigt. Sag mir klarer, was ich tun soll.',
+    en: 'I read the context but found no instruction that justifies an action. Tell me more clearly what to do.',
+    fr: "J'ai lu le contexte mais aucune consigne ne justifie une sanction.",
+    es: 'Leí el contexto pero no vi una instrucción que justifique una acción.',
+    it: 'Ho letto il contesto ma nessuna istruzione giustifica un’azione.',
+    pt: 'Li o contexto mas não vi instrução que justifique uma ação.',
+    ru: 'Я прочитал контекст, но не нашёл указания, оправдывающего меру.',
+    ja: '文脈は読みましたが、措置を正当化する指示は見つかりませんでした。',
+    ko: '맥락은 읽었지만 조치를 정당화할 지시가 없었습니다.',
+    zh: '我读了上下文，但没找到可支持处罚的指令。',
+  },
+  modTitleOrder: {
+    de: '🛡️ **Moderation (Auftrag)**',
+    en: '🛡️ **Moderation (ordered)**',
+    fr: '🛡️ **Modération (sur ordre)**',
+    es: '🛡️ **Moderación (por orden)**',
+    it: '🛡️ **Moderazione (su ordine)**',
+    pt: '🛡️ **Moderação (por ordem)**',
+    ru: '🛡️ **Модерация (по заказу)**',
+    ja: '🛡️ **モデレーション（指示）**',
+    ko: '🛡️ **제재 (지시)**',
+    zh: '🛡️ **管理（指令）**',
   },
 
-  ru: {
-    errGuildOnly: '🔒 Эта команда работает только на сервере.',
-    errNoPermission: '🔒 Эту команду могут использовать только администраторы сервера.',
-    apiKeySet: '✅ **API-ключ Gemini сохранён** ({key}).\nИИ-модерация активна – собранные сообщения анализируются намного чаще: сразу при риск-сигналах, после короткой паузы в небольших диалогах и не позже защитного 2-часового flush.',
-    apiKeyInvalid: '❌ **Google отклонил API-ключ** ({error}). Ключ **не** сохранён. Создайте его на [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ Существующий API-ключ оставлен без изменений.',
-    apiKeyRemoved: '🗑️ **API-ключ Gemini удалён.** Сообщения больше не собираются и не анализируются.',
-    apiKeyUnverified: '⚠️ **API-ключ сохранён** ({key}), но проверка у Google не удалась ({error}). Ключ всё равно будет использоваться.',
-    promptModalTitle: '🛡️ Инструкции для ИИ (Промпт)',
-    promptModalLabel: 'Правила, строгость и меры для Gemini',
-    promptSaved: '✅ **Инструкции для ИИ сохранены** ({chars} символов).\nОни вступят в силу со следующего анализа чата.',
-    promptReset: '♻️ **Инструкции для ИИ сброшены к стандартному тексту.**',
-    logChannelSet: '✅ **Канал журнала установлен:** {channel}\nТам бот будет публиковать уведомления о модерации, ошибки API и другие отчёты.',
-    logChannelRemoved: '🗑️ **Канал журнала удалён.** Уведомления больше не отправляются.',
-    antiDeleteEnabled: '✅ **Анти-удаление включено.** Если кто-то (не бот и не вебхук) удалит своё последнее сообщение в канале, бот отправит его заново вебхуком с точной копией профиля (отображаемое имя и аватар). Упоминания никого не уведомляют.',
-    antiDeleteDisabled: '⛔ **Анти-удаление выключено.** Удалённые сообщения больше не отправляются заново.',
-    langChanged: '✅ Язык изменён: {name}',
-
-    descApiKey: 'Задать API-ключ Google Gemini для этого сервера',
-    descPrompt: 'Задать инструкции для ИИ (правила, строгость, меры)',
-    descLogChannel: 'Задать канал журнала для уведомлений и ошибок API',
-    descLanguage: 'Навсегда изменить язык бота',
-    descHelp: 'Показывает все команды и функции',
-    descCheckNow: 'Немедленно запускает ИИ-проверку собранных сообщений (только админы)',
-    descCheckNowUser: 'Пользователь, которого нужно обязательно модерировать при этой проверке',
-    descAntiDelete: 'Анти-удаление: повторно отправлять удалённые последние сообщения вебхуком',
-    descAntiDeleteOption: 'true = включить анти-удаление, false = выключить',
-
-    helpTitle: '🛡️ Security Bot – ИИ-модерация с Gemini',
-    helpDesc: 'Бот собирает **текстовые сообщения реальных пользователей** (админы неприкосновенны) и анализирует их в Gemini **адаптивно**: сразу при оскорблениях, догпайлинге или повторных упоминаниях, после короткой паузы в небольших диалогах и не позже защитного 2-часового flush. Gemini получает системный промпт, правила сервера, контекст ответов/упоминаний и реальные серверные/глобальные/пользовательские имена, после чего решает, кого предупредить или выдать тайм-аут. При сбое API **ничего не теряется**: попытки повторяются до успеха.',
-    helpApiKey: 'Сохраняет API-ключ Google Gemini для этого сервера. Должен быть задан один раз перед началом наблюдения.',
-    helpPrompt: 'Открывает форму с вашими инструкциями для ИИ: правила сервера, строгость модерации и меры, которые применяет Gemini. Ваш последний текст уже вставлен.',
-    helpLogChannel: 'Задаёт канал журнала для уведомлений о модерации и ошибок API. Без канала журнал удаляется.',
-    helpLanguage: 'Навсегда меняет язык бота (также задаёт часовой пояс защитного flush и язык ИИ по умолчанию).',
-    helpHelp: 'Показывает этот обзор.',
-    helpCheckNow: 'Немедленно анализирует уже собранные сообщения, не дожидаясь адаптивного авто-flush. Опция `user` позволяет выбрать пользователя, который будет обязательно модерирован при этой проверке.',
-    helpAntiDelete: 'Включает или выключает анти-удаление: если кто-то (не бот и не вебхук) удалит своё последнее сообщение в канале, бот отправит его заново вебхуком с точной копией профиля (имя и аватар). Упоминания никого не уведомляют.',
-    logModTitle: '🛡️ ИИ-модерация',
-    logFieldUser: 'Пользователь',
-    logFieldAction: 'Мера',
-    logFieldReason: 'Причина от Gemini',
-    logFieldMessage: 'Сообщение',
-    logActionWarn: '⚠️ Предупреждение',
-    logActionTimeout: '⏱️ Тайм-аут',
-    logPrimary: '💥 Главное нарушение (бот ответил на это сообщение)',
-    logNormal: 'Нарушение',
-    logImmune: '🛡️ **Пропущено:** Gemini хотел наказать {user}, но администраторы всегда неприкосновенны.',
-    logBatchSize: 'История: {count} сообщений',
-    logApiTitle: '⚠️ Ошибка API Gemini',
-    logApiDesc: 'Анализ **{count} собранных сообщений** не удался.\nОшибка: `{error}`\n\n🔁 Попытка {attempt} – следующая: **{retry}**.\n💾 Сообщения полностью сохранены и **не удаляются** – новые продолжают собираться как обычно.',
-    logNoKeyTitle: '🔑 API-ключ Gemini не настроен',
-    logNoKeyDesc: '{count} собранных сообщений ждут анализа. Администратор должен сначала выполнить `/set_gemini_api_key`.',
-    logDropTitle: '🗑️ Устаревшая история чата удалена',
-    logDropDesc: '{count} сообщений не удалось проанализировать более 30 дней (постоянный сбой API) – они удалены для гигиены данных.',
-    checkNowNoKey: '🔑 API-ключ Gemini не настроен. Сначала выполните `/set_gemini_api_key`.',
-    checkNowEmpty: 'ℹ️ Сейчас нет собранных сообщений – проверять нечего.',
-    checkNowDone: '✅ **Мгновенная проверка завершена** ({count} сообщений проанализировано). Результаты смотрите в канале журнала.',
-    checkNowPartial: '⚠️ **Мгновенная проверка запущена** ({count} сообщений), но {remaining} из них не удалось завершить (ошибка API) – подробности в канале журнала, повторные попытки продолжаются автоматически.',
-    checkNowForcedActive: '🎯 Запрошена принудительная модерация: {user} будет обязательно модерирован при этой проверке – подробности в канале журнала.',
-    checkNowForcedNoMsgs: '⚠️ {user} не встречается в собранных сообщениях – сообщений для модерации не было.',
-    checkNowForcedInvalid: '⚠️ {user} — бот или администратор и не может быть модерирован. Выберите обычного участника.',
-    joinTitle: '👋 Security Bot на сервере!',
-    joinDesc: 'Спасибо за приглашение! Как начать:\n\n1️⃣ `/set_gemini_api_key` – добавьте ключ Google Gemini ([создать бесплатно](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – задайте правила и строгость ИИ (стандартный текст уже вставлен)\n3️⃣ `/set_log_channel` – выберите канал журнала\n\nПосле этого ИИ автоматически следит за всеми текстовыми сообщениями. **Все команды видны только администраторам.**',
-    defaultPrompt: `Модерируй этот сервер как справедливая, дружелюбная, но твёрдая команда ОП.
-
-=== ПРАВИЛА ===
-- Никаких оскорблений, ненависти, дискриминации или крайней токсичности
-- Никаких сексистских, расистских, гомофобных или трансфобных высказываний
-- Никакого спама, рекламы, продажи аккаунтов/Nitro и подозрительных ссылок
-- Взаимное уважение – даже в спорах
-- Никакого опасного или незаконного контента
-
-=== СТРОГОСТЬ (не слишком мягко и не слишком строго) ===
-- НИКОГДА не наказывай дружеские подколы, сарказм между друзьями и самоиронию
-- Говорить О других (например, о стримерах или соперниках) – НЕ нарушение
-- Прежнее наказание само по себе НЕ повод для нового наказания
-- Вмешивайся только при настоящих, ясных, однозначных нарушениях
-- Сомневаешься – лучше предупреждение, чем тайм-аут
-
-=== ЭСКАЛАЦИЯ (сначала предупреждения) ===
-- Первое нарушение: всегда предупреждение (warn), без тайм-аута
-- Тайм-аут только после повторных предупреждений (реестр) или при тяжёлых нарушениях
-- Не более ОДНОГО тайм-аута на человека за анализ – остальные нарушения того же человека как warn
-- Самое тяжёлое нарушение – primary=true и получает самую длинную (или равную) длительность
-
-=== МЕРЫ ===
-- Лёгкие нарушения: warn с дружелюбным советом
-- Явное оскорбление или провокация: warn, при повторе timeout 5m–10m
-- Повторное нарушение несмотря на предупреждение: timeout 10m–1h
-- Дискриминация, язык вражды, угрозы: timeout 1d–1w
-- Опасный контент, фишинг/мошеннические ссылки: timeout 1w
-- Спам/реклама: первый раз warn, повтор timeout 1h
-- Нет нарушений: никого не наказывать и НИЧЕГО не писать в чат – бот молчит
-- Никогда не публиковать приветствия, болтовню, сообщения «всё спокойно» или статусы`,
+  // ---- Join-DM ----
+  joinDm: {
+    de: 'Hey! 🛡️\n\nIch bin **{bot}** und passe ab jetzt auf **{guild}** auf: KI-Moderation, Logs, Strafregister.\n\nBevor ich loslegen kann, brauche ich einmal **Administrator-Rechte** und danach führt ihr einfach **/setup** aus – 7 Schritte, alles per Klick.\n\nBis gleich!',
+    en: 'Hey! 🛡️\n\nI am **{bot}** and I will look after **{guild}**: AI moderation, logs, penalty record.\n\nBefore I start I need **Administrator permission**, then just run **/setup** – 7 steps, all by clicking.\n\nSee you!',
+    fr: 'Hey ! 🛡️\n\nJe suis **{bot}** et je surveille **{guild}** : modération IA, logs, casier.\n\nJ’ai besoin des droits **Administrateur**, puis lancez simplement **/setup** – 7 étapes.',
+    es: '¡Hola! 🛡️\n\nSoy **{bot}** y cuido de **{guild}**: moderación IA, logs, registro.\n\nNecesito permisos de **Administrador** y luego usad **/setup** – 7 pasos.',
+    it: 'Hey! 🛡️\n\nSono **{bot}** e sorveglio **{guild}**: moderazione IA, log, registro.\n\nMi servono i permessi di **Amministratore**, poi usate **/setup** – 7 passi.',
+    pt: 'Olá! 🛡️\n\nSou o **{bot}** e vou cuidar de **{guild}**: moderação IA, registos, cadastro.\n\nPreciso de permissões de **Administrador** e depois usem **/setup** – 7 passos.',
+    ru: 'Привет! 🛡️\n\nЯ **{bot}** и слежу за **{guild}**: ИИ-модерация, логи, реестр.\n\nМне нужны права **Администратора**, потом просто выполните **/setup** – 7 шагов.',
+    ja: 'こんにちは！🛡️\n\n**{bot}** です。**{guild}** を守ります：AIモデレーション、ログ、記録。\n\n**管理者**権限をください。その後 **/setup** を実行してください（7ステップ）。',
+    ko: '안녕하세요! 🛡️\n\n**{bot}**입니다. **{guild}**를 지킵니다: AI 제재, 로그, 기록.\n\n**관리자** 권한이 필요하고, 그다음 **/setup** 을 실행하세요 – 7단계.',
+    zh: '你好！🛡️\n\n我是 **{bot}**，从现在起守护 **{guild}**：AI 管理、日志、记录。\n\n我首先需要**管理员**权限，然后直接运行 **/setup** – 7 个步骤。',
   },
-
-  ja: {
-    errGuildOnly: '🔒 このコマンドはサーバー内でのみ使用できます。',
-    errNoPermission: '🔒 このコマンドを使用できるのはサーバー管理者のみです。',
-    apiKeySet: '✅ **Gemini APIキーを保存しました**（{key}）。\nAIモデレーションが有効になりました。収集したメッセージは、危険サインがあれば即時、小さな会話は短い待機後、遅くとも2時間のセーフティフラッシュで分析されます。',
-    apiKeyInvalid: '❌ **GoogleにAPIキーを拒否されました**（{error}）。キーは保存されて**いません**。[aistudio.google.com](https://aistudio.google.com/apikey) で作成してください。',
-    apiKeyKept: 'ℹ️ 既存のAPIキーはそのまま維持されました。',
-    apiKeyRemoved: '🗑️ **Gemini APIキーを削除しました。** メッセージの収集と分析を停止します。',
-    apiKeyUnverified: '⚠️ **APIキーを保存しました**（{key}）が、Googleでの確認に失敗しました（{error}）。それでもこのキーを使用します。',
-    promptModalTitle: '🛡️ AIへの指示（プロンプト）',
-    promptModalLabel: 'Geminiへのルール・厳しさ・措置',
-    promptSaved: '✅ **AIへの指示を保存しました**（{chars}文字）。\n次のチャット分析から適用されます。',
-    promptReset: '♻️ **AIへの指示をデフォルトのテキストに戻しました。**',
-    logChannelSet: '✅ **ログチャンネルを設定しました：** {channel}\nモデレーションのお知らせやAPIエラーなどはここに送られます。',
-    logChannelRemoved: '🗑️ **ログチャンネルを削除しました。** お知らせは送信されなくなります。',
-    antiDeleteEnabled: '✅ **アンチ削除を有効化しました。** 誰かが（ボット・Webhook以外）自分の最後のメッセージを削除した場合、ボットが正確なプロフィール（表示名とアバター）でWebhook経由で再送信します。メンションは通知されません。',
-    antiDeleteDisabled: '⛔ **アンチ削除を無効化しました。** 削除されたメッセージは再送信されません。',
-    langChanged: '✅ 言語を変更しました：{name}',
-
-    descApiKey: 'このサーバーのGoogle Gemini APIキーを設定',
-    descPrompt: 'フォームでAIの指示を設定（ルール・厳しさ・措置）',
-    descLogChannel: 'モデレーション通知のログチャンネルを設定',
-    descLanguage: 'ボットの言語を永久に変更',
-    descHelp: 'すべてのコマンドと機能を表示',
-    descCheckNow: '収集済みメッセージのAIチェックを今すぐ実行します（管理者のみ）',
-    descCheckNowUser: 'このチェックで必ずモデレートするユーザー（任意）',
-    descAntiDelete: 'アンチ削除：削除された最後のメッセージをWebhookで再送信',
-    descAntiDeleteOption: 'true = アンチ削除を有効化、false = 無効化',
-
-    helpTitle: '🛡️ Security Bot – GeminiによるAIモデレーション',
-    helpDesc: 'このボットは**実際のユーザーのテキストメッセージ**を収集し（管理者は対象外）、Geminiで**適応的**に分析します。侮辱・ドッグパイル・繰り返しメンションなどの危険サインは即時、小さな会話は短い待機後、遅くとも2時間のセーフティフラッシュで分析されます。Geminiはシステムプロンプト、サーバールール、返信/メンション文脈、実際のサーバー名・グローバル名・ユーザー名を受け取り、警告やタイムアウトを決定します。APIエラー時も**何も失われません**：成功するまで再試行を続けます。',
-    helpApiKey: 'このサーバーのGoogle Gemini APIキーを保存します。監視開始前に一度設定してください。',
-    helpPrompt: 'AIへの指示フォームを開きます：サーバーのルール、モデレーションの厳しさ、Geminiが使う措置。最後に保存したテキストが入力済みです。',
-    helpLogChannel: 'モデレーションのお知らせやAPIエラー用のログチャンネルを設定します。チャンネルを指定しない場合は削除されます。',
-    helpLanguage: 'ボットの言語を永久に変更します（セーフティフラッシュのタイムゾーンとAIのデフォルト言語にも影響します）。',
-    helpHelp: 'この概要を表示します。',
-    helpCheckNow: '適応的な自動フラッシュを待たずに、これまでに収集したメッセージを今すぐ分析します。`user` オプションで必ずモデレートするユーザーを指定できます。',
-    helpAntiDelete: 'アンチ削除のオン／オフ：誰かが（ボット・Webhook以外）自分の最後のメッセージを削除した場合、ボットが正確なプロフィール（名前とアバター）でWebhook経由で再送信します。メンションは通知されません。',
-    logModTitle: '🛡️ AIモデレーション',
-    logFieldUser: 'ユーザー',
-    logFieldAction: '措置',
-    logFieldReason: 'Geminiの理由',
-    logFieldMessage: 'メッセージ',
-    logActionWarn: '⚠️ 警告',
-    logActionTimeout: '⏱️ タイムアウト',
-    logPrimary: '💥 主な違反（ボットはこのメッセージに返信しました）',
-    logNormal: '違反',
-    logImmune: '🛡️ **スキップ：** Geminiは{user}をモデレートしようとしましたが、管理者は常に保護されています。',
-    logBatchSize: '履歴：{count}件のメッセージ',
-    logApiTitle: '⚠️ Gemini APIエラー',
-    logApiDesc: '**{count}件の収集メッセージ**の分析に失敗しました。\nエラー：`{error}`\n\n🔁 試行{attempt}回目 – 次回：**{retry}**。\n💾 メッセージは完全に保持され、**破棄されません** – 新しいメッセージも通常どおり収集されます。',
-    logNoKeyTitle: '🔑 Gemini APIキーが未設定です',
-    logNoKeyDesc: '{count}件の収集メッセージが分析待ちです。管理者が先に `/set_gemini_api_key` を実行する必要があります。',
-    logDropTitle: '🗑️ 古いチャット履歴を破棄しました',
-    logDropDesc: '{count}件のメッセージは30日以上分析できず（APIの永続的な障害）、データ衛生のため削除されました。',
-    checkNowNoKey: '🔑 Gemini APIキーが設定されていません。先に `/set_gemini_api_key` を実行してください。',
-    checkNowEmpty: 'ℹ️ 現在収集されたメッセージはありません – チェックする内容がありません。',
-    checkNowDone: '✅ **即時チェックが完了しました**（{count}件のメッセージを分析）。結果はログチャンネルをご覧ください。',
-    checkNowPartial: '⚠️ **即時チェックを開始しました**（{count}件）が、うち{remaining}件は完了できませんでした（APIエラー）。詳細はログチャンネルを確認してください。自動的に再試行が続きます。',
-    checkNowForcedActive: '🎯 強制モデレーションが指定されました：{user} はこのチェックで必ずモデレートされます。詳細はログチャンネルへ。',
-    checkNowForcedNoMsgs: '⚠️ {user} は収集されたメッセージに存在しません。モデレートするメッセージがありませんでした。',
-    checkNowForcedInvalid: '⚠️ {user} はボットまたは管理者のためモデレートできません。通常のメンバーを選んでください。',
-    joinTitle: '👋 Security Botが到着しました！',
-    joinDesc: '招待ありがとうございます！始め方：\n\n1️⃣ `/set_gemini_api_key` – Google Geminiキーを設定（[無料で作成](https://aistudio.google.com/apikey)）\n2️⃣ `/set_prompt` – AIのルールと厳しさを設定（デフォルト文を入力済み）\n3️⃣ `/set_log_channel` – ログチャンネルを選択\n\nその後、AIがすべてのテキストメッセージを自動監視します。**すべてのコマンドは管理者のみ表示されます。**',
-    defaultPrompt: `このサーバーを、公正で親しみやすいけれど毅然としたOPチームとしてモデレートしてください。
-
-=== ルール ===
-- 侮辱、ヘイト、差別、極端な毒性は禁止
-- 性差別的・人種差別的・同性愛嫌悪的・トランス嫌悪的な発言は禁止
-- スパム、宣伝、アカウント/Nitroの売買、不審なリンクは禁止
-- 意見が違っても互いに尊重する
-- 危険または違法なコンテンツは禁止
-
-=== 厳しさ（甘すぎず厳しすぎず） ===
-- 友人間の冗談、皮肉、自虐ネタは決して罰しない
-- 他人について語るだけ（例：配信者や対戦相手）は違反ではない
-- 過去の処罰だけでは新しい処罰の理由にならない
-- 明確で疑いのない実際の違反にのみ介入する
-- 迷ったらタイムアウトより警告を選ぶ
-
-=== エスカレーション（まず警告） ===
-- 初回の違反：必ず警告（warn）、タイムアウトなし
-- タイムアウトは繰り返しの警告後（記録）または重大な違反のみ
-- 1人につき1分析で最大1回のタイムアウト。同じ人の他の違反はwarn
-- 最も重大な違反をprimary=trueとし、最長（または同等）の時間を与える
-
-=== 措置 ===
-- 軽微な違反：親しみやすい注意つきのwarn
-- 明確な侮辱や挑発：warn、繰り返しならtimeout 5m〜10m
-- 警告にもかかわらず繰り返す違反：timeout 10m〜1h
-- 差別、ヘイトスピーチ、脅迫：timeout 1d〜1w
-- 危険なコンテンツ、フィッシング/詐欺リンク：timeout 1w
-- スパム/宣伝：初回はwarn、繰り返しならtimeout 1h
-- 違反なし：誰も罰せず、チャットには何も書かない – ボットは沈黙する
-- 挨拶、雑談、「異常なし」の報告、状況アナウンスは絶対に投稿しない`,
-  },
-
-  ko: {
-    errGuildOnly: '🔒 이 명령어는 서버 안에서만 사용할 수 있습니다.',
-    errNoPermission: '🔒 서버 관리자만 이 명령어를 사용할 수 있습니다.',
-    apiKeySet: '✅ **Gemini API 키가 저장되었습니다** ({key}).\nAI 검열이 활성화되었습니다. 수집된 메시지는 위험 신호가 있으면 즉시, 작은 대화는 짧은 대기 후, 늦어도 2시간 안전 플러시로 분석됩니다.',
-    apiKeyInvalid: '❌ **Google이 API 키를 거부했습니다** ({error}). 키는 저장되지 **않았습니다**. [aistudio.google.com](https://aistudio.google.com/apikey)에서 만들어 주세요.',
-    apiKeyKept: 'ℹ️ 기존 API 키가 그대로 유지되었습니다.',
-    apiKeyRemoved: '🗑️ **Gemini API 키가 삭제되었습니다.** 더 이상 메시지를 수집하거나 분석하지 않습니다.',
-    apiKeyUnverified: '⚠️ **API 키가 저장되었습니다** ({key})만 Google 확인에 실패했습니다 ({error}). 그래도 이 키를 사용합니다.',
-    promptModalTitle: '🛡️ AI 지시사항 (프롬프트)',
-    promptModalLabel: 'Gemini를 위한 규칙·엄격함·조치',
-    promptSaved: '✅ **AI 지시사항이 저장되었습니다** ({chars}자).\n다음 채팅 분석부터 적용됩니다.',
-    promptReset: '♻️ **AI 지시사항이 기본 텍스트로 초기화되었습니다.**',
-    logChannelSet: '✅ **로그 채널이 설정되었습니다:** {channel}\n검열 알림, API 오류 등이 이곳에 전송됩니다.',
-    logChannelRemoved: '🗑️ **로그 채널이 제거되었습니다.** 더 이상 알림을 보내지 않습니다.',
-    antiDeleteEnabled: '✅ **안티 삭제가 활성화되었습니다.** 누군가(봇/웹훅 제외) 자신의 마지막 메시지를 삭제하면 봇이 정확한 프로필(표시 이름과 아바타)로 웹훅을 통해 다시 본냅니다. 멘션은 알림을 본내지 않습니다.',
-    antiDeleteDisabled: '⛔ **안티 삭제가 비활성화되었습니다.** 삭제된 메시지는 더 이상 다시 본내지 않습니다.',
-    langChanged: '✅ 언어가 변경되었습니다: {name}',
-
-    descApiKey: '이 서버의 Google Gemini API 키 설정',
-    descPrompt: '양식으로 AI 지시사항 설정 (규칙·엄격함·조치)',
-    descLogChannel: '검열 알림의 로그 채널 설정',
-    descLanguage: '봇 언어를 영구적으로 변경',
-    descHelp: '모든 명령어와 기능 표시',
-    descCheckNow: '수집된 메시지에 대한 AI 검사를 즉시 시작합니다 (관리자 전용)',
-    descCheckNowUser: '이 점검에서 반드시 모더레이션할 사용자 (선택 사항)',
-    descAntiDelete: '안티 삭제: 삭제된 마지막 메시지를 웹훅으로 다시 본내기',
-    descAntiDeleteOption: 'true = 안티 삭제 켜기, false = 끄기',
-
-    helpTitle: '🛡️ Security Bot – Gemini AI 검열',
-    helpDesc: '이 봇은 **실제 사용자의 텍스트 메시지**를 수집하고(관리자는 면역), Gemini로 **적응형** 분석을 합니다. 모욕, 집단 공격, 반복 멘션 같은 위험 신호는 즉시, 작은 대화는 짧은 대기 후, 늦어도 2시간 안전 플러시로 분석됩니다. Gemini는 시스템 프롬프트, 서버 규칙, 답글/멘션 맥락과 실제 서버/글로벌/사용자 이름을 받아 경고와 타임아웃을 결정합니다. API 오류가 발생해도 **아무것도 사라지지 않습니다**: 성공할 때까지 재시도합니다.',
-    helpApiKey: '이 서버의 Google Gemini API 키를 저장합니다. 모니터링 시작 전 한 번 설정해야 합니다.',
-    helpPrompt: 'AI 지시사항 양식을 엽니다: 서버 규칙, 검열 엄격함, Gemini가 사용할 조치. 마지막으로 저장한 텍스트가 미리 채워져 있습니다.',
-    helpLogChannel: '검열 알림과 API 오류를 위한 로그 채널을 설정합니다. 채널 없이 호출하면 제거됩니다.',
-    helpLanguage: '봇 언어를 영구적으로 변경합니다 (안전 플러시 시간대와 AI 기본 언어에도 영향).',
-    helpHelp: '이 개요를 표시합니다.',
-    helpCheckNow: '적응형 자동 플러시를 기다리지 않고 지금까지 수집된 메시지를 즉시 분석합니다. `user` 옵션으로 반드시 모더레이션할 사용자를 지정할 수 있습니다.',
-    helpAntiDelete: '안티 삭제 켜기/끄기: 누군가(봇/웹훅 제외) 자신의 마지막 메시지를 삭제하면 봇이 정확한 프로필(이름과 아바타)로 웹훅을 통해 다시 본냅니다. 멘션은 알림을 본내지 않습니다.',
-    logModTitle: '🛡️ AI 검열',
-    logFieldUser: '사용자',
-    logFieldAction: '조치',
-    logFieldReason: 'Gemini의 이유',
-    logFieldMessage: '메시지',
-    logActionWarn: '⚠️ 경고',
-    logActionTimeout: '⏱️ 타임아웃',
-    logPrimary: '💥 주요 위반 (봇이 이 메시지에 답장했습니다)',
-    logNormal: '위반',
-    logImmune: '🛡️ **건너뜀:** Gemini가 {user}님을 검열하려 했지만 관리자는 항상 면역입니다.',
-    logBatchSize: '기록: {count}개 메시지',
-    logApiTitle: '⚠️ Gemini API 오류',
-    logApiDesc: '**수집된 {count}개 메시지**의 분석이 실패했습니다.\n오류: `{error}`\n\n🔁 {attempt}번째 시도 – 다음 재시도: **{retry}**.\n💾 메시지는 그대로 보존되며 **폐기되지 않습니다** – 새 메시지도 평소처럼 수집됩니다.',
-    logNoKeyTitle: '🔑 Gemini API 키가 설정되지 않았습니다',
-    logNoKeyDesc: '수집된 {count}개 메시지가 분석을 기다립니다. 관리자가 먼저 `/set_gemini_api_key`를 실행해야 합니다.',
-    logDropTitle: '🗑️ 오래된 채팅 기록 폐기',
-    logDropDesc: '{count}개 메시지는 30일 넘게 분석하지 못했고(API 지속 장애) 데이터 위생을 위해 삭제되었습니다.',
-    checkNowNoKey: '🔑 Gemini API 키가 설정되지 않았습니다. 먼저 `/set_gemini_api_key`를 실행하세요.',
-    checkNowEmpty: 'ℹ️ 현재 수집된 메시지가 없습니다 – 검사할 내용이 없습니다.',
-    checkNowDone: '✅ **즉시 검사 완료** ({count}개 메시지 분석됨). 결과는 로그 채널을 확인하세요.',
-    checkNowPartial: '⚠️ **즉시 검사 시작됨** ({count}개), 그러나 {remaining}개는 완료되지 못했습니다(API 오류) – 자세한 내용은 로그 채널에서 확인하세요. 재시도가 자동으로 계속됩니다.',
-    checkNowForcedActive: '🎯 강제 모더레이션이 요청되었습니다: {user} 님은 이번 점검에서 반드시 모더레이션됩니다. 자세한 내용은 로그 채널을 확인하세요.',
-    checkNowForcedNoMsgs: '⚠️ 수집된 메시지에 {user} 님이 없습니다 – 모더레이션할 메시지가 없었습니다.',
-    checkNowForcedInvalid: '⚠️ {user} 님은 봇이거나 관리자이므로 모더레이션할 수 없습니다. 일반 멤버를 선택하세요.',
-    joinTitle: '👋 Security Bot이 도착했습니다!',
-    joinDesc: '초대해 주셔서 감사합니다! 시작 방법:\n\n1️⃣ `/set_gemini_api_key` – Google Gemini 키 추가([무료 생성](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – AI 규칙과 엄격함 설정(기본 텍스트 미리 입력됨)\n3️⃣ `/set_log_channel` – 로그 채널 선택\n\n이후 AI가 모든 텍스트 메시지를 자동 감시합니다. **모든 명령어는 관리자에게만 보입니다.**',
-    defaultPrompt: `이 서버를 공정하고 친절하지만 단호한 운영팀처럼 검열하세요.
-
-=== 규칙 ===
-- 모욕, 혐오, 차별, 극단적 독성 금지
-- 성차별·인종차별·동성애 혐오·트랜스젠더 혐오 발언 금지
-- 스팸, 광고, 계정/Nitro 거래, 수상한 링크 금지
-- 의견이 달라도 서로 존중하기
-- 위험하거나 불법적인 콘텐츠 금지
-
-=== 엄격함 (너무 느슨하지도, 너무 엄하지도 않게) ===
-- 친구 사이의 장난, 농담, 자조적인 말은 절대 처벌하지 않기
-- 다른 사람에 대해 말하는 것(예: 스트리머나 상대)은 위반이 아님
-- 과거 처벌만으로는 새로운 처벌의 이유가 되지 않음
-- 실제로 명확하고 분명한 위반에만 개입하기
-- 애매하면 타임아웃보다 경고를 선택하기
-
-=== 에스컬레이션 (경고 우선) ===
-- 첫 위반: 항상 경고(warn), 타임아웃 없음
-- 타임아웃은 반복된 경고 후(기록) 또는 중대한 위반일 때만
-- 1인당 분석당 최대 1회 타임아웃. 같은 사람의 다른 위반은 warn
-- 가장 중대한 위반을 primary=true로 하고 가장 긴(또는 동일한) 시간을 부여
-
-=== 조치 ===
-- 가벼운 위반: 친절한 안내와 함께 warn
-- 명백한 모욕이나 도발: warn, 반복 시 timeout 5m~10m
-- 경고에도 반복된 위반: timeout 10m~1h
-- 차별, 혐오 발언, 위협: timeout 1d~1w
-- 위험한 콘텐츠, 피싱/사기 링크: timeout 1w
-- 스팸/광고: 처음엔 warn, 반복 시 timeout 1h
-- 위반 없음: 누구도 처벌하지 말고 채팅에 아무것도 쓰지 않기 – 봇은 침묵합니다
-- 인사, 잡담, 「이상 없음」 안내, 상태 알림은 절대 게시하지 않기`,
-  },
-
-  zh: {
-    errGuildOnly: '🔒 此命令只能在服务器内使用。',
-    errNoPermission: '🔒 只有服务器管理员才能使用此命令。',
-    apiKeySet: '✅ **Gemini API 密钥已保存**（{key}）。\nAI 审核已启用——收集的消息会更频繁地分析：出现风险信号时立即分析，小型对话短暂等待后分析，并且最迟通过 2 小时安全刷新分析。',
-    apiKeyInvalid: '❌ **Google 拒绝了该 API 密钥**（{error}）。密钥**未**保存。请在 [aistudio.google.com](https://aistudio.google.com/apikey) 创建。',
-    apiKeyKept: 'ℹ️ 现有 API 密钥保持不变。',
-    apiKeyRemoved: '🗑️ **Gemini API 密钥已删除。** 不再收集或分析消息。',
-    apiKeyUnverified: '⚠️ **API 密钥已保存**（{key}），但在 Google 验证失败（{error}）。仍将使用该密钥。',
-    promptModalTitle: '🛡️ AI 指令（提示词）',
-    promptModalLabel: '给 Gemini 的规则、严格程度与措施',
-    promptSaved: '✅ **AI 指令已保存**（{chars} 个字符）。\n将从下一次聊天分析开始生效。',
-    promptReset: '♻️ **AI 指令已重置为默认文本。**',
-    logChannelSet: '✅ **日志频道已设置：** {channel}\n机器人将在此发布审核通知、API 错误等报告。',
-    logChannelRemoved: '🗑️ **日志频道已移除。** 不再发送通知。',
-    antiDeleteEnabled: '✅ **反删除已开启。** 当有人（非机器人/Webhook）删除自己在频道中的最后一条消息时，机器人会通过 Webhook 以完全相同的个人资料（显示名称和头像）重新发送。提及不会通知任何人。',
-    antiDeleteDisabled: '⛔ **反删除已关闭。** 被删除的消息将不再重新发送。',
-    langChanged: '✅ 语言已更改：{name}',
-
-    descApiKey: '设置此服务器的 Google Gemini API 密钥',
-    descPrompt: '通过表单设置 AI 指令（规则、严格度、措施）',
-    descLogChannel: '设置审核通知的日志频道',
-    descLanguage: '永久更改机器人语言',
-    descHelp: '显示所有命令与功能',
-    descCheckNow: '立即对已收集的消息运行 AI 检查（仅限管理员）',
-    descCheckNowUser: '本次检查中必须被审核的用户（可选）',
-    descAntiDelete: '反删除：通过 Webhook 重新发送被删除的最后一条消息',
-    descAntiDeleteOption: 'true = 开启反删除，false = 关闭',
-
-    helpTitle: '🛡️ Security Bot – Gemini AI 审核',
-    helpDesc: '此机器人收集**真实用户的文本消息**（管理员免疫），并用 Gemini **自适应**分析：出现侮辱、围攻或重复提及时立即分析，小型对话短暂等待后分析，并且最迟通过 2 小时安全刷新分析。Gemini 会收到系统提示词、服务器规则、回复/提及上下文以及真实的服务器/全局/用户名，然后决定警告与禁言。API 出错时**不会丢失任何内容**：会不断重试直到成功。',
-    helpApiKey: '保存此服务器的 Google Gemini API 密钥。开始监控前必须设置一次。',
-    helpPrompt: '打开 AI 指令表单：服务器规则、审核严格程度以及 Gemini 应采取的措施。已预填您上次保存的文本。',
-    helpLogChannel: '设置用于审核通知和 API 错误的日志频道。不带频道调用则移除日志频道。',
-    helpLanguage: '永久更改机器人语言（同时控制安全刷新的时区和 AI 默认语言）。',
-    helpHelp: '显示此概览。',
-    helpCheckNow: '无需等待自适应自动刷新，立即分析目前已收集的消息。可通过 `user` 选项指定一位必须被审核的用户。',
-    helpAntiDelete: '开启或关闭反删除：当有人（非机器人/Webhook）删除自己在频道中的最后一条消息时，机器人会通过 Webhook 以完全相同的个人资料（名称和头像）重新发送。提及不会通知任何人。',
-    logModTitle: '🛡️ AI 审核',
-    logFieldUser: '用户',
-    logFieldAction: '措施',
-    logFieldReason: 'Gemini 的理由',
-    logFieldMessage: '消息',
-    logActionWarn: '⚠️ 警告',
-    logActionTimeout: '⏱️ 禁言',
-    logPrimary: '💥 主要违规（机器人回复了此消息）',
-    logNormal: '违规',
-    logImmune: '🛡️ **已跳过：** Gemini 想处罚 {user}，但管理员始终免疫。',
-    logBatchSize: '记录：{count} 条消息',
-    logApiTitle: '⚠️ Gemini API 错误',
-    logApiDesc: '**{count} 条已收集消息**的分析失败。\n错误：`{error}`\n\n🔁 第 {attempt} 次尝试 – 下次重试：**{retry}**。\n💾 消息被完整保留并**不会丢弃**——新消息继续正常收集。',
-    logNoKeyTitle: '🔑 未设置 Gemini API 密钥',
-    logNoKeyDesc: '{count} 条收集的消息正在等待分析。管理员需要先执行 `/set_gemini_api_key`。',
-    logDropTitle: '🗑️ 过期聊天记录已丢弃',
-    logDropDesc: '{count} 条消息超过 30 天无法分析（API 持续故障），已出于数据卫生被删除。',
-    checkNowNoKey: '🔑 尚未配置 Gemini API 密钥。请先执行 `/set_gemini_api_key`。',
-    checkNowEmpty: 'ℹ️ 目前没有已收集的消息——无需检查。',
-    checkNowDone: '✅ **即时检查已完成**（已分析 {count} 条消息）。结果请查看日志频道。',
-    checkNowPartial: '⚠️ **即时检查已开始**（{count} 条消息），但其中 {remaining} 条未能完成（API 错误)——详情见日志频道，系统会自动继续重试。',
-    checkNowForcedActive: '🎯 已请求强制审核：{user} 将在本次检查中被强制审核——详情见日志频道。',
-    checkNowForcedNoMsgs: '⚠️ 收集的消息中没有 {user}——没有可审核的消息。',
-    checkNowForcedInvalid: '⚠️ {user} 是机器人或管理员，无法被审核。请选择普通成员。',
-    joinTitle: '👋 Security Bot 已加入！',
-    joinDesc: '感谢邀请！开始步骤：\n\n1️⃣ `/set_gemini_api_key` – 配置 Google Gemini 密钥（[免费创建](https://aistudio.google.com/apikey)）\n2️⃣ `/set_prompt` – 设置 AI 规则与严格度（已预填默认文本）\n3️⃣ `/set_log_channel` – 选择日志频道\n\n之后 AI 将自动监控所有文本消息。**所有命令仅管理员可见。**',
-    defaultPrompt: `像一支公正、友善但坚定的管理团队一样审核这个服务器。
-
-=== 规则 ===
-- 禁止侮辱、仇恨、歧视或极端恶毒言论
-- 禁止性别歧视、种族歧视、恐同或跨性别歧视言论
-- 禁止刷屏、广告、账号/Nitro 交易和可疑链接
-- 即使意见不合也要互相尊重
-- 禁止危险或非法内容
-
-=== 严格程度（既不过松也不过严） ===
-- 绝不处罚朋友间的玩笑、讽刺和自嘲
-- 只是谈论他人（例如主播或对手）并不违规
-- 过往处罚本身不构成新的处罚理由
-- 只在真实、明确、无歧义的违规时介入
-- 有疑问时：宁选警告，不选禁言
-
-=== 升级规则（警告优先） ===
-- 首次违规：一律警告（warn），不禁言
-- 只有在多次警告之后（记录）或严重违规时才禁言
-- 每人每次分析最多一次禁言；同一人的其他违规改为 warn
-- 最严重的违规标记为 primary=true，并给予最长（或相同）的时长
-
-=== 措施 ===
-- 轻微违规：友好提示的 warn
-- 明确的侮辱或挑衅：warn，重复时 timeout 5m–10m
-- 警告后仍重复违规：timeout 10m–1h
-- 歧视、仇恨言论、威胁：timeout 1d–1w
-- 危险内容、钓鱼/诈骗链接：timeout 1w
-- 刷屏/广告：首次 warn，重复时 timeout 1h
-- 没有违规：不处罚任何人，也不要在聊天中写任何内容——机器人保持沉默
-- 绝不发布问候、闲聊、「一切正常」的通报或状态消息`,
-  },
-
-  it: {
-    errGuildOnly: '🔒 Questo comando funziona solo dentro un server.',
-    errNoPermission: '🔒 Solo gli amministratori del server possono usare questo comando.',
-    apiKeySet: '✅ **Chiave API Gemini salvata** ({key}).\nLa moderazione IA è ora attiva – i messaggi raccolti vengono analizzati molto più spesso: subito in presenza di segnali di rischio, dopo una breve attesa per conversazioni piccole e comunque tramite flush di sicurezza di 2 ore.',
-    apiKeyInvalid: '❌ **Google ha rifiutato la chiave API** ({error}). La chiave **non** è stata salvata. Creane una su [aistudio.google.com](https://aistudio.google.com/apikey).',
-    apiKeyKept: 'ℹ️ La chiave API esistente è stata mantenuta.',
-    apiKeyRemoved: '🗑️ **Chiave API Gemini rimossa.** I messaggi non vengono più raccolti né analizzati.',
-    apiKeyUnverified: '⚠️ **Chiave API salvata** ({key}), ma la verifica con Google non è riuscita ({error}). Verrà usata comunque.',
-    promptModalTitle: '🛡️ Istruzioni per l’IA (Prompt)',
-    promptModalLabel: 'Regole, severità e misure per Gemini',
-    promptSaved: '✅ **Istruzioni per l’IA salvate** ({chars} caratteri).\nValgono dalla prossima analisi della chat.',
-    promptReset: '♻️ **Istruzioni per l’IA ripristinate al testo predefinito.**',
-    logChannelSet: '✅ **Canale di log impostato:** {channel}\nIl bot pubblicherà lì avvisi di moderazione, errori API e altri rapporti.',
-    logChannelRemoved: '🗑️ **Canale di log rimosso.** Non verranno più inviati avvisi.',
-    antiDeleteEnabled: '✅ **Anti-eliminazione attivata.** Se qualcuno (non bot/webhook) elimina il proprio ultimo messaggio di un canale, il bot lo reinvia via webhook con una copia esatta del profilo (nome visualizzato e avatar). Le menzioni non notificano nessuno.',
-    antiDeleteDisabled: '⛔ **Anti-eliminazione disattivata.** I messaggi eliminati non vengono più reinviati.',
-    langChanged: '✅ Lingua cambiata: {name}',
-
-    descApiKey: 'Imposta la chiave API Google Gemini per questo server',
-    descPrompt: 'Imposta le istruzioni IA (regole, severità, misure)',
-    descLogChannel: 'Imposta il canale di log per avvisi ed errori API',
-    descLanguage: 'Cambia permanentemente la lingua del bot',
-    descHelp: 'Mostra tutti i comandi e le funzioni',
-    descCheckNow: 'Avvia subito un controllo IA dei messaggi raccolti (solo admin)',
-    descCheckNowUser: 'Utente da moderare obbligatoriamente in questo controllo (opzionale)',
-    descAntiDelete: 'Anti-eliminazione: reinvia gli ultimi messaggi eliminati via webhook',
-    descAntiDeleteOption: 'true = attiva anti-eliminazione, false = disattiva',
-
-    helpTitle: '🛡️ Security Bot – Moderazione IA con Gemini',
-    helpDesc: 'Questo bot raccoglie i **messaggi di testo degli utenti reali** (gli admin sono immuni) e li analizza con Gemini in modo **adattivo**: subito per insulti, dogpiling o menzioni ripetute, dopo una breve attesa per conversazioni piccole e comunque tramite flush di sicurezza di 2 ore. Gemini riceve il prompt di sistema, le regole del server, il contesto di risposte/menzioni e i veri nomi server/globali/utente, poi decide avvisi e timeout. Se l’API fallisce, **non si perde nulla**: i tentativi continuano finché non riesce.',
-    helpApiKey: 'Salva la chiave API Google Gemini per questo server. Va impostata una volta prima di avviare il controllo.',
-    helpPrompt: 'Apre un modulo con le tue istruzioni per l’IA: regole del server, severità della moderazione e misure da usare. L’ultimo testo salvato è già compilato.',
-    helpLogChannel: 'Imposta il canale di log per avvisi di moderazione ed errori API. Senza canale, il log viene rimosso.',
-    helpLanguage: 'Cambia permanentemente la lingua del bot (controlla anche il fuso orario del flush di sicurezza e la lingua predefinita dell’IA).',
-    helpHelp: 'Mostra questa panoramica.',
-    helpCheckNow: 'Analizza subito i messaggi già raccolti, senza attendere il flush automatico adattivo. L’opzione `user` permette di scegliere un utente che sarà moderato obbligatoriamente in questo controllo.',
-    helpAntiDelete: 'Attiva o disattiva l’anti-eliminazione: se qualcuno (non bot/webhook) elimina il proprio ultimo messaggio di un canale, il bot lo reinvia via webhook con una copia esatta del profilo (nome e avatar). Le menzioni non notificano nessuno.',
-    logModTitle: '🛡️ Moderazione IA',
-    logFieldUser: 'Utente',
-    logFieldAction: 'Misura',
-    logFieldReason: 'Motivo di Gemini',
-    logFieldMessage: 'Messaggio',
-    logActionWarn: '⚠️ Avviso',
-    logActionTimeout: '⏱️ Timeout',
-    logPrimary: '💥 Violazione principale (il bot ha risposto a questo messaggio)',
-    logNormal: 'Violazione',
-    logImmune: '🛡️ **Saltato:** Gemini voleva moderare {user}, ma gli amministratori sono sempre immuni.',
-    logBatchSize: 'Cronologia: {count} messaggi',
-    logApiTitle: '⚠️ Errore API Gemini',
-    logApiDesc: 'L’analisi di **{count} messaggi raccolti** non è riuscita.\nErrore: `{error}`\n\n🔁 Tentativo {attempt} – prossimo retry: **{retry}**.\n💾 I messaggi restano conservati e **non vengono scartati** – la raccolta continua normalmente.',
-    logNoKeyTitle: '🔑 Nessuna chiave API Gemini configurata',
-    logNoKeyDesc: '{count} messaggi raccolti attendono l’analisi. Un amministratore deve prima eseguire `/set_gemini_api_key`.',
-    logDropTitle: '🗑️ Cronologia obsoleta scartata',
-    logDropDesc: '{count} messaggi non sono potuti essere analizzati per oltre 30 giorni (guasto API persistente) e sono stati eliminati per igiene dei dati.',
-    checkNowNoKey: '🔑 Nessuna chiave API Gemini configurata. Esegui prima `/set_gemini_api_key`.',
-    checkNowEmpty: 'ℹ️ Al momento non ci sono messaggi raccolti – niente da controllare.',
-    checkNowDone: '✅ **Controllo immediato completato** ({count} messaggi analizzati). Vedi il canale di log per i risultati.',
-    checkNowPartial: '⚠️ **Controllo immediato avviato** ({count} messaggi), ma {remaining} di essi non sono stati completati (errore API) – dettagli nel canale di log, i tentativi continuano automaticamente.',
-    checkNowForcedActive: '🎯 Moderazione forzata richiesta: {user} sarà obbligatoriamente moderato in questo controllo – dettagli nel canale di log.',
-    checkNowForcedNoMsgs: '⚠️ {user} non compare nei messaggi raccolti – nessun messaggio da moderare.',
-    checkNowForcedInvalid: '⚠️ {user} è un bot o un amministratore e non può essere moderato. Scegli un membro normale.',
-    joinTitle: '👋 Security Bot è arrivato!',
-    joinDesc: 'Grazie per l’invito! Per iniziare:\n\n1️⃣ `/set_gemini_api_key` – aggiungi una chiave Google Gemini ([creala gratis](https://aistudio.google.com/apikey))\n2️⃣ `/set_prompt` – definisci regole e severità dell’IA (testo predefinito già compilato)\n3️⃣ `/set_log_channel` – scegli un canale di log\n\nDa quel momento l’IA monitora automaticamente tutti i messaggi di testo. **Tutti i comandi sono visibili solo agli amministratori.**',
-    defaultPrompt: `Modera questo server come una squadra di OP equa, gentile ma ferma.
-
-=== REGOLE ===
-- Niente insulti, odio, discriminazione o tossicità estrema
-- Niente affermazioni sessiste, razziste, omofobe o transfobiche
-- Niente spam, pubblicità, vendita di account/Nitro o link sospetti
-- Rispetto reciproco, anche quando si è in disaccordo
-- Niente contenuti pericolosi o illegali
-
-=== SEVERITÀ (né troppo morbida né troppo rigida) ===
-- NON punire mai prese in giro amichevoli, sarcasmo tra amici o autoironia
-- Parlare DI altri (es. streamer o avversari) NON è una violazione
-- Una sanzione passata da sola NON giustifica una nuova sanzione
-- Intervenire solo su violazioni reali, chiare e inequivocabili
-- Nel dubbio: preferire un avviso a un timeout
-
-=== ESCALATION (avvisi prima) ===
-- Prima violazione: sempre un avviso (warn), nessun timeout
-- Timeout solo dopo avvisi ripetuti (registro) o per violazioni gravi
-- Al massimo UN timeout per persona per analisi – le altre violazioni della stessa persona come warn
-- La violazione più grave è primary=true e riceve la durata più lunga (o uguale)
-
-=== MISURE ===
-- Violazioni lievi: warn con un consiglio amichevole
-- Insulto o provocazione chiara: warn, in caso di ripetizione timeout 5m–10m
-- Violazione ripetuta nonostante l’avviso: timeout 10m–1h
-- Discriminazione, incitamento all’odio, minacce: timeout 1d–1w
-- Contenuti pericolosi, link di phishing/truffa: timeout 1w
-- Spam/pubblicità: prima volta warn, ripetizione timeout 1h
-- Nessuna violazione: non moderare nessuno e NON scrivere nulla in chat – il bot resta in silenzio
-- Non pubblicare mai saluti, chiacchiere, messaggi di «tutto tranquillo» o aggiornamenti di stato`,
+  joinDmNoDm: {
+    de: '👋 Ich bin da. Bitte gebt mir **Administrator** und benutzt dann `/setup`.',
+    en: '👋 I am here. Please give me **Administrator** and run `/setup`.',
+    fr: '👋 Je suis là. Donnez-moi **Administrateur** puis `/setup`.',
+    es: '👋 Estoy aquí. Dadme **Administrador** y usad `/setup`.',
+    it: '👋 Sono qui. Datemi **Amministratore** e usate `/setup`.',
+    pt: '👋 Estou aqui. Dêem-me **Administrador** e usem `/setup`.',
+    ru: '👋 Я здесь. Дайте **Администратора** и запустите `/setup`.',
+    ja: '👋 参上しました。**管理者**権限を付与して `/setup` を実行してください。',
+    ko: '👋 왔습니다. **관리자** 권한을 주고 `/setup` 을 실행하세요.',
+    zh: '👋 我来了。请给我**管理员**权限并运行 `/setup`。',
   },
 };
 
-function t(key, lang = DEFAULT_LANG, vars = {}) {
-  const table = STRINGS[lang] || STRINGS[DEFAULT_LANG];
-  let text = table[key] ?? STRINGS[DEFAULT_LANG][key] ?? key;
-  for (const [k, v] of Object.entries(vars)) {
-    text = text.split(`{${k}}`).join(String(v ?? ''));
-  }
-  return text;
+function isValidLang(code) {
+  return LANGS.some((l) => l.code === code);
 }
 
-function langFromDiscord(locale) {
-  if (!locale) return DEFAULT_LANG;
-  const base = String(locale).toLowerCase().split('-')[0];
-  return LANGS[base] ? base : DEFAULT_LANG;
+function langOptions({ selected } = {}) {
+  return LANGS.map((l) => ({
+    label: `${l.flag} ${l.name}`,
+    value: l.code,
+    default: selected ? l.code === selected : false,
+  }));
 }
 
-function tzFor(lang) {
-  return LANGS[lang]?.tz || LANGS[DEFAULT_LANG].tz;
+/** Text in der gewählten Sprache (Fallback: Deutsch). */
+function t(lang, key, vars = {}) {
+  const entry = STRINGS[key];
+  const raw = entry?.[lang] ?? entry?.de ?? key;
+  return String(raw).replace(/\{(\w+)\}/g, (m, name) =>
+    vars[name] === undefined || vars[name] === null ? '' : String(vars[name])
+  );
 }
 
-function isValidLang(lang) {
-  return Boolean(LANGS[lang]);
-}
-
-module.exports = {
-  LANGS,
-  STRINGS,
-  DEFAULT_LANG,
-  t,
-  langFromDiscord,
-  tzFor,
-  isValidLang,
-};
+module.exports = { LANGS, LANG_NAMES, STRINGS, isValidLang, langOptions, t };

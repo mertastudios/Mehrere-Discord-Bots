@@ -1,323 +1,183 @@
 /**
- * Nachrichten-Sammler für den Sicherheitsbot.
+ * ============================================================================
+ *  Sammler + lokaler Vor-Filter
  *
- * - Sammelt NUR Textnachrichten von echten Nutzern (keine Bots, keine
- *   Webhooks, keine Systemnachrichten).
- * - Mitglieder mit Administrator-Berechtigung sind IMMUN: Sie werden als Kontext
- *   gesammelt, bekommen aber keine moderierbare ID und werden nie bestraft.
- * - Bilder/Anhänge werden bewusst NICHT analysiert – der Bot moderiert Text.
- *   Enthält eine Nachricht einen Anhang plus Text, wird nur der Text gesammelt
- *   und mit einem Hinweis markiert, damit die KI nicht blind urteilt.
- * - Discord-Formate (Mentions, Rollen, Kanäle, Emojis, Timestamps, Markdown)
- *   werden in lesbaren Klartext für Gemini umgewandelt.
- * - Sobald das harte Token-Budget oder die adaptive Batch-Policy anschlägt
- *   (Risikosignal, Mention-Druck/Dogpiling, kurze Ruhephase, max. Buffer-Alter),
- *   wird der Buffer als Batch mit IDs ab 1 verpackt und die Analyse angestoßen.
- *   Der Scheduler behält zusätzlich den 2-Stunden-Flush als Sicherheitsnetz.
+ *  Es werden nur Textnachrichten echter Nutzer gesammelt (keine Bots, keine
+ *  Webhooks, keine Systemnachrichten). Team-Nachrichten (Owner/Admin/immune
+ *  Rollen) kommen als Kontext mit, werden aber nie moderiert.
+ *
+ *  Der lokale Filter kostet KEINE Tokens und läuft bei jeder Nachricht:
+ *  Er erkennt grobe Signale (Beleidigungen, Drohungen, Invite-Links, Spam,
+ *  Mention-Druck). Schlägt er an, geht der Puffer sofort zur Prüfung –
+ *  ansonsten wird gesammelt und in Ruhe gebündelt geprüft.
+ * ============================================================================
  */
 
-const { PermissionFlagsBits } = require('discord.js');
-const { estimateTokens } = require('./gemini');
-const { MAX_BUFFER_MESSAGES } = require('./store');
-const { shouldFlushBuffer } = require('./batch-policy');
+const SLUR_AND_INSULT = [
+  // Beleidigungen (de/en) – bewusst grob, die KI urteilt danach genau
+  /\b(hurensohn|hurensöhne|wichser|arschloch|fotze|missgeburt|spast|spasti|behinderter|idiot|vollidiot|depp|trottel)\b/i,
+  /\b(fick|fickt|ficke|verpiss|halt die fresse|halt deine fresse|fresse halten)\b/i,
+  /\b(idiot|moron|retard|bastard|asshole|bitch|whore|slut|cunt|faggot|nigg(er|a))\b/i,
+  /\b(kys|kill yourself|you should die|drop dead|darfst dich umbringen)\b/i,
+];
+const THREATS = [
+  /\b(ich bring dich um|ich ficke dich|ich mach dich fertig|ich finde dich|pass auf dich auf|du bist tot|bist du tot|hoffe du stirbst|verrecke|stirb)\b/i,
+  /\b(i will kill you|i will find you|you are dead|i hope you die|watch your back)\b/i,
+  /\b(nudes?|nacktbilder|schick nackt|sex(t)?ing)\b/i,
+  /\b(adresse|handynummer|wohnort)\b.*\b(raus|sag|post)\b/i,
+];
+const SCAM = [
+  /(discord(?:app)?\.(?:com|gg)\/gift|steamcommunity\.com\/gift|free-?nitro|nitro-?gift|csgo-?skins?\.)/i,
+  /(bit\.ly|tinyurl|shorturl|linktr\.ee)\/[\w-]*(nitro|gift)/i,
+  /\b(crypto|investment|verdopple|gewinnspiel)\b.*\b(link|klick|sende|dm)\b/i,
+];
+const SPAM = [
+  /(?:discord\.gg|discord\.com\/invite)\/[\w-]+/i,
+  /@everyone|@here/i,
+];
 
-const ATTACHMENT_NOTE = ' [Anhang war beigelegt – wird nicht geprüft]';
-
-/** Konfiguriertes Token-Budget pro Gemini-Anfrage (Default 15000). */
-function maxInputTokens(env) {
-  const raw = Number.parseInt(String(env?.('SECURITY_GEMINI_MAX_INPUT_TOKENS', '') || ''), 10);
-  return Number.isFinite(raw) && raw >= 2000 ? raw : 15000;
+/** Ist die Nachricht inhaltlich überhaupt prüfbar? */
+function isCollectable(message, { botId } = {}) {
+  if (!message?.author) return false;
+  if (message.author.bot) return false;
+  if (message.webhookId) return false;
+  if (message.system) return false;
+  if (botId && message.author.id === botId) return false;
+  const content = String(message.content || '').trim();
+  if (!content && !(message.attachments?.size > 0)) return false;
+  if (content.length > 2000) return false;
+  return true;
 }
 
-/**
- * Entfernt Discord-Markdown-Steuerzeichen, damit Gemini den ROHtext sieht und
- * nichts als Formatierung fehlinterpretiert (auch nicht unser "| "-Logformat).
- * Ein führendes ">" oder "#" wird escaped, damit Nutzer nicht aussehen wie
- * Zitate/Überschriften.
- */
-function escapeDiscordMarkdown(text) {
-  return String(text)
-    .replace(/[\\*_`~|]/g, (c) => `\\${c}`)
-    .replace(/^(\s*)([>#])/gm, (m, ws, ch) => `${ws}\\${ch}`);
+/** Soll dieser Kanal überwacht werden? Leere Liste = alle Kanäle. */
+function isMonitored(channelId, cfg) {
+  const list = cfg?.channels || [];
+  if (!list.length) return true;
+  return list.includes(String(channelId));
 }
 
-/** Auflösbare Anzeigename eines Nutzers (Member-Cache, sonst Fetch, sonst Fallback). */
-async function displayNameOf(guild, userId, fallbackName) {
-  const identity = await identityOf(guild, userId, { fallbackName });
-  return identity.displayName || identity.serverNickname || identity.globalName || identity.username || fallbackName || `Nutzer ${userId}`;
-}
-
-function cleanName(value, max = 100) {
-  if (value == null) return null;
-  const out = String(value).replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return out ? out.slice(0, max) : null;
-}
-
-function identityFromMemberOrUser(member, user, fallbackId, fallbackName) {
-  const u = user || member?.user || null;
-  const id = cleanName(u?.id || member?.id || fallbackId, 40);
-  const serverNickname = cleanName(member?.nickname || null);
-  const displayName = cleanName(member?.displayName || serverNickname || u?.globalName || u?.username || fallbackName || (id ? `Nutzer ${id}` : null));
+/** Kompakte Datensatz-Form (wird gepuffert und gespeichert). */
+function toRecord(message, { immune = false, botId = null } = {}) {
+  const member = message.member;
+  const author = message.author;
+  const guildId = message.guildId || message.guild?.id || '';
+  const channelId = message.channelId || message.channel?.id || '';
   return {
-    id,
-    displayName,
-    serverNickname,
-    globalName: cleanName(u?.globalName || u?.global_name || null),
-    username: cleanName(u?.username || fallbackName || null),
+    key: `${guildId}:${channelId}:${message.id}`,
+    guildId: String(guildId),
+    channelId: String(channelId),
+    channelName: message.channel?.name || 'kanal',
+    messageId: String(message.id),
+    authorId: String(author?.id || message.authorId || ''),
+    authorName: member?.displayName || author?.globalName || author?.username || message.authorName || 'Unbekannt',
+    content: String(message.content || '').slice(0, 1500),
+    createdAt: Number(message.createdTimestamp || message.createdAt) || Date.now(),
+    immune: Boolean(immune),
+    botId: botId || null,
+    hasAttachment: Boolean(message.attachments?.size),
+    mentions: [...(message.mentions?.users?.values?.() || [])].map((u) => ({
+      id: String(u.id),
+      name: message.guild?.members?.cache?.get(u.id)?.displayName || u.globalName || u.username || u.id,
+    })),
+    reply: message.reference?.messageId
+      ? { messageId: String(message.reference.messageId), channelId: String(message.reference.channelId || message.channelId) }
+      : null,
   };
 }
 
-/** Vollständige öffentliche Discord-Identität: Server-Name/Nick + globaler Name + Username. */
-async function identityOf(guild, userId, { user = null, member = null, fallbackName = null } = {}) {
-  let resolvedMember = member || null;
-  const id = String(userId || user?.id || member?.id || '').trim();
-  try {
-    if (!resolvedMember && guild && id) {
-      resolvedMember = guild.members?.cache?.get?.(id) || null;
-      if (!resolvedMember?.displayName && typeof guild.members?.fetch === 'function') {
-        resolvedMember = await guild.members.fetch(id).catch(() => resolvedMember || null);
-      }
-    }
-  } catch {}
-  return identityFromMemberOrUser(resolvedMember, user, id, fallbackName);
-}
+/** Lokale Risikosignale einer Nachricht (0 Tokens, nur Kandidatenerkennung). */
+function localSignals(record) {
+  const text = String(record?.content || '');
+  const signals = [];
+  const push = (kind, weight) => signals.push({ kind, weight, messageId: record.messageId });
 
-function valuesOfCollection(collection) {
-  if (!collection) return [];
-  if (typeof collection.values === 'function') return [...collection.values()];
-  if (Array.isArray(collection)) return collection;
-  if (typeof collection === 'object') return Object.values(collection);
-  return [];
-}
+  if (SLUR_AND_INSULT.some((re) => re.test(text))) push('beleidigung', 45);
+  if (THREATS.some((re) => re.test(text))) push('drohung', 60);
+  if (SCAM.some((re) => re.test(text))) push('scam', 55);
+  if (SPAM.some((re) => re.test(text))) push('spam', 25);
 
-async function mentionIdentitiesOf(msg) {
-  const guild = msg.guild;
-  const byId = new Map();
+  // Schreien (viele Großbuchstaben)
+  const letters = text.replace(/[^A-Za-zÄÖÜäöüß]/g, '');
+  if (letters.length >= 12 && (text.match(/[A-ZÄÖÜ]/g)?.length || 0) / letters.length > 0.7) push('schreien', 12);
+  // Wand aus Zeichen / Flood
+  if (/(.)\1{9,}/.test(text)) push('flood', 15);
 
-  const add = async (id, user = null, member = null, fallbackName = null) => {
-    if (!id || byId.has(String(id))) return;
-    const identity = await identityOf(guild, id, { user, member, fallbackName });
-    if (identity?.id) byId.set(identity.id, identity);
-  };
-
-  for (const member of valuesOfCollection(msg.mentions?.members)) {
-    await add(member?.id || member?.user?.id, member?.user, member, member?.displayName);
-  }
-  for (const user of valuesOfCollection(msg.mentions?.users)) {
-    await add(user?.id, user, null, user?.globalName || user?.username);
-  }
-  for (const match of String(msg.content || '').matchAll(/<@!?(\d{15,21})>/g)) {
-    await add(match[1]);
-  }
-
-  return [...byId.values()].slice(0, 20);
-}
-
-async function replyMetaOf(msg) {
-  const ref = msg.reference || null;
-  const messageId = ref?.messageId || ref?.message_id || null;
-  if (!messageId) return null;
-
-  const meta = {
-    messageId: String(messageId),
-    channelId: String(ref.channelId || ref.channel_id || msg.channelId || msg.channel?.id || ''),
-    guildId: String(ref.guildId || ref.guild_id || msg.guildId || msg.guild?.id || ''),
-    author: null,
-    content: null,
-    createdAt: null,
-  };
-
-  // Wenn Discord die Referenz schon mitsendet/gecached hat, nutzen wir sie;
-  // sonst versuchen wir einen einzelnen Fetch. Scheitert er, bleiben zumindest
-  // IDs erhalten, damit Gemini Reply-Ketten erkennt.
-  let referenced = ref.cachedMessage || msg.reference?.cachedMessage || null;
-  const sameChannel = !meta.channelId || meta.channelId === String(msg.channelId || msg.channel?.id || '');
-  if (!referenced && sameChannel && typeof msg.channel?.messages?.fetch === 'function') {
-    referenced = await msg.channel.messages.fetch(String(messageId)).catch(() => null);
-  }
-
-  if (referenced) {
-    const author = referenced.author || null;
-    meta.author = await identityOf(msg.guild, author?.id || referenced.member?.id, {
-      user: author,
-      member: referenced.member,
-      fallbackName: referenced.member?.displayName || author?.globalName || author?.username,
-    });
-    const refText = referenced.content ? await humanizeContent(referenced, referenced.content) : '';
-    meta.content = refText ? refText.slice(0, 500) : null;
-    meta.createdAt = Number(referenced.createdTimestamp) || null;
-  }
-
-  return meta;
+  return signals;
 }
 
 /**
- * Wandelt alle Discord-Sonderformate in lesbaren Klartext um:
- * <@id>/<@!id> → Anzeigename, <@&id> → @Rolle, <#id> → #kanal,
- * <:name:id> → :name:, <t:unix:F> → Datum, Anhänge → Hinweis.
+ * Risiko des gesamten Puffers: lokale Signale + Wiederholungen + Mention-Druck
+ * (mehrere Nachrichten gegen dieselbe Person).
  */
-async function humanizeContent(msg, text) {
-  const guild = msg.guild;
-  let out = String(text || '');
+function bufferRisk(records, { windowMs = 10 * 60_000, mentionRepeatLimit = 3 } = {}) {
+  const signals = [];
+  for (const record of records) signals.push(...localSignals(record));
 
-  const replacements = [];
-  for (const match of out.matchAll(/<@!?(\d{15,21})>/g)) {
-    replacements.push([match[0], await displayNameOf(guild, match[1])]);
+  // Doppelte Nachrichten (Spam)
+  const seen = new Map();
+  for (const r of records) {
+    const key = `${r.authorId}:${String(r.content).toLowerCase().slice(0, 80)}`;
+    seen.set(key, (seen.get(key) || 0) + 1);
   }
-  for (const match of out.matchAll(/<@&(\d{15,21})>/g)) {
-    const role = guild?.roles?.cache?.get?.(match[1]);
-    replacements.push([match[0], `@${role?.name || 'geloeschte-rolle'}`]);
-  }
-  for (const match of out.matchAll(/<#(\d{15,21})>/g)) {
-    const channel = guild?.channels?.cache?.get?.(match[1]);
-    replacements.push([match[0], `#${channel?.name || 'geloeschter-kanal'}`]);
-  }
-  for (const match of out.matchAll(/<a?:(\w{2,32}):\d{15,21}>/g)) {
-    replacements.push([match[0], `:${match[1]}:`]);
-  }
-  for (const match of out.matchAll(/<t:(\d+)(?::[tTdDfFR])?>/g)) {
-    const ts = Number(match[1]);
-    replacements.push([
-      match[0],
-      Number.isFinite(ts)
-        ? `${new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 16)} UTC`
-        : match[0],
-    ]);
+  for (const [key, count] of seen) {
+    if (count >= 3) signals.push({ kind: 'wiederholung', weight: 20, key });
   }
 
-  for (const [raw, human] of replacements) {
-    out = out.split(raw).join(human);
+  // Mention-Druck auf dieselbe Person
+  const now = records.length ? records[records.length - 1].createdAt : Date.now();
+  const pressure = new Map();
+  for (const r of records) {
+    if (now - r.createdAt > windowMs) continue;
+    for (const m of r.mentions || []) {
+      if (!pressure.has(m.id)) pressure.set(m.id, { count: 0, name: m.name });
+      pressure.get(m.id).count += 1;
+    }
+  }
+  for (const [id, info] of pressure) {
+    if (info.count >= mentionRepeatLimit) signals.push({ kind: 'mention_druck', weight: 18, targetId: id, count: info.count });
   }
 
-  const hasAttachments = Boolean(
-    msg.attachments && typeof msg.attachments.size === 'number' && msg.attachments.size > 0
-  );
-  if (hasAttachments) out += ATTACHMENT_NOTE;
+  const score = Math.min(100, signals.reduce((sum, s) => sum + s.weight, 0));
+  return { score, signals };
+}
 
-  return escapeDiscordMarkdown(out).trim();
+function recentCount(records, windowMs = 90_000, now = Date.now()) {
+  return records.filter((r) => now - r.createdAt <= windowMs).length;
 }
 
 /**
- * Klassifiziert eine Nachricht für das Sammeln.
- * Rückgabe: { collect: boolean, isAdmin: boolean }
- *
- * - Echte User mit Text werden gesammelt.
- * - Administratoren werden EBENFALLS gesammelt – aber nur als Kontext: Ihre
- *   Nachrichten bekommen im Batch keine ID, sind für Gemini als "ADMIN – immun"
- *   markiert und können deshalb nie moderiert werden.
+ * Entscheidet, ob der Puffer jetzt geprüft werden soll.
+ *  - Risikosignal → sofort
+ *  - voller Puffer → sofort
+ *  - sonst: kurze Ruhephase nach dem letzten Beitrag
  */
-async function classifyMessage({ ctx, msg }) {
-  const no = { collect: false, isAdmin: false };
-  if (!msg?.guild || msg.system) return no;
-  if (msg.author?.bot || msg.webhookId) return no;
-  if (ctx.client?.user && msg.author?.id === ctx.client.user.id) return no;
-  if (!String(msg.content || '').trim()) return no; // Nur-Emoji/Sticker/Bilder -> kein Text
+function shouldAnalyse(records, { score, now = Date.now(), limits = {} } = {}) {
+  const maxBatch = limits.maxBatch ?? 40;
+  const minBatch = limits.minBatch ?? 4;
+  const quietMs = limits.quietMs ?? 30_000;
+  const maxAgeMs = limits.maxAgeMs ?? 180_000;
 
-  let member = msg.member;
-  if (!member && typeof msg.guild.members?.fetch === 'function') {
-    member = await msg.guild.members.fetch(msg.author.id).catch(() => null);
-  }
-  const isAdmin = Boolean(member?.permissions?.has?.(PermissionFlagsBits.Administrator));
-  return { collect: true, isAdmin };
-}
+  if (!records.length) return { run: false, reason: 'leer' };
+  if (score >= 40) return { run: true, reason: 'risiko', priority: true };
+  if (records.length >= maxBatch) return { run: true, reason: 'voll' };
 
-/** Soll die Nachricht gesammelt werden? (Echte User mit Text – inkl. Admins als Kontext) */
-async function shouldCollect({ ctx, msg }) {
-  return (await classifyMessage({ ctx, msg })).collect;
-}
-
-/**
- * Haupt-Einstieg für jedes messageCreate-Event.
- * Sammelt die Nachricht und stößt bei vollem Token-Budget eine Analyse an.
- */
-async function handleIncoming({ ctx, msg }) {
-  try {
-    const guildId = String(msg?.guild?.id || '');
-    if (!guildId) return;
-
-    const cfg = ctx.store.getGuild(guildId);
-    // Ohne Gemini-Key wird nichts gesammelt (keine sinnlosen Chatdaten speichern).
-    if (!cfg?.geminiApiKey) return;
-
-    const { collect, isAdmin } = await classifyMessage({ ctx, msg });
-    if (!collect) return;
-
-    const [text, authorMeta, mentionsMeta, replyMeta] = await Promise.all([
-      humanizeContent(msg, msg.content),
-      identityOf(msg.guild, msg.author.id, {
-        user: msg.author,
-        member: msg.member,
-        fallbackName: msg.member?.displayName || msg.author.globalName || msg.author.username,
-      }),
-      mentionIdentitiesOf(msg),
-      replyMetaOf(msg),
-    ]);
-    if (!text) return;
-
-    const payload = {
-      isAdmin,
-      channelId: String(msg.channelId || msg.channel?.id || ''),
-      channelName: msg.channel?.name || 'unbekannt',
-      authorId: String(msg.author.id),
-      authorName: authorMeta?.displayName || msg.member?.displayName || msg.author.globalName || msg.author.username || 'Unbekannt',
-      authorMeta,
-      mentionsMeta,
-      replyMeta,
-      content: text,
-      discordMessageId: msg.id,
-      sentAt: Number(msg.createdTimestamp) || Date.now(),
-    };
-
-    if (!ctx.store.addBufferMessage(guildId, payload)) {
-      // Buffer am Limit -> sofort als Batch abschieben und erneut versuchen.
-      const batch = ctx.store.buildBatchFromBuffer(guildId);
-      if (batch) void dispatchBatch(ctx, guildId);
-      ctx.store.addBufferMessage(guildId, payload);
-      return;
-    }
-
-    const budget = maxInputTokens(ctx.env);
-    const buffer = ctx.store.getBuffer(guildId);
-    const bufferTokens = ctx.store.getBufferTokenEstimate(guildId, estimateTokens);
-    const bufferCount = buffer.length;
-    const policy = shouldFlushBuffer({
-      buffer,
-      env: ctx.env,
-      estimateTokensFn: estimateTokens,
-      newestMessage: payload,
-    });
-
-    if (bufferTokens >= budget || bufferCount >= MAX_BUFFER_MESSAGES || policy.flush) {
-      const batch = ctx.store.buildBatchFromBuffer(guildId);
-      if (batch) {
-        ctx.logger?.info?.(
-          `[security-bot] Schneller Analyse-Flush für Gilde ${guildId}: ` +
-            `${bufferCount} Nachrichten, ~${bufferTokens} Tokens, Grund=${policy.reason || 'hard_limit'}`
-        );
-        void dispatchBatch(ctx, guildId);
-      }
-    }
-  } catch (err) {
-    ctx.logger?.warn?.('[security-bot] Fehler beim Sammeln einer Nachricht:', err?.message || err);
-  }
-}
-
-/** Leichte Indirektion, damit Tests dispatchen patchen können. */
-function dispatchBatch(ctx, guildId) {
-  const { processGuild } = require('./moderator');
-  return processGuild(ctx, guildId);
+  const last = records[records.length - 1].createdAt;
+  const age = now - records[0].createdAt;
+  if (records.length >= minBatch && now - last >= quietMs) return { run: true, reason: 'ruhe' };
+  if (age >= maxAgeMs) return { run: true, reason: 'alter' };
+  return { run: false, reason: 'sammeln' };
 }
 
 module.exports = {
-  handleIncoming,
-  shouldCollect,
-  classifyMessage,
-  humanizeContent,
-  displayNameOf,
-  identityOf,
-  mentionIdentitiesOf,
-  replyMetaOf,
-  escapeDiscordMarkdown,
-  maxInputTokens,
-  ATTACHMENT_NOTE,
+  SLUR_AND_INSULT,
+  THREATS,
+  SCAM,
+  SPAM,
+  isCollectable,
+  isMonitored,
+  toRecord,
+  localSignals,
+  bufferRisk,
+  recentCount,
+  shouldAnalyse,
 };

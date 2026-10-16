@@ -1,340 +1,142 @@
-# 🛡️ Security Bot
+# 🛡️ Security Bot (v2)
 
-Ein vollautomatischer **KI-Sicherheitsbot** für Discord, angetrieben von **Google Gemini** –
-standardmäßig über den von Google gepflegten Alias `gemini-flash-lite-latest`
-(zeigt immer auf die aktuell günstigste, verfügbare Flash-Lite-Generation; kostenloser
-Free-Tier verfügbar). Wird ein Modell von Google mit „nicht mehr verfügbar" (404)
-abgelehnt, weicht der Bot **automatisch** auf das nächste Modell einer Fallback-Kette
-aus – ein einzelnes abgeschaltetes Modell blockiert die Moderation also nie wieder
-tagelang.
+KI-Moderation für Discord – angetrieben von **Groq** (`openai/gpt-oss-120b` für
+Urteile, `openai/gpt-oss-20b` für die günstige Vorprüfung).
 
-Der Bot verhält sich wie ein zuverlässiger **OP-Moderator**: Er sammelt diskret alle
-Textnachrichten echter Nutzer und analysiert sie adaptiv: bei klaren Risikosignalen sofort,
-nach kurzen ruhigen Verläufen nach wenigen Minuten und weiterhin spätestens per
-**2-Stunden-Sicherheits-Flush**. Er schickt den Verlauf gemeinsam mit euren Server-Regeln an Gemini und
-setzt dessen Entscheidungen um – **Warnung oder Timeout**, immer mit einer persönlichen,
-begründeten Nachricht an den Nutzer, direkt als Antwort auf den schwerwiegendsten Verstoß.
-
-**Der Bot chattet nicht.** Er schreibt ausschließlich dann etwas in den Chat, wenn er
-tatsächlich jemanden moderiert. Gibt es keinen Verstoß, bleibt er komplett still.
+**Es gibt genau einen Befehl: `/setup`.** Alles andere läuft automatisch.
 
 ---
 
-## 🌟 Highlights
+## Was der Bot macht
 
-- **Gemini-Powered Context-Moderation**: Gemini bekommt den Chat-Verlauf **mit Kontext**
-  (chronologisch, nach Kanälen gruppiert) und entscheidet selbstständig – auch mehrere
-  Nutzer gleichzeitig. Der Verlauf enthält jetzt Reply-Ketten, Mention-Zielpersonen sowie
-  Server-Anzeigename/Nickname, globalen Anzeigenamen und Username, damit Spitznamen und
-  öffentliche/private Identitäten besser zusammengeführt werden.
-- **Selbstaktualisierendes Standardmodell**: `gemini-flash-lite-latest` (überschreibbar
-  per `SECURITY_GEMINI_MODEL`) – ein von Google gepflegter Alias, der bei künftigen
-  Modell-Ablösungen (z. B. 2.5 → 3.x) automatisch mitzieht, ohne dass ein Code-Deploy
-  nötig ist. Lehnt Google ein Modell trotzdem mit 404 ab, probiert der Bot **innerhalb
-  desselben Aufrufs** automatisch die nächsten Modelle einer Fallback-Kette durch.
-  Gesteuertes JSON-Antwortformat via Structured Output, Thinking & Safety-Filter
-  bewusst deaktiviert (ein Moderationsbot muss Toxizität ja lesen dürfen).
-- **Nichts geht verloren**: Bei API-Fehlern oder Rate-Limits bleibt der gesammelte
-  Verlauf **vollständig erhalten**, neue Nachrichten sammeln sich derweil weiter, und
-  der Bot wiederholt die Analyse mit wachsendem Abstand (2min → 5min → 15min → … → max. 6h).
-  Zusätzlich schützt ein lokaler Gemini-Limiter vor dauerhaftem 429-Spam (RPM/RPD konfigurierbar,
-  `Retry-After` wird beachtet).
-- **Adaptive, schnelle Batches**: Der Bot wartet nicht mehr stur auf ein riesiges
-  Token-Limit oder den nächsten 2-Stunden-Slot. Er baut Batches früher bei
-  Risikosignalen (z. B. Beleidigung, Hate/Slur, RIP-/Todessprache), bei wiederholten
-  Mentions derselben Zielperson, bei Dogpiling-Mustern, nach kurzer Ruhephase oder
-  nach wenigen Minuten Buffer-Alter. Der 2-Stunden-Flush bleibt nur als Sicherheitsnetz
-  erhalten (inkl. Nachholen verpasster Slots nach Neustart/Deploy).
-- **Stille statt Small-Talk**: Ohne Verstoß postet der Bot **gar nichts**. Ein früheres
-  optionales Feld für lockere Chat-Antworten ist entfernt – es führte dazu, dass der
-  Sicherheitsbot ohne Anlass Sachen wie „Hey zusammen! Hier ist alles entspannt 👋"
-  schrieb, statt zu moderieren.
-- **Admins sind immun – aber Kontext bleibt erhalten**: Nachrichten von Mitgliedern mit
-  Administrator-Berechtigung werden **als Kontext** mitgesammelt, damit Gemini das
-  Gespräch versteht (z. B. worauf ein Nutzer reagiert). Im Verlauf stehen sie jedoch
-  **ohne ID** als `[ADMIN – immun]`, im Strafenregister als `IMMUN (Administrator)` –
-  Gemini kann sie damit gar nicht referenzieren. Beim Anwenden wird der Admin-Status
-  zusätzlich ein zweites Mal live geprüft. Batches, die nur Admin-Nachrichten
-  enthalten, werden ohne API-Aufruf verworfen.
-- **Nur Text**: Bilder und Anhänge werden bewusst nicht analysiert – der Bot moderiert
-  Text. Anhänge werden im Verlauf nur als Hinweis markiert.
-- **Sauber lesbarer Verlauf für die KI**: Mentions → Anzeigenamen, Rollen/Kanäle/Emojis/
-  Timestamps → Klartext, Markdown escaped, Nachrichten-IDs zählen pro Analyse von 1.
-  Zusätzlich stehen bei Nachrichten optionale Kontextzeilen `Namen/Aliase`, `Antwort auf`
-  und `Erwähnt/Zielpersonen` direkt über dem Nachrichtentext.
-- **Strafenregister**: Gemini sieht pro Teilnehmer, wie oft er in den letzten **20 Tagen**
-  moderiert wurde – Eskalation inklusive.
-- **Warnungen zuerst**: Erste Verstöße werden grundsätzlich nur verwarnt. Timeouts gibt es
-  erst nach wiederholten Warnungen (Strafenregister) oder bei schweren Verstößen (Hass,
-  Diskriminierung, Drohungen, Phishing/Betrug).
-- **Max. 1 Timeout pro Person**: Pro Analyse kann jede Person höchstens **einmal** getimeoutet
-  werden. Weitere Verstöße derselben Person werden automatisch zu Warnungen herabgestuft –
-  das garantiert der Code, unabhängig davon, was Gemini liefert.
-- **Ausführlich begründete Moderations-Nachrichten**: Die persönliche Nachricht von Gemini
-  (`personal_message`) ist sauber im 4-Absätze-Format strukturiert:
-  1. Anrede & Einleitung (`Hallo {USER}, als KI-Moderationssystem dieses Servers...`)
-  2. Konkreter Verstoß mit *kursiven Zitaten* (`*„...“*`), verletzter Regel und Auswirkung auf das Chatklima
-  3. Hervorgehobene Maßnahme (`**Maßnahme:** \`VERWARNUNG\`` bzw. `**Maßnahme:** \`TIMEOUT (1h)\``)
-  4. Begründung der Maßnahme (**erster Verstoß** fett hervorheben bzw. Bezug auf Strafenregister bei Wiederholung) und deeskalierender Verhaltenshinweis.
-  Dafür ist auch das Output-Token-Budget der Gemini-Anfrage auf 8.192 erhöht.
-- **Zwangsmoderation per Befehl**: `/security_check_now` hat die optionale Auswahl `user` –
-  ein Nutzer, der bei dieser Prüfung **zwingend** moderiert werden soll. Diese Admin-Anordnung
-  wird als verbindliche Direktive in den System-Prompt eingebaut („ZWINGENDE MODERATION“) und
-  überlebt sogar Retries desselben Batches. Bots und Administratoren können nicht gewählt
-  werden (die Admin-Immunität bleibt doppelt geschützt).
-- **Anti-Delete (optional)**: Mit `/set_anti_delete_messages` (Auswahl `true`/`false`)
-  aktivierbar. Löscht ein echter Nutzer (keine Bots, keine Webhooks) seine eigene **letzte
-  Nachricht** eines Kanals, sendet der Bot sie per Webhook mit **exakter Profil-Kopie**
-  (Anzeigename & Avatar des Verfassers) erneut – inklusive Anhängen. Erwähnungen pingen
-  dabei grundsätzlich niemanden (Ghost-Ping-Schutz). Wurde die Nachricht zwischenzeitlich
-  überholt (sie ist nicht mehr die letzte im Kanal), bleibt der Bot still.
-- **Fair & deeskalierend, aber mobbing-sensibel**: Harmlose Jokes, Sarkasmus, Insider
-  und freundschaftliche Frotzeleien bleiben ausdrücklich geschützt. Gleichzeitig fordert
-  der System-Prompt Gemini dazu auf, den gesamten Verlauf auf wiederholtes Pingen,
-  Nachtreten, RIP-/Todessprüche über echte Mitglieder, öffentliche Privatstreits und
-  Dogpiling gegen dieselbe Zielperson zu prüfen.
-- **10 Sprachen**: Deutsch, Englisch, Französisch, Spanisch, Portugiesisch, Russisch,
-  Japanisch, Koreanisch, Chinesisch, Italienisch.
-- **Turso DB & RAM-First**: Nutzt dieselbe Turso-Datenbank wie der XP-Bot (neue,
-  getrennte Tabellen `secgem_*`), mit Dirty-Tracking, Backup-Intervall und lokalem
-  Datei-Fallback – Batches & Buffer überleben Neustarts.
+1. **Sammeln** – Textnachrichten echter Nutzer in den überwachten Kanälen
+   (Team-/Admin-Nachrichten kommen nur als Kontext mit und sind immun).
+2. **Lokaler Filter (kostenlos)** – Beleidigungen, Drohungen, Scam-Links, Spam,
+   Mention-Druck. Bei einem Treffer geht es sofort weiter, sonst wird gebündelt.
+3. **Vorprüfung** (`gpt-oss-20b`, ~1.000 Token) – „Lohnt sich ein genauer Blick?“
+   Unter der Schwelle: Puffer verwerfen, keine weiteren Kosten.
+4. **Urteil** (`gpt-oss-120b`) – striktes JSON: Maßnahme, Regeln-ID, Begründung,
+   fertige Nachricht an den Nutzer, Konfidenz.
+5. **Ausführen** – Warnung/Timeout/Kick/Ban (nur was in Schritt 5 erlaubt wurde),
+   Ping-Antwort im Kanal, DM an den Nutzer, Eintrag ins Strafregister,
+   Meldung ins Log – mit 👍/👎 und „Neuer Auftrag“.
+
+Ohne Verstoß ist der Bot **komplett still**.
 
 ---
 
-## 📋 Slash-Commands (alle ausschließlich für Administratoren)
+## `/setup` – die 7 Schritte
 
-| Befehl | Beschreibung |
-|---|---|
-| `/set_gemini_api_key [key]` | Hinterlegt den Google Gemini API-Key für diesen Server (wird live bei Google geprüft). `remove` löscht den Key. Keys: [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `/set_prompt` | Öffnet ein **Formular** für die KI-Anweisungen: Server-Regeln, wie streng moderiert wird und welche Maßnahmen Gemini wie einsetzt. Der Standardtext (oder dein letzter Text) ist bereits eingetragen. Leer absenden = zurücksetzen auf Standard. |
-| `/set_log_channel [channel]` | Setzt den Log-Kanal, in den der Bot Moderations-Hinweise, API-Fehler und Meldungen sendet. Ohne Kanal-Angabe wird der Log-Kanal entfernt. |
-| `/set_anti_delete_messages [enabled:true/false]` | Schaltet **Anti-Delete** ein oder aus. Aktiv: Löscht jemand (kein Bot/Webhook) seine eigene letzte Nachricht eines Kanals, wird sie per Webhook mit exakter Profil-Kopie (Name & Avatar) erneut gesendet. |
-| `/set_language` | Ändert die Botsprache dauerhaft (steuert auch die Zeitzone des Sicherheits-Flushs & die Standardsprache der KI-Antworten). |
-| `/security_check_now [user]` | Wertet die aktuell gesammelten Nachrichten **sofort** aus – ohne auf den adaptiven Auto-Flush zu warten. Stellt auch bereits wartende Retry-Batches (z. B. nach einem behobenen API-Fehler) sofort fällig. Mit der optionalen Auswahl `user` wird ein Nutzer bestimmt, der bei dieser Prüfung **zwingend moderiert** werden soll (Admin-Anordnung im System-Prompt; Bots/Admins nicht wählbar). |
-| `/security_action [user] [hinweis]` | **Verdeckte KI-Moderation.** Der Bot liest die **letzten ~200 Nachrichten** des Mitglieds live aus der Kanalhistorie, zeigt sie in einem **seitenweisen Mehrfach-Auswahlmenü** (25 Optionen pro Seite – die Auswahl bleibt beim Blättern erhalten) und schickt alle markierten Nachrichten gemeinsam an Gemini. Gemini sucht sich davon **selbst den schwersten Verstoß** heraus, entscheidet über Verwarnung/Timeout und begründet öffentlich – so, als hätte der Bot den Verstoß beim Routine-Scan selbst gefunden. Hat das Mitglied **nichts geschrieben**, bricht der Befehl ab. Optional `hinweis`: interner Kontext für die KI, der **nie** im Chat auftaucht. |
-| `/security_ai_order` | **Freier KI-Auftrag zum gesamten Chatverlauf.** Formular mit *Was soll die KI tun?*, *Warum?* (Begründung/Hintergrund) und optionalem Fokus. Der Bot schickt Auftrag + gesammelten **und** live nachgelesenen Verlauf an Gemini und setzt die Maßnahmen um. Auftrag und Auftraggeber bleiben intern. |
-| `/security_status` | Konfiguration, Warteschlange und Betriebszustand auf einen Blick. |
-| `/help` | Übersicht aller Befehle mit klickbaren Mentions. |
+| # | Schritt | Besonderheit |
+|---|---|---|
+| 1 | Sprache | 10 Sprachen, sofort umgestellt |
+| 2 | Kanäle | Mehrfachauswahl, „Alle auswählen“, leere Liste = alle Kanäle |
+| 3 | Immune Rollen | Owner, Admins und Rollen über der Bot-Rolle sind automatisch immun |
+| 4 | Regelwerk | selbst eingeben · überspringen · aus einem Kanal importieren (genau **eine** Nachricht, Text wird aus Embeds/Containern geholt) – die **Discord-Systemregeln sind immer dabei** |
+| 5 | KI-Anweisungen | freier Text (bis 2.000 Zeichen) + Häkchen für Timeouts/Kicks/Bans (Verwarnen ist Pflicht) |
+| 6 | Log-Kanal | selbst anlegen lassen oder auswählen; bekommt automatisch die richtigen Rechte |
+| 7 | Groq-API-Key | wird per Formular eingegeben und **live getestet** |
+
+**Verhalten:** Ist noch nicht alles eingerichtet, merkt sich der Bot den Stand
+(auch über Neustarts) und macht beim nächsten Aufruf genau dort weiter – zurück
+geht es immer. Ist alles fertig, startet `/setup` wieder bei Schritt 1 mit allen
+Werten zum freien Vor- und Zurückspringen.
 
 ---
 
-## 🧠 Wie die Moderation funktioniert
+## Feste Regeln des Bots
 
-1. **Sammeln**: Jede Textnachricht echter Nutzer (ohne Bots/Webhooks) landet im
-   Buffer – mit Kanal, Anzeigename, Nutzer-ID und Zeitstempel. Zusätzlich speichert
-   der Bot öffentliche Discord-Identität (Server-Anzeigename/-Nickname, globaler Name,
-   Username), erwähnte Zielpersonen und Reply-Kontext mit kurzem Textauszug.
-   Admin-Nachrichten werden als `isAdmin` markiert (reiner Kontext).
-2. **Batch bauen**: Sobald das harte Token-Budget erreicht ist (Standard **15.000 Token** ≈
-   45.000 Zeichen, einstellbar über `SECURITY_GEMINI_MAX_INPUT_TOKENS`) oder die adaptive
-   Policy anschlägt, werden alle gesammelten Nachrichten zu einem Batch mit **IDs ab 1**
-   verpackt (Admin-Nachrichten bekommen **keine ID**). Die adaptive Policy löst u. a.
-   bei Risikosignalen, Dogpiling-/Mention-Druck, nach kurzer Ruhephase oder nach wenigen
-   Minuten Buffer-Alter einen früheren Flush aus. Der 2-Stunden-Lauf bleibt als Sicherheitsnetz.
-3. **Analyse**: Gemini erhält
-   - den **System-Prompt** (Rolle, Antwortformat, `{USER}`-Platzhalter-Regel,
-     „genau ein `primary`“-Regel, Timeout-Stufen, Strafenregister der Teilnehmer,
-     Mobbing-/Dogpiling-Regeln und Joke-/Sarkasmus-Schutz),
-   - die **Admin-Anweisungen** aus `/set_prompt` (Regeln, Strenge, Maßnahmen) und
-   - den **Chat-Verlauf** (gruppiert nach Kanälen, chronologisch, Klartext, Reply-/Mention-/Namenskontext).
-4. **Antwort**: Ein einziges JSON – es gibt **nur** das Feld `moderations`:
-   ```json
-   {
-     "moderations": [
-       {
-         "message_id": 7,
-         "action": "timeout",
-         "duration": "1h",
-         "primary": true,
-         "reason": "Gegen Regel zu respektvollem Umgang verstoßen: Schwere Beleidigung",
-         "personal_message": "Hallo {USER}, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.\n\nDu hast wiederholt andere Mitglieder beleidigt, unter anderem mit Aussagen wie *„...“*. Solche Ausdrücke verletzen unsere Serverregeln zu respektvollem Umgang und stören das Chatklima erheblich.\n\n**Maßnahme:** `TIMEOUT (1h)`\n\nDa du in den letzten 20 Tagen bereits verwarnt wurdest, wirst du für 1 Stunde stummgeschaltet. Bitte passe deinen Sprachstil nach Ablauf des Timeouts an und halte dich an die Serverregeln, um weitere automatische Konsequenzen zu vermeiden."
-       }
-     ]
-   }
-   ```
-   Kein Verstoß gefunden? Dann `{"moderations": []}` – und der Bot bleibt still.
-5. **Anwenden**: Der Bot antwortet **auf die Nachricht mit dem schwerwiegendsten
-   Verstoß** (`primary: true`), ersetzt `{USER}` und weitere Platzhalter durch die echten
-   Discord-Werte, wendet den **Timeout** an (1m / 5m / 10m / 1h / 1d / 1w) bzw. sendet nur die
-   **Warnung**, und pflegt das Strafenregister. Dabei gilt als harte Garantie: **höchstens ein
-   Timeout pro Person** pro Analyse – weitere Verstöße derselben Person werden als Warnung
-   umgesetzt. Alle Details wandern in den Log-Kanal.
-6. **Niemand schuldig?** Dann passiert **gar nichts**: keine Nachricht im Chat, kein
-   Eintrag im Log-Kanal. Genau das ist der Normalfall.
+* **Ohne Administrator-Rechte tut der Bot nichts** – kein Setup, keine Moderation,
+  kein Log. Er erklärt freundlich, warum (und meldet es höchstens alle 12 h).
+* **`/setup` nur für Owner und Admins.**
+* **Log-Kanal heilt sich selbst:** wird er gelöscht, legt der Bot ihn neu an und
+  sagt Bescheid. Er ist nie gleichzeitig ein überwachter Kanal.
+* **Gelöschte Rollen/Kanäle** verschwinden aus dem Speicher – kein Müll.
+* **Server verlassen** = alle Daten dieses Servers werden gelöscht.
+* **Fehler und Groq-Limits** landen im Log – inklusive Angabe, wann sich das
+  Limit erneuert. Bei einem Limit geht **nichts verloren**: der Puffer bleibt
+  vollständig und wird später geprüft.
 
-### 🕵️ Verdeckte Moderation für Admins mit Bauchschmerzen
+---
 
-Manche Admins wollen (oder trauen sich) nicht, selbst zu moderieren – Drama, Stress und
-persönliche Anfeindungen bleiben sonst an ihnen hängen. Genau dafür gibt es
-`/security_action` und `/security_ai_order`:
+## Free-Plan-Schonung
 
-- **Die Entscheidung trifft immer die KI**, nicht der Admin. Der Admin wählt nur aus,
-  *was angeschaut werden soll*.
-- Im Chat tritt **ausschließlich der Bot** als Moderator auf. Prompt-Regeln verbieten der
-  KI ausdrücklich jede Formulierung wie „auf Wunsch“, „gemeldet“, „ein Admin“ oder
-  „Beschwerde“ – begründet wird nur mit Inhalt, Kontext und Regel.
-- Nur der **Log-Kanal** bekommt einen internen Vermerk, wer die Prüfung angestoßen hat.
-- Die Antwort an den Admin ist **ephemer** (nur für ihn sichtbar).
+Groq Free: **30 Anfragen/Minute, 1.000/Tag, 8.000 Token/Minute, 200.000 Token/Tag**
+pro Modell. Der Bot rechnet daraus aus, wie viele Urteile pro Tag möglich sind
+(Standard ≈ 67) und hält einen Mindestabstand für Ruhe-Prüfungen ein. Risiko-Fälle
+haben Vorrang. Zusätzlich bleiben 12 % Reserve ungenutzt, damit nie „auf Kante“
+gefahren wird.
 
-### 🎨 Discord-Formatierung der Moderations-Nachrichten
-
-Jede öffentliche Moderationsnachricht folgt einer sauberen, lesbaren 4-teiligen Struktur:
+Überschreibbar per Umgebung:
 
 ```
-Hallo @Max, als KI-Moderationssystem dieses Servers muss ich dich auf einen Regelverstoß aufmerksam machen.
-
-Du hast vor kurzem mehrfach obszöne Nachrichten wie *„...“* verfasst. Solche Ausdrücke verletzen unsere Regeln zu...
-
-**Maßnahme:** `VERWARNUNG`
-
-Da es sich um deinen **ersten Verstoß** handelt, bleibt es vorerst bei dieser Verwarnung. Bitte passe deinen Sprachstil ab sofort an...
+SECURITY_GROQ_RPD=1000      SECURITY_GROQ_TPD=200000
+SECURITY_GROQ_RPM=30        SECURITY_GROQ_TPM=8000
+SECURITY_GROQ_RESERVE=0.12  SECURITY_GROQ_AVG_SMART_TOKENS=2600
+SECURITY_GROQ_MODEL_SMART=openai/gpt-oss-120b
+SECURITY_GROQ_MODEL_FAST=openai/gpt-oss-20b
 ```
-
-Die Nachricht nutzt Discord-Markdown: **Fett** (`**...**`) für Hervorhebungen, *Kursiv* (`*„...“*`) für Zitate und `Inline-Code` (\`...\`) für die Maßnahme. Alle Platzhalter (`{USER}`, `{USERNAME}`, `{SERVER}`, `{ACTION}`, `{DURATION}`, `{REASON}`) werden automatisch vom Bot ersetzt.
-
-### 🛟 Warum der Bot nicht mehr an schweren Verstößen scheitert
-
-Googles Safety-Filter blockierten bisher genau die Fälle, für die man den Bot braucht:
-Bei harter Toxizität kam HTTP 200 **ohne Text** zurück (`finish_reason: SAFETY`), im Log
-sichtbar als `invalid_model_response (empty_response)`. Jetzt gilt:
-
-- **Alle** Safety-Kategorien (inkl. `HARM_CATEGORY_CIVIC_INTEGRITY`) werden auf `OFF`
-  gesetzt, mit `BLOCK_NONE` als Fallback für ältere Modelle.
-- Die Safety-Abschaltung bleibt **auch im Kompatibilitäts-Fallback** erhalten (früher fiel
-  sie bei einem HTTP 400 stillschweigend weg).
-- Kommt trotzdem eine leere Antwort, degradiert der Client automatisch über eine
-  **Varianten-Leiter** (ohne `responseSchema`, ohne `thinkingConfig`, ohne JSON-MIME),
-  statt aufzugeben.
-- Der System-Prompt erklärt der KI ausdrücklich, dass sie eine **autorisierte
-  Inhaltsmoderation** durchführt und eine Verweigerung keine gültige Antwort ist.
-- Fehlermeldungen im Log nennen jetzt `finish_reason` und `block_reason`.
-
-### Maßnahmen, die Gemini wählen kann
-
-- `warn` – persönliche Ermahnung ohne Timeout
-- `timeout` mit `duration`: `1m`, `5m`, `10m`, `1h`, `1d`, `1w`
-
-**Eskalation (Standard):** Erster Verstoß → `warn`. Timeouts erst nach wiederholten
-Warnungen (laut Strafenregister) oder bei schweren Verstößen (Hass, Diskriminierung,
-Drohungen, Phishing/Betrug). Pro Person höchstens **ein** Timeout pro Analyse – weitere
-Verstöße derselben Person werden zu Warnungen. Den schwerwiegendsten Verstoß markiert
-Gemini mit `primary: true` (er trägt die längste Dauer).
-
-Welche Maßnahme wann greift, bestimmst **du** in `/set_prompt` – deine Anweisungen haben
-höchste Priorität (z. B. „kleine Verstöße → Warnung, Hate → 1 Tag Timeout“). Nur das
-Antwortformat, die Admin-Immunität, kein Kick/Ban, max. 1 Timeout pro Person und das Verbot von Nachrichten ohne Verstoß sind fest.
-Kick/Ban gibt es bewusst nicht.
 
 ---
 
-## 🔧 Konfiguration (Umgebungsvariablen)
+## Feedback an den Log-Meldungen
 
-```env
-# Token des Sicherheitsbots (eigene Discord App!)
-SECURITY_BOT_TOKEN=
+* 👍 / 👎 zeigen live, wie viele Teammitglieder schon bewertet haben
+  (`👍 (3)`). Jeder kann genau **einmal** pro Moderation abstimmen.
+* Der Klick öffnet ein Formular mit der Frage nach dem Grund (darf leer bleiben).
+* Bei 👎 und bestehendem Register-Eintrag gibt es das Häkchen
+  **„Aus dem Strafregister entfernen“** (standardmäßig nicht gesetzt) – damit die
+  KI künftig nicht strenger entscheidet. Die Entfernung wird im Log vermerkt.
+* Der Nutzer bekommt ein Dankeschön – das **echte Feedback geht an den Bot-Owner**
+  (Entscheidung, 👍/👎, Grund).
 
-# Owner Discord-ID (Join-Notice per DM)
-SECURITY_BOT_OWNER_ID=
+## „Neuer Auftrag“
 
-# Optional: genau eine Gilde erhält zusätzlich sofort verfügbare Guild-Commands.
-SECURITY_BOT_GUILD_ID=
-
-# Turso-Datenbank (wird mit dem XP-Bot geteilt)
-TURSO_DATABASE_URL=
-TURSO_AUTH_TOKEN=
-
-# Optional: anderes Gemini-Modell fest pinnen (Standard: gemini-flash-lite-latest,
-# ein von Google gepflegter Alias, der automatisch immer auf die aktuell günstigste
-# Flash-Lite-Generation zeigt)
-# SECURITY_GEMINI_MODEL=gemini-flash-lite-latest
-
-# Optional: Hartes Token-Budget pro Analyse (Standard 15000)
-# SECURITY_GEMINI_MAX_INPUT_TOKENS=15000
-
-# Optional: Adaptive Batch-Policy (Default: schnell, aber nicht jede harmlose Zeile einzeln)
-# SECURITY_GEMINI_SOFT_INPUT_TOKENS=2500
-# SECURITY_GEMINI_SOFT_MAX_MESSAGES=18
-# SECURITY_GEMINI_MAX_BUFFER_AGE_MS=300000
-# SECURITY_GEMINI_QUIET_FLUSH_MS=90000
-# SECURITY_GEMINI_QUIET_MIN_MESSAGES=5
-# SECURITY_GEMINI_MENTION_WINDOW_MS=600000
-# SECURITY_GEMINI_MENTION_REPEAT_LIMIT=3
-# SECURITY_GEMINI_MULTI_AUTHOR_MENTION_LIMIT=2
-
-# Optional: Lokaler Gemini-Limiter. Defaults nutzen den Key intensiv, aber beachten RPM/RPD.
-# SECURITY_GEMINI_RPM_LIMIT=12
-# SECURITY_GEMINI_TPM_LIMIT=250000
-# SECURITY_GEMINI_RPD_LIMIT=1000
-# SECURITY_GEMINI_RPD_RESERVE=50
-# SECURITY_GEMINI_MIN_REQUEST_INTERVAL_MS=0
-# SECURITY_GEMINI_PACE_DAILY=false
-# SECURITY_GEMINI_429_COOLDOWN_MS=0
-# SECURITY_GEMINI_LIMIT_SCOPE=shared-google-project-id
-```
-
-### Slash-Command-Registrierung
-
-Der vollständige Satz (alle 7 Befehle, inklusive `/set_anti_delete_messages` und der
-`user`-Option von `/security_check_now`) wird zuerst global über
-`PUT /applications/{application.id}/commands` registriert (alle Commands tragen
-ausschließlich den Guild-Context und Admin-Berechtigung). Erst nachdem Discord alle
-sieben globalen Command-Namen und IDs zurückgegeben hat, werden alte Guild-Overrides
-entfernt. Eine gültige `SECURITY_BOT_GUILD_ID` behält optional einen sofort sichtbaren
-Guild-Satz. Ein Fehler bei diesem optionalen PUT beeinträchtigt den globalen Satz nicht.
-Durch den globalen Bulk-Overwrite landen **neue Befehle automatisch auf jedem Server,
-auf dem der Bot bereits ist** – kein erneutes Einladen nötig; der Start-Sync verifiziert
-den Satz per Rücklese-Check und repariert ihn bei Abweichungen selbstständig.
-
-### Anti-Delete im Detail
-
-- Pro Kanal nutzt der Bot einen eigenen Webhook (wird bei Bedarf angelegt, wiederverwendet
-  und im RAM gecacht) – der Bot braucht dafür die Berechtigung **„Webhooks verwalten“**.
-  In Threads hängt der Webhook am Parent-Kanal.
-- Nach dem Löschen wird geprüft, ob die gelöschte Nachricht die **letzte Nachricht des
-  Kanals** war (Snowflake-Vergleich mit der neuesten verbleibenden Nachricht). Sonst wird
-  nichts erneut gesendet, damit der Chat-Verlauf nicht verwürfelt wird.
-- Der Webhook postet mit `username` (Server-Anzeigename) und `avatarURL` (Server-Avatar)
-  des Verfassers – eine **exakte Profil-Kopie**. `allowedMentions: []` verhindert jede
-  Form von Pings (auch @everyone-Ghost-Pings).
-- Ausgenommen sind immer: Bots, Webhooks, Systemnachrichten und der Bot selbst. Nachrichten
-  ohne Text und ohne Anhänge (z. B. reine Sticker) werden ebenfalls ignoriert.
-
-### Gemini API-Key einrichten
-
-1. Auf [aistudio.google.com/apikey](https://aistudio.google.com/apikey) einen
-   kostenlosen API-Key erstellen (Free-Tier reicht für kleine/mittelgroße Server).
-2. Auf dem Discord-Server einmal `/set_gemini_api_key` ausführen und den Key eintragen.
-   Der Bot prüft ihn direkt bei Google.
-3. Optional `/set_prompt` und `/set_log_channel` – danach ist die KI-Überwachung aktiv.
+Grauer Button an jeder Log-Meldung → privates Panel (nur Team) → bis zu **3
+Nachrichten-IDs** + **Anweisung**. Der Bot holt jeweils ±15 Nachrichten Kontext,
+lässt die KI den Auftrag ausführen (sie verhält sich, als hätte sie den Verstoß
+selbst bemerkt) und schreibt ins Log, **wer** den Auftrag gegeben hat. Ergibt die
+Anweisung keine klare Maßnahme, steht im Log: *„Keine klare Anweisung verstanden“*.
 
 ---
 
-## 🗄️ Datenhaltung
+## Dateien
 
-| Tabelle | Inhalt |
-|---|---|
-| `secgem_guilds` | API-Key (verschlüsselt durch die DB-Zugangskontrolle), Prompt, Log-Kanal, Sprache, Anti-Delete-Flag (`anti_delete`) |
-| `secgem_messages` | Gesammelte Nachrichten (`batch_id = NULL` → offener Buffer, sonst fest zugeordneter Batch; `is_admin = 1` → nur Kontext, ohne ID) plus `author_meta`, `reply_meta`, `mentions_meta` als JSON-Kontext für Gemini |
-| `secgem_batches` | Retry-Metadaten pro Gilde (Versuche, nächster Zeitpunkt, letzter Fehler, ggf. Zwangsmoderations-Direktive `forceUser`) |
-| `secgem_penalties` | Strafenregister (20-Tage-Fenster für Gemini, 30-Tage-Aufbewahrung) |
-
-Batches, die dauerhaft fehlschlagen, werden nach **30 Tagen** aus Datenschutzgründen
-verworfen (mit Meldung im Log-Kanal). Beim Verlassen des Servers räumt der Bot alle
-Daten der Gilde vollständig weg.
-
----
-
-## ✅ Tests
-
-```bash
-node --test tests/security-bot.test.js tests/security-command-registration.test.js tests/security-ready-presence.test.js
+```
+bots/security-bot/
+├── index.js           # Client, Events, Wartung
+└── src/
+    ├── ui.js          # Components V2 (rohe JSON-Bausteine)
+    ├── hidden.js      # unsichtbare Zustände in Nachrichten (Zero-Width)
+    ├── languages.js   # 10 Sprachen der Bot-Texte
+    ├── store.js       # RAM-first, Turso/libSQL, Datei-Fallback
+    ├── rules.js       # Systemregeln + eigene Regeln
+    ├── transcript.js  # Verlauf-Format für die KI, Text aus Embeds/Containern
+    ├── collector.js   # Sammeln + lokaler Risikofilter
+    ├── budget.js      # Free-Plan-Budget & Pacing
+    ├── groq.js        # Groq-Client (JSON-Schema, Fehlerklassen)
+    ├── prompts.js     # Systemprompt, Regeln, Anweisungen, Schemas
+    ├── pipeline.js    # sammeln → vorprüfen → urteilen → moderieren
+    ├── moderator.js   # Maßnahmen, Ping-Antwort, DM, Strafregister
+    ├── logging.js     # Log-Kanal, Rechte, Meldungen mit Buttons
+    ├── feedback.js    # 👍/👎, Formular, Owner-Info, Register-Entfernung
+    ├── orders.js      # „Neuer Auftrag“
+    ├── setup.js       # /setup – 7 Schritte
+    ├── interactions.js# Router: Buttons, Menüs, Formulare
+    ├── guard.js       # Rechteprüfungen (Admin-Pflicht)
+    ├── notices.js     # Beitritts-DM, Admin-Hinweise
+    ├── maintenance.js # Log-Kanal, Rollen, Server-Aufräumen
+    └── register.js    # /setup auf allen Servern registrieren
 ```
 
-Die Tests decken die komplette Pipeline ab: Sammel-Regeln & Discord-Format-Auflösung,
-Batch-Bau mit IDs ab 1, Rich-Context-Metadaten (Nicknames/Mentions/Replies), Gemini-Request-Struktur & JSON-Parsing, Prompt-Bau (Register,
-`{USER}`, `primary`, Mobbing-/Dogpiling-Regeln, Joke-Schutz, Zwangsmoderations-Direktive, ausführliche `personal_message`),
-Anwendungs-Flow (Timeout, Reply auf Hauptverstoß, Log-Kanal),
-Retry-Backoff ohne Datenverlust, Admin-Doppelabsicherung, adaptive Batch-Policy, lokaler Rate-Limiter, 2-Stunden-Sicherheits-Flush (inkl.
-Nachholen verpasster Slots), garantierte Stille ohne Verstoß, die Anti-Delete-Pipeline
-(Profil-Kopie per Webhook, Letzte-Nachricht-Erkennung, Bot/Webhook-Ausschluss) und alle
-Commands (inkl. `user`-Option & Anti-Delete-Schalter).
+## Umgebungsvariablen
+
+| Variable | Pflicht | Zweck |
+|---|---|---|
+| `SECURITY_BOT_TOKEN` | ✅ | Token des Bots |
+| `SECURITY_BOT_OWNER_ID` | empfohlen | erhält das Feedback zu Entscheidungen |
+| `SECURITY_GROQ_API_KEY` | optional | Key zentral für alle Server (dann entfällt Schritt 7) |
+| `SECURITY_BOT_GUILD_ID` | optional | registriert `/setup` sofort auf dieser Gilde |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | optional | Persistenz (sonst Datei) |
+| `SECURITY_BOT_TURSO_URL` / `SECURITY_BOT_TURSO_AUTH_TOKEN` | optional | eigene Datenbank nur für den Security-Bot |
+| `SECURITY_*` (Budget, Intervalle) | optional | siehe oben |

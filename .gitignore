@@ -22,5 +22,4 @@ logs/
 Thumbs.db
 
 # Bot-lokale Daten (RAM-Fallback, wird bei Turso nicht gebraucht)
-bots/security-bot/security-data.json
-bots/security-bot/security-gemini-data.json
+bots/security-bot/security-bot-data.json
