@@ -162,13 +162,21 @@ test('JSON wird auch aus Fließtext gerettet', () => {
   assert.equal(parseJsonLoose('kein json'), null);
 });
 
-test('Live-Test des Keys (Setup-Schritt 7) meldet Dauer oder Fehler', async () => {
+test('Live-Key-Test prüft Authentifizierung über /models statt einer leeren Modell-Antwort', async () => {
+  const calls = [];
   const good = await validateGroqKey({
     apiKey: 'gsk_ok',
-    fetchFn: async () => fakeResponse({ body: okBody('OK', { model: DEFAULT_FAST_MODEL }) }),
+    fetchFn: async (url, options) => {
+      calls.push({ url, options });
+      return fakeResponse({ body: { object: 'list', data: [{ id: DEFAULT_FAST_MODEL }] } });
+    },
   });
   assert.equal(good.ok, true);
   assert.equal(typeof good.ms, 'number');
+  assert.match(calls[0].url, /api\.groq\.com\/openai\/v1\/models$/);
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[0].options.body, undefined);
+  assert.match(calls[0].options.headers.Authorization, /^Bearer gsk_ok$/);
 
   const bad = await validateGroqKey({
     apiKey: 'gsk_bad',

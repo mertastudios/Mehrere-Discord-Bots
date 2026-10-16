@@ -29,18 +29,24 @@ Ohne Verstoß ist der Bot **komplett still**.
 
 | # | Schritt | Besonderheit |
 |---|---|---|
-| 1 | Sprache | 10 Sprachen, sofort umgestellt |
-| 2 | Kanäle | Mehrfachauswahl, „Alle auswählen“, leere Liste = alle Kanäle |
-| 3 | Immune Rollen | Owner, Admins und Rollen über der Bot-Rolle sind automatisch immun |
-| 4 | Regelwerk | selbst eingeben · überspringen · aus einem Kanal importieren (genau **eine** Nachricht, Text wird aus Embeds/Containern geholt) – die **Discord-Systemregeln sind immer dabei** |
-| 5 | KI-Anweisungen | freier Text (bis 2.000 Zeichen) + Häkchen für Timeouts/Kicks/Bans (Verwarnen ist Pflicht) |
-| 6 | Log-Kanal | selbst anlegen lassen oder auswählen; bekommt automatisch die richtigen Rechte |
-| 7 | Groq-API-Key | wird per Formular eingegeben und **live getestet** |
+| 1 | Sprache | 10 Sprachen; Auswahl aktualisiert Schritt 1, „Weiter“ klickst du selbst |
+| 2 | Kanäle | Mehrfachauswahl; mindestens ein Textkanal muss ausgewählt sein, der Log-Kanal wird ausgeschlossen |
+| 3 | Immune Rollen | Owner, Admins und Rollen über der Bot-Rolle sind automatisch immun; zusätzliche Rollen sind optional |
+| 4 | Regelwerk | selbst eingeben · bewusst überspringen · aus einem selbst gewählten Kanal importieren (genau **eine** Nachricht, Text wird aus Embeds/Containern geholt) – die **Discord-Systemregeln sind immer dabei** |
+| 5 | KI-Anweisungen | freier Text (bis 2.000 Zeichen) + Häkchen für Timeouts/Kicks/Bans (Verwarnen ist Pflicht; sichere Standardwerte sind vorbelegt) |
+| 6 | Log-Kanal | privaten Kanal anlegen lassen oder einen eigenen Textkanal auswählen; bekommt automatisch die richtigen Rechte |
+| 7 | Groq-API-Key | wird per Formular eingegeben und über den authentifizierten `/models`-Endpunkt geprüft – ohne tokenverbrauchende Testantwort |
 
-**Verhalten:** Ist noch nicht alles eingerichtet, merkt sich der Bot den Stand
-(auch über Neustarts) und macht beim nächsten Aufruf genau dort weiter – zurück
-geht es immer. Ist alles fertig, startet `/setup` wieder bei Schritt 1 mit allen
-Werten zum freien Vor- und Zurückspringen.
+**Verhalten:** Der Assistent speichert den Fortschritt auch über Neustarts. Mit
+„Zurück“ kannst du jederzeit vorherige Schritte ansehen; „Weiter“ bleibt gesperrt,
+bis der aktuelle Schritt sinnvoll eingerichtet wurde. Konfigurationen springen
+nicht automatisch weiter. Nach einem vollständigen Setup startet `/setup` wieder
+bei Schritt 1; gespeicherte Werte sind vorausgefüllt.
+
+**Darstellung:** Jeder Schritt ist eine private Components-V2-Container-Nachricht
+mit `# Setup · Schritt n/7`, einer `##`-Schrittüberschrift und Beschreibung,
+Fortschrittsanzeige und echten Trennlinien – ohne Embed-Farbrand und ohne kaputte
+`[object Object]`-Formatierung.
 
 ---
 

@@ -22,7 +22,7 @@ const SETUP_STEPS = 7;
 const MAX_BUFFER = 120; // maximal gepufferte Nachrichten pro Server
 
 function defaultSetup() {
-  return { step: 1, furthest: 1, done: false, updatedAt: null, completedAt: null };
+  return { step: 1, furthest: 1, configuredSteps: [], done: false, updatedAt: null, completedAt: null };
 }
 
 function defaultGuildConfig(guildId) {
@@ -49,9 +49,13 @@ function defaultGuildConfig(guildId) {
 function normalizeSetup(raw = {}) {
   const step = Number(raw.step);
   const furthest = Number(raw.furthest);
+  const configuredSteps = Array.isArray(raw.configuredSteps)
+    ? [...new Set(raw.configuredSteps.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= SETUP_STEPS))].sort((a, b) => a - b)
+    : [];
   return {
     step: Number.isFinite(step) ? Math.min(SETUP_STEPS, Math.max(1, Math.trunc(step))) : 1,
     furthest: Number.isFinite(furthest) ? Math.min(SETUP_STEPS, Math.max(1, Math.trunc(furthest))) : 1,
+    configuredSteps,
     done: Boolean(raw.done),
     updatedAt: raw.updatedAt || null,
     completedAt: raw.completedAt || null,

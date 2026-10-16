@@ -3,11 +3,10 @@
  *  /setup – der Assistent
  *
  *  Verhalten:
- *   - Ist noch nicht alles eingerichtet, merkt sich der Bot den Stand und macht
- *     beim nächsten Aufruf genau dort weiter (auch nach Neustarts).
- *   - Zurück geht immer, vor geht es bis zum weitesten erreichten Schritt.
- *   - Ist alles fertig, startet /setup wieder bei Schritt 1 – alle Werte sind
- *     vorbelegt und man kann frei vor- und zurückspringen.
+ *   - Der Bot speichert den Stand auch über Neustarts hinweg.
+ *   - „Weiter“ ist erst aktiv, wenn der aktuelle Schritt eingerichtet ist;
+ *     Änderungen springen nicht automatisch zum nächsten Schritt.
+ *   - Nach Abschluss startet /setup bei Schritt 1 mit den gespeicherten Werten.
  *
  *  Die 7 Schritte:
  *   1 Sprache · 2 Kanäle · 3 immune Rollen · 4 Regelwerk · 5 KI-Anweisungen +
@@ -28,234 +27,331 @@ const { ensureLogChannel, createLogChannel, applyLogPermissions, logSetupDone, l
 const { guard } = require('./guard');
 
 const STEPS = 7;
-
-const STEP_KEY_LABELS = {
-  1: { de: 'Sprache', en: 'Language' },
-  2: { de: 'Kanäle', en: 'Channels' },
-  3: { de: 'Immun', en: 'Immune' },
-  4: { de: 'Regelwerk', en: 'Rules' },
-  5: { de: 'KI-Anweisung', en: 'AI instructions' },
-  6: { de: 'Log-Kanal', en: 'Log channel' },
-  7: { de: 'Groq-Key', en: 'Groq key' },
+const STEP_EMOJI = {
+  1: '🌐',
+  2: '📡',
+  3: '🛡️',
+  4: '📜',
+  5: '🤖',
+  6: '🧾',
+  7: '🔑',
 };
+const MONITORED_CHANNEL_TYPES = [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum];
 
 // ------------------------------ Hilfen ------------------------------
 
-function stepTitle(lang, step) {
-  return `${t(lang, 'setupTitle')} · ${t(lang, 'stepOf', { n: step })} · **${t(lang, `s${step}Title`).replace(/\*\*/g, '')}**`;
+function sentenceCaseStart(value, lang) {
+  return String(value).replace(/^([^\p{L}]*)(\p{L})/u, (match, prefix, letter) => `${prefix}${letter.toLocaleUpperCase(lang)}`);
 }
 
-function shortList(items, max = 12) {
-  if (!items.length) return '—';
-  const shown = items.slice(0, max).map((x) => `#${x}`).join(', ');
-  return items.length > max ? `${shown} …` : shown;
+function stepCopy(lang, step) {
+  const raw = String(t(lang, `s${step}Title`));
+  const match = raw.match(/^\s*\*\*(.+?)\*\*\s*(?:[–—-]\s*)?([\s\S]*)$/);
+  return match
+    ? { title: match[1].trim(), description: sentenceCaseStart(match[2].trim(), lang) }
+    : { title: raw.replace(/\*\*/g, '').trim(), description: '' };
 }
 
-function autoImmuneRoles(guild) {
-  const botHighest = guild.members?.me?.roles?.highest?.position ?? 0;
-  return [...(guild.roles?.cache || new Map()).values()]
-    .filter((role) => role.id !== guild.id && (role.position >= botHighest || role.permissions?.has?.('Administrator')))
-    .map((role) => role.name);
+function configuredStepSet(cfg) {
+  return new Set((cfg.setup?.configuredSteps || []).map(Number));
+}
+
+/** A step is complete only when its choice is usable (or was explicitly skipped). */
+function isStepComplete(ctx, guild, cfg, step) {
+  const setup = cfg.setup || {};
+  const configured = configuredStepSet(cfg);
+
+  switch (step) {
+    case 1:
+      // Older wizard versions advanced as soon as a language was selected.
+      return Boolean(setup.done || configured.has(1) || Number(setup.step) > 1 || Number(setup.furthest) > 1);
+    case 2:
+      // An empty list on an already-finished legacy setup means “all text channels”.
+      return Boolean((cfg.channels || []).length || setup.done);
+    case 3:
+      // Extra immune roles are optional, but an empty choice must be deliberate.
+      return Boolean((cfg.immuneRoles || []).length || configured.has(3) || setup.done);
+    case 4:
+      return ['manual', 'import', 'skip'].includes(cfg.rulesMode);
+    case 5:
+      // Warnings and the safe timeout default are already active out of the box.
+      return Boolean(cfg.allow && typeof cfg.allow.timeout === 'boolean');
+    case 6:
+      return Boolean(cfg.logChannelId);
+    case 7: {
+      const envKey = String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
+      return Boolean(String(cfg.groqKey || '').trim() || envKey);
+    }
+    default:
+      return false;
+  }
+}
+
+function firstIncompleteStep(ctx, guild, cfg, through = STEPS) {
+  for (let step = 1; step <= Math.min(STEPS, through); step += 1) {
+    if (!isStepComplete(ctx, guild, cfg, step)) return step;
+  }
+  return null;
+}
+
+function updateConfiguredStep(ctx, guild, patch, step) {
+  const current = ctx.store.getGuild(guild.id);
+  const configuredSteps = configuredStepSet(current);
+  configuredSteps.add(step);
+  return ctx.store.updateGuild(guild.id, {
+    ...patch,
+    setup: { configuredSteps: [...configuredSteps].sort((a, b) => a - b) },
+  });
+}
+
+function withNote(content, note) {
+  return note ? `${content}\n\n> ℹ️ ${note}` : content;
+}
+
+function keyErrorDescription(lang, result) {
+  const keyByError = {
+    missing_api_key: 'keyErrMissing',
+    invalid_api_key: 'keyErrInvalid',
+    network_error: 'keyErrNetwork',
+    timeout: 'keyErrTimeout',
+    rate_limited: 'keyErrRateLimit',
+    server_error: 'keyErrServer',
+    bad_json_response: 'keyErrMalformed',
+  };
+  const translationKey = keyByError[result.error];
+  if (translationKey) return t(lang, translationKey);
+  if (result.status) return t(lang, 'keyErrApi', { status: result.status });
+  return t(lang, 'keyErrOther');
+}
+
+function progressBar(step) {
+  return `${'▰'.repeat(step)}${'▱'.repeat(STEPS - step)}`;
 }
 
 function navRow(lang, step, { canNext = true } = {}) {
   const buttons = [
-    ui.button({ id: 'setup:nav:back', label: t(lang, 'back'), style: ui.STYLE.secondary, emoji: '◀️', disabled: step <= 1 }),
-  ];
-  if (step < STEPS) {
-    buttons.push(ui.button({ id: 'setup:nav:next', label: t(lang, 'next'), style: ui.STYLE.primary, emoji: '▶️', disabled: !canNext }));
-  } else {
-    buttons.push(ui.button({ id: 'setup:nav:finish', label: t(lang, 'finish'), style: ui.STYLE.success, emoji: '✅' }));
-  }
-  return ui.row(buttons);
-}
-
-function stepSelectRow(lang, step) {
-  return ui.row([
-    ui.stringSelect({
-      id: 'setup:sel:step',
-      placeholder: t(lang, 'stepOf', { n: step }),
-      options: Object.keys(STEP_KEY_LABELS).map((n) => {
-        const label = STEP_KEY_LABELS[n][lang] || STEP_KEY_LABELS[n].de;
-        return { label: `${n} · ${label}`, value: String(n), default: Number(n) === Number(step) };
-      }),
-      min: 1,
-      max: 1,
+    ui.button({
+      id: 'setup:nav:back',
+      label: t(lang, 'back'),
+      style: ui.STYLE.secondary,
+      emoji: '◀️',
+      disabled: step <= 1,
     }),
-  ]);
+    step < STEPS
+      ? ui.button({ id: 'setup:nav:next', label: t(lang, 'next'), style: ui.STYLE.primary, emoji: '▶️', disabled: !canNext })
+      : ui.button({ id: 'setup:nav:finish', label: t(lang, 'finish'), style: ui.STYLE.success, emoji: '✅', disabled: !canNext }),
+  ];
+  return ui.row(buttons);
 }
 
 // ------------------------------ Rendern ------------------------------
 
 function renderStep(ctx, guild, cfg, step, { draft = null, note = null } = {}) {
+  const safeStep = Math.min(STEPS, Math.max(1, Number(step) || 1));
   const lang = cfg.lang || 'de';
-  const lines = [stepTitle(lang, step)];
-  const rows = [];
+  const copy = stepCopy(lang, safeStep);
+  const header = [
+    `# ${t(lang, 'setupTitle')} · ${t(lang, 'stepOf', { n: safeStep })}`,
+    `## ${STEP_EMOJI[safeStep]} ${copy.title}`,
+    copy.description,
+  ].filter(Boolean).join('\n');
+  const components = [
+    ui.text(header),
+    ui.separator(),
+    ui.text(`**Fortschritt**  ${progressBar(safeStep)}`),
+    ui.separator(),
+  ];
 
-  if (step === 1) {
-    const current = LANGS.find((l) => l.code === lang);
-    lines.push(ui.separator(false), `Aktuell: **${current?.flag || ''} ${current?.name || lang}**`);
-    rows.push(ui.row([ui.stringSelect({ id: 'setup:sel:lang', placeholder: t(lang, 's1Title').replace(/\*\*/g, ''), options: langOptions({ selected: lang }), min: 1, max: 1 })]));
+  if (safeStep === 1) {
+    const current = LANGS.find((item) => item.code === lang);
+    const currentLabel = current ? `${current.flag} ${current.name}` : lang;
+    const status = isStepComplete(ctx, guild, cfg, 1)
+      ? `**${t(lang, 'setupCurrentSelection')}**\n${currentLabel}`
+      : `**${t(lang, 'setupNotConfigured')}**\n${t(lang, 's1Hint')}`;
+    components.push(ui.text(withNote(status, note)));
+    components.push(ui.row([
+      ui.stringSelect({
+        id: 'setup:sel:lang',
+        placeholder: copy.title,
+        options: langOptions({ selected: lang }),
+        min: 1,
+        max: 1,
+      }),
+    ]));
   }
 
-  if (step === 2) {
-    const channels = (cfg.channels || []).map((id) => guild.channels?.cache?.get(id)?.name || id);
-    const mention = (cfg.channels || []).map((id) => `<#${id}>`);
-    lines.push(ui.separator(false), t(lang, 's2Hint'), `Ausgewählt: **${t(lang, 'selectedCount', { n: cfg.channels.length })}**`, shortList(mention.length ? mention : channels, 10));
-    rows.push(
-      ui.row([
+  if (safeStep === 2) {
+    const selected = (cfg.channels || []).map(String).filter((id) => id !== String(cfg.logChannelId || ''));
+    const selectedText = selected.length
+      ? selected.map((id) => `<#${id}>`).join(' · ')
+      : cfg.setup?.done
+        ? t(lang, 's2AllExisting')
+        : t(lang, 's2NoneSelected');
+    const status = `${t(lang, 's2Hint')}\n\n**${t(lang, 'selectedCount', { n: selected.length })}**\n${selectedText}`;
+    components.push(ui.text(withNote(status, note)));
+    components.push(ui.row([
+      ui.channelSelect({
+        id: 'setup:sel:channels',
+        placeholder: copy.title,
+        min: 1,
+        max: 25,
+        types: MONITORED_CHANNEL_TYPES,
+        selected,
+      }),
+    ]));
+  }
+
+  if (safeStep === 3) {
+    const roles = (cfg.immuneRoles || []).map(String).filter((id) => id !== String(guild.id));
+    const selectedRoles = roles.filter((id) => {
+      const role = guild.roles?.cache?.get(id);
+      return Boolean(role && !role.managed);
+    });
+    const roleList = roles.length ? roles.map((id) => `<@&${id}>`).join(' · ') : t(lang, 'rolesNoneSelected');
+    const status = `${t(lang, 's3Auto')}\n\n**${t(lang, 'rolesAdditional')} · ${roles.length}**\n${roleList}\n\n${t(lang, 's3Hint')}`;
+    components.push(ui.text(withNote(status, note)));
+    components.push(ui.row([
+      ui.roleSelect({ id: 'setup:sel:roles', placeholder: copy.title, min: 0, max: 25, selected: selectedRoles }),
+    ]));
+    components.push(ui.row([
+      ui.button({ id: 'setup:btn:none_roles', label: t(lang, 'rolesNoExtra'), style: ui.STYLE.secondary, emoji: '⏭️' }),
+    ]));
+  }
+
+  if (safeStep === 4) {
+    const modeKey = cfg.rulesMode === 'manual'
+      ? 'rulesModeManual'
+      : cfg.rulesMode === 'import'
+        ? 'rulesModeImport'
+        : cfg.rulesMode === 'skip'
+          ? 'rulesModeSkip'
+          : 'rulesModeUnset';
+    const rulesCount = parseCustomRules(cfg.rules).length;
+    const status = `${t(lang, 's4Base')}\n\n**${t(lang, 'rulesStatus')}** · ${t(lang, modeKey)}\n${t(lang, 'rulesCount', { n: rulesCount, chars: String(cfg.rules || '').length, max: MAX_RULES_CHARS })}\n${t(lang, 'systemRulesCount', { n: SYSTEM_RULES.length })}`;
+    components.push(ui.text(withNote(status, note)));
+
+    if (draft === 'choose') {
+      components.push(ui.separator());
+      components.push(ui.text(t(lang, 'rulesImportHint')));
+      components.push(ui.row([
         ui.channelSelect({
-          id: 'setup:sel:channels',
-          placeholder: t(lang, 's2Title').replace(/\*\*/g, ''),
-          min: 0,
-          max: 25,
+          id: 'setup:sel:import',
+          placeholder: t(lang, 'rulesImport'),
+          min: 1,
+          max: 1,
           types: [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum],
         }),
-      ]),
-      ui.row([
-        ui.button({ id: 'setup:btn:all_channels', label: t(lang, 'all'), style: ui.STYLE.secondary, emoji: '✅' }),
-        ui.button({ id: 'setup:btn:none_channels', label: t(lang, 'none'), style: ui.STYLE.secondary, emoji: '🧹' }),
-      ])
-    );
-  }
-
-  if (step === 3) {
-    const roles = (cfg.immuneRoles || []).map((id) => guild.roles?.cache?.get(id)?.name || id);
-    lines.push(ui.separator(false), t(lang, 's3Auto'), `Ausgewählt: **${t(lang, 'selectedCount', { n: cfg.immuneRoles.length })}**`, roles.length ? roles.map((r) => `@${r}`).join(', ') : '—');
-    rows.push(
-      ui.row([ui.roleSelect({ id: 'setup:sel:roles', placeholder: t(lang, 's3Title').replace(/\*\*/g, ''), min: 0, max: 25 })]),
-      ui.row([
-        ui.button({ id: 'setup:btn:all_roles', label: t(lang, 'all'), style: ui.STYLE.secondary, emoji: '✅' }),
-        ui.button({ id: 'setup:btn:none_roles', label: t(lang, 'none'), style: ui.STYLE.secondary, emoji: '🧹' }),
-      ])
-    );
-  }
-
-  if (step === 4) {
-    const modeText = cfg.rulesMode === 'manual' ? 'manuell' : cfg.rulesMode === 'skip' ? `⏭ übersprungen` : cfg.rulesMode === 'import' ? 'importiert' : '—';
-    const count = parseCustomRules(cfg.rules).length;
-    lines.push(
-      ui.separator(false),
-      t(lang, 's4Base'),
-      `Status: **${modeText}** · ${count} eigene Regel(n) · ${String(cfg.rules || '').length}/${MAX_RULES_CHARS} Zeichen`,
-      `Systemregeln (immer aktiv): ${SYSTEM_RULES.length}`
-    );
-    if (draft) {
-      lines.push(ui.separator(), `📥 ${t(lang, 'rulesImported')}`, `-# ${draft.channelName ? `#${draft.channelName} · ` : ''}${String(draft.text).length} Zeichen${draft.truncated ? ` · ${t(lang, 'rulesTooLong', { max: MAX_RULES_CHARS })}` : ''}`, '', ui.clip(draft.text, 1200));
-      rows.push(
-        ui.row([
-          ui.button({ id: 'setup:btn:import_use', label: t(lang, 'rulesUse'), style: ui.STYLE.success, emoji: '✅' }),
-          ui.button({ id: 'setup:btn:import_edit', label: t(lang, 'rulesEdit'), style: ui.STYLE.primary, emoji: '✏️' }),
-          ui.button({ id: 'setup:btn:import_other', label: t(lang, 'rulesAnother'), style: ui.STYLE.secondary, emoji: '🔁' }),
-        ])
-      );
-    } else if (draft === 'choose') {
-      lines.push(ui.separator(), t(lang, 'rulesImportHint'));
-      rows.push(ui.row([ui.channelSelect({ id: 'setup:sel:import', placeholder: t(lang, 'rulesImport'), min: 1, max: 1, types: [ChannelType.GuildText, ChannelType.GuildAnnouncement] })]));
+      ]));
+    } else if (draft && typeof draft === 'object') {
+      components.push(ui.separator());
+      const truncation = draft.truncated ? `\n\n⚠️ ${t(lang, 'rulesTooLong', { max: MAX_RULES_CHARS })}` : '';
+      const preview = `${t(lang, 'rulesImported')}\n-# ${draft.channelName ? `#${draft.channelName} · ` : ''}${String(draft.text || '').length} ${t(lang, 'characters')}\n\n${ui.clip(draft.text || '', 1000)}${truncation}`;
+      components.push(ui.text(withNote(preview, note)));
+      components.push(ui.row([
+        ui.button({ id: 'setup:btn:import_use', label: t(lang, 'rulesUse'), style: ui.STYLE.success, emoji: '✅' }),
+        ui.button({ id: 'setup:btn:import_edit', label: t(lang, 'rulesEdit'), style: ui.STYLE.primary, emoji: '✏️' }),
+        ui.button({ id: 'setup:btn:import_other', label: t(lang, 'rulesAnother'), style: ui.STYLE.secondary, emoji: '🔁' }),
+      ]));
     } else {
-      rows.push(
-        ui.row([
-          ui.button({ id: 'setup:btn:rules_manual', label: t(lang, 'rulesManual'), style: ui.STYLE.primary, emoji: '✍️' }),
-          ui.button({ id: 'setup:btn:rules_skip', label: t(lang, 'rulesSkip'), style: ui.STYLE.secondary, emoji: '⏭' }),
-          ui.button({ id: 'setup:btn:rules_import', label: t(lang, 'rulesImport'), style: ui.STYLE.secondary, emoji: '📥' }),
-        ])
-      );
+      components.push(ui.separator());
+      components.push(ui.row([
+        ui.button({ id: 'setup:btn:rules_manual', label: t(lang, 'rulesManual'), style: ui.STYLE.primary, emoji: '✍️' }),
+        ui.button({ id: 'setup:btn:rules_import', label: t(lang, 'rulesImport'), style: ui.STYLE.secondary, emoji: '📥' }),
+        ui.button({ id: 'setup:btn:rules_skip', label: t(lang, 'rulesSkip'), style: ui.STYLE.secondary, emoji: '⏭️' }),
+      ]));
     }
   }
 
-  if (step === 5) {
-    const instructions = String(cfg.instructions || '');
-    lines.push(
-      ui.separator(false),
-      t(lang, 's5Hint'),
-      `Anweisung: ${instructions ? `„${ui.clip(instructions, 300)}“ (${instructions.length}/${MAX_INSTRUCTIONS_CHARS})` : '— (keine)'}`,
-      ui.separator(),
-      t(lang, 's5AllowTitle'),
-      `✅ ${t(lang, 'warnLabel')} · ${cfg.allow.timeout ? '✅' : '⬜'} ${t(lang, 'timeoutLabel')} · ${cfg.allow.kick ? '✅' : '⬜'} ${t(lang, 'kickLabel')} · ${cfg.allow.ban ? '✅' : '⬜'} ${t(lang, 'banLabel')}`
-    );
-    rows.push(
-      ui.row([ui.button({ id: 'setup:btn:instr', label: t(lang, 's5Write'), style: ui.STYLE.primary, emoji: '✍️' })]),
-      ui.row([
-        ui.button({ id: 'setup:btn:allow_timeout', label: `${cfg.allow.timeout ? '✅' : '⬜'} ${t(lang, 'timeoutLabel')}`, style: ui.STYLE.secondary }),
-        ui.button({ id: 'setup:btn:allow_kick', label: `${cfg.allow.kick ? '✅' : '⬜'} ${t(lang, 'kickLabel')}`, style: ui.STYLE.secondary }),
-        ui.button({ id: 'setup:btn:allow_ban', label: `${cfg.allow.ban ? '✅' : '⬜'} ${t(lang, 'banLabel')}`, style: ui.STYLE.secondary }),
-      ])
-    );
+  if (safeStep === 5) {
+    const instructions = String(cfg.instructions || '').trim();
+    const instructionText = instructions
+      ? `„${ui.clip(instructions, 500)}“ · ${instructions.length}/${MAX_INSTRUCTIONS_CHARS}`
+      : t(lang, 's5NoInstruction');
+    const status = `${t(lang, 's5Hint')}\n\n**${t(lang, 's5CurrentInstruction')}**\n${instructionText}`;
+    components.push(ui.text(withNote(status, note)));
+    components.push(ui.separator());
+    components.push(ui.text(
+      `**${t(lang, 's5AllowTitle')}**\n✅ ${t(lang, 'warnLabel')}\n${cfg.allow.timeout ? '✅' : '▫️'} ${t(lang, 'timeoutLabel')} · ${cfg.allow.kick ? '✅' : '▫️'} ${t(lang, 'kickLabel')} · ${cfg.allow.ban ? '✅' : '▫️'} ${t(lang, 'banLabel')}`
+    ));
+    components.push(ui.row([
+      ui.button({ id: 'setup:btn:instr', label: t(lang, 's5Write'), style: ui.STYLE.primary, emoji: '✍️' }),
+    ]));
+    components.push(ui.row([
+      ui.button({ id: 'setup:btn:allow_timeout', label: `${cfg.allow.timeout ? '✅' : '▫️'} ${t(lang, 'timeoutLabel')}`, style: ui.STYLE.secondary }),
+      ui.button({ id: 'setup:btn:allow_kick', label: `${cfg.allow.kick ? '✅' : '▫️'} ${t(lang, 'kickLabel')}`, style: ui.STYLE.secondary }),
+      ui.button({ id: 'setup:btn:allow_ban', label: `${cfg.allow.ban ? '✅' : '▫️'} ${t(lang, 'banLabel')}`, style: ui.STYLE.secondary }),
+    ]));
   }
 
-  if (step === 6) {
-    const channel = cfg.logChannelId ? guild.channels?.cache?.get(cfg.logChannelId) : null;
-    lines.push(
-      ui.separator(false),
-      `Aktuell: ${channel ? `<#${channel.id}>${cfg.logAuto ? ' _(von mir verwaltet)_' : ''}` : '— (keiner)'}`,
-      'Der Kanal ist automatisch nur für den Owner, mich, das Team und Rollen über mir sichtbar.',
-      'Wird er gelöscht, lege ich ihn neu an.'
-    );
-    rows.push(
-      ui.row([ui.channelSelect({ id: 'setup:sel:log', placeholder: `#${'log-channel'}`, min: 1, max: 1, types: [ChannelType.GuildText] })]),
-      ui.row([
-        ui.button({ id: 'setup:btn:log_auto', label: t(lang, 's6Auto'), style: ui.STYLE.success, emoji: '🤖' }),
-        ui.button({ id: 'setup:btn:log_clear', label: t(lang, 'none'), style: ui.STYLE.secondary, emoji: '🧹' }),
-      ])
-    );
+  if (safeStep === 6) {
+    const channel = cfg.logChannelId ? guild.channels?.cache?.get(String(cfg.logChannelId)) : null;
+    const channelText = channel
+      ? `<#${channel.id}>${cfg.logAuto ? ` · ${t(lang, 's6Managed')}` : ''}`
+      : t(lang, 's6NoneSelected');
+    components.push(ui.text(withNote(`${t(lang, 's6Hint')}\n\n**${t(lang, 'setupCurrentSelection')}**\n${channelText}`, note)));
+    components.push(ui.row([
+      ui.channelSelect({
+        id: 'setup:sel:log',
+        placeholder: t(lang, 'logSelectPlaceholder'),
+        min: 1,
+        max: 1,
+        types: [ChannelType.GuildText],
+        selected: cfg.logChannelId ? [cfg.logChannelId] : [],
+      }),
+    ]));
+    components.push(ui.row([
+      ui.button({ id: 'setup:btn:log_auto', label: t(lang, 's6Auto'), style: ui.STYLE.success, emoji: '🤖' }),
+      ui.button({ id: 'setup:btn:log_clear', label: t(lang, 'logClear'), style: ui.STYLE.secondary, emoji: '🗑️', disabled: !cfg.logChannelId }),
+    ]));
   }
 
-  if (step === 7) {
-    const key = cfg.groqKey || String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
-    lines.push(
-      ui.separator(false),
-      `Aktuell: ${key ? t(lang, 'keySet') : t(lang, 'keyMissing')}`,
-      `-# Modell: \`${DEFAULT_SMART_MODEL}\` · Free-Plan von console.groq.com/keys`,
-      cfg.setup.done ? `\n${t(lang, 'doneTitle')}` : '',
-      cfg.setup.done && !key ? t(lang, 'doneWarning') : ''
-    );
-    rows.push(
-      ui.row([
-        ui.button({ id: 'setup:btn:key', label: t(lang, 'keyEnter'), style: ui.STYLE.primary, emoji: '🔑' }),
-        ui.linkButton({ label: t(lang, 'keyHelp'), url: 'https://console.groq.com/keys', emoji: '🎁' }),
-        ui.button({ id: 'setup:btn:key_clear', label: t(lang, 'keyClear'), style: ui.STYLE.secondary, emoji: '🗑' }),
-      ])
-    );
+  if (safeStep === 7) {
+    const storedKey = String(cfg.groqKey || '').trim();
+    const envKey = String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
+    const keyStatus = storedKey ? t(lang, 'keySet') : envKey ? t(lang, 'keyEnvSet') : t(lang, 'keyMissing');
+    const status = `${t(lang, 's7Hint')}\n\n**${t(lang, 'setupCurrentSelection')}**\n${keyStatus}\n-# ${t(lang, 's7Model', { model: DEFAULT_SMART_MODEL })}`;
+    components.push(ui.text(withNote(status, note)));
+    components.push(ui.row([
+      ui.button({ id: 'setup:btn:key', label: t(lang, 'keyEnter'), style: ui.STYLE.primary, emoji: '🔑' }),
+      ui.linkButton({ label: t(lang, 'keyHelp'), url: 'https://console.groq.com/keys', emoji: '↗️' }),
+      ui.button({ id: 'setup:btn:key_clear', label: t(lang, 'keyClear'), style: ui.STYLE.secondary, emoji: '🗑️', disabled: !storedKey }),
+    ]));
   }
 
-  if (note) lines.push(ui.separator(), note);
-  lines.push(ui.separator(false));
-  rows.push(navRow(lang, step));
+  components.push(navRow(lang, safeStep, {
+    canNext: firstIncompleteStep(ctx, guild, cfg, safeStep) === null,
+  }));
 
-  const body = [ui.text(lines.filter(Boolean).join('\n')), ...rows];
-  return ui.payload([ui.container(body, { accentColor: ACCENT.mod })], { ephemeral: true });
+  return ui.payload([ui.container(components)], { ephemeral: true });
 }
 
 function renderDone(ctx, guild, cfg) {
   const lang = cfg.lang || 'de';
-  const key = cfg.groqKey || String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
-  const channel = cfg.logChannelId ? guild.channels?.cache?.get(cfg.logChannelId) : null;
+  const storedKey = String(cfg.groqKey || '').trim();
+  const envKey = String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
+  const channel = cfg.logChannelId ? guild.channels?.cache?.get(String(cfg.logChannelId)) : null;
   const summary = [
-    `1 · ${LANGS.find((l) => l.code === lang)?.name || lang}`,
-    `2 · ${cfg.channels.length ? `${cfg.channels.length} Kanal/Kanäle` : 'alle Kanäle'}`,
-    `3 · ${cfg.immuneRoles.length ? `${cfg.immuneRoles.length} Rolle(n)` : 'nur automatisch (Owner/Admins/über mir)'}`,
-    `4 · ${cfg.rulesMode === 'skip' || !cfg.rules ? 'nur Systemregeln' : `${parseCustomRules(cfg.rules).length} eigene Regeln`}`,
-    `5 · ${[cfg.allow.timeout ? 'Timeouts' : null, cfg.allow.kick ? 'Kicks' : null, cfg.allow.ban ? 'Bans' : null, 'Warnungen'].filter(Boolean).join(', ')}`,
-    `6 · ${channel ? `<#${channel.id}>` : 'noch keiner'}`,
-    `7 · ${key ? 'Key aktiv ✅' : 'kein Key ⚠️'}`,
+    `1 · ${LANGS.find((item) => item.code === lang)?.name || lang}`,
+    `2 · ${cfg.channels.length ? `${cfg.channels.length} ${t(lang, 'channelsLabel')}` : t(lang, 's2AllExisting')}`,
+    `3 · ${cfg.immuneRoles.length ? `${cfg.immuneRoles.length} ${t(lang, 'rolesLabel')}` : t(lang, 'rolesNoneSelected')}`,
+    `4 · ${cfg.rulesMode === 'skip' || !cfg.rules ? t(lang, 'rulesModeSkip') : `${parseCustomRules(cfg.rules).length} ${t(lang, 'rulesLabel')}`}`,
+    `5 · ${[cfg.allow.timeout ? t(lang, 'timeoutLabel') : null, cfg.allow.kick ? t(lang, 'kickLabel') : null, cfg.allow.ban ? t(lang, 'banLabel') : null, t(lang, 'warnLabel')].filter(Boolean).join(' · ')}`,
+    `6 · ${channel ? `<#${channel.id}>` : t(lang, 's6NoneSelected')}`,
+    `7 · ${storedKey || envKey ? t(lang, 'keySet') : t(lang, 'keyMissing')}`,
   ].join('\n');
 
-  return ui.payload(
-    [
-      ui.container(
-        [
-          ui.text(t(lang, 'doneTitle')),
-          ui.separator(),
-          ui.text(summary),
-          !key ? ui.text(t(lang, 'doneWarning')) : null,
-          ui.separator(false),
-          ui.row([ui.button({ id: 'setup:nav:open', label: t(lang, 'setupTitle'), style: ui.STYLE.primary, emoji: '🛠️' })]),
-        ].filter(Boolean),
-        { accentColor: ACCENT.ok }
-      ),
-    ],
-    { ephemeral: true }
-  );
+  const components = [
+    ui.text(`# ${t(lang, 'doneTitle')}\n## ${t(lang, 'setupSummary')}`),
+    ui.separator(),
+    ui.text(summary),
+  ];
+  if (!storedKey && !envKey) components.push(ui.text(t(lang, 'doneWarning')));
+  components.push(ui.separator(false));
+  components.push(ui.row([
+    ui.button({ id: 'setup:nav:open', label: t(lang, 'setupTitle'), style: ui.STYLE.primary, emoji: '🛠️' }),
+  ]));
+
+  return ui.payload([ui.container(components)], { ephemeral: true });
 }
 
 // ------------------------------ Einstieg ------------------------------
@@ -266,24 +362,24 @@ async function handleCommand(ctx, interaction) {
   if (!(await guard(ctx, interaction))) return;
 
   const cfg = ctx.store.getGuild(guild.id);
-  const step = cfg.setup.done ? 1 : cfg.setup.step || 1;
+  const requestedStep = cfg.setup.done ? 1 : cfg.setup.step || 1;
+  const blocker = requestedStep > 1 ? firstIncompleteStep(ctx, guild, cfg, requestedStep - 1) : null;
+  const step = blocker || requestedStep;
   ctx.store.updateGuild(guild.id, { setup: { step, furthest: Math.max(cfg.setup.furthest || 1, step) } });
   await ctx.store.commit();
-
-  const payload = cfg.setup.done
-    ? renderStep(ctx, guild, ctx.store.getGuild(guild.id), step)
-    : renderStep(ctx, guild, ctx.store.getGuild(guild.id), step);
-  await interaction.reply(payload);
+  await interaction.reply(renderStep(ctx, guild, ctx.store.getGuild(guild.id), step));
 }
 
 // ------------------------------ Interaktion ------------------------------
 
 async function setStep(ctx, guild, step) {
   const cfg = ctx.store.getGuild(guild.id);
-  const clamped = Math.min(STEPS, Math.max(1, step));
-  return ctx.store.updateGuild(guild.id, {
+  const clamped = Math.min(STEPS, Math.max(1, Math.trunc(Number(step) || 1)));
+  const next = ctx.store.updateGuild(guild.id, {
     setup: { step: clamped, furthest: Math.max(cfg.setup.furthest || 1, clamped) },
   });
+  await ctx.store.commit();
+  return next;
 }
 
 async function handleComponent(ctx, interaction) {
@@ -291,115 +387,146 @@ async function handleComponent(ctx, interaction) {
   const [, kind, action] = String(interaction.customId).split(':');
   const cfg = ctx.store.getGuild(guild.id);
   const lang = cfg.lang || 'de';
-  let note = null;
-  let draft = null;
+  const currentStep = cfg.setup.step || 1;
 
-  // Schritt-Auswahl per Menü (freies Springen)
   if (kind === 'sel' && action === 'step') {
-    await setStep(ctx, guild, Number(interaction.values?.[0]) || 1);
-    return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), Number(interaction.values?.[0]) || 1));
+    const target = Math.min(STEPS, Math.max(1, Number(interaction.values?.[0]) || 1));
+    if (target > currentStep) {
+      const blocker = firstIncompleteStep(ctx, guild, cfg, target - 1);
+      if (blocker) {
+        const next = await setStep(ctx, guild, blocker);
+        return interaction.update(renderStep(ctx, guild, next, blocker, { note: t(lang, 'setupNeedFirst') }));
+      }
+    }
+    const next = await setStep(ctx, guild, target);
+    return interaction.update(renderStep(ctx, guild, next, target));
   }
 
   if (kind === 'nav') {
     if (action === 'open') {
-      await setStep(ctx, guild, 1);
-      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 1));
+      const next = await setStep(ctx, guild, 1);
+      return interaction.update(renderStep(ctx, guild, next, 1));
     }
     if (action === 'back') {
-      const next = await setStep(ctx, guild, (cfg.setup.step || 1) - 1);
+      const next = await setStep(ctx, guild, currentStep - 1);
       return interaction.update(renderStep(ctx, guild, next, next.setup.step));
     }
     if (action === 'next') {
-      const next = await setStep(ctx, guild, (cfg.setup.step || 1) + 1);
+      const blocker = firstIncompleteStep(ctx, guild, cfg, currentStep);
+      if (blocker) {
+        const next = await setStep(ctx, guild, blocker);
+        return interaction.update(renderStep(ctx, guild, next, blocker, { note: t(lang, 'setupNeedFirst') }));
+      }
+      const next = await setStep(ctx, guild, currentStep + 1);
       return interaction.update(renderStep(ctx, guild, next, next.setup.step));
     }
     if (action === 'finish') {
+      const blocker = firstIncompleteStep(ctx, guild, cfg, STEPS);
+      if (blocker) {
+        const next = await setStep(ctx, guild, blocker);
+        return interaction.update(renderStep(ctx, guild, next, blocker, { note: t(lang, 'setupNeedFirst') }));
+      }
       await finish(ctx, guild);
       return interaction.update(renderDone(ctx, guild, ctx.store.getGuild(guild.id)));
     }
   }
 
   if (kind === 'sel') {
-    const values = interaction.values || [];
+    const values = Array.isArray(interaction.values) ? interaction.values : [];
 
     if (action === 'lang') {
-      const chosen = values[0];
-      ctx.store.updateGuild(guild.id, { lang: chosen });
-      await setStep(ctx, guild, 2);
-      const next = ctx.store.getGuild(guild.id);
-      return interaction.update(renderStep(ctx, guild, next, 2));
+      const chosen = String(values[0] || '');
+      if (!LANGS.some((item) => item.code === chosen)) {
+        return interaction.update(renderStep(ctx, guild, cfg, 1, { note: t(lang, 'setupInvalidChoice') }));
+      }
+      const next = updateConfiguredStep(ctx, guild, { lang: chosen }, 1);
+      await ctx.store.commit();
+      // Die Sprachauswahl aktualisiert die Seite, aber navigiert nie selbst weiter.
+      return interaction.update(renderStep(ctx, guild, next, 1, { note: t(chosen, 'setupLanguageSaved') }));
     }
 
     if (action === 'channels') {
-      const picked = values.map(String);
-      const withoutLog = cfg.logChannelId ? picked.filter((id) => id !== String(cfg.logChannelId)) : picked;
-      const next = ctx.store.updateGuild(guild.id, { channels: withoutLog });
+      const picked = [...new Set(values.map(String))];
+      const withoutLog = picked.filter((id) => String(id) !== String(cfg.logChannelId || ''));
+      const valid = withoutLog.filter((id) => {
+        const channel = guild.channels?.cache?.get(id);
+        return channel && MONITORED_CHANNEL_TYPES.includes(channel.type);
+      });
+      const next = valid.length
+        ? updateConfiguredStep(ctx, guild, { channels: valid }, 2)
+        : ctx.store.updateGuild(guild.id, { channels: [] });
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 2, { note: cfg.logChannelId && withoutLog.length !== picked.length ? 'Mein Log-Kanal kann nicht überwacht werden – ich habe ihn rausgenommen.' : null }));
+      const note = picked.some((id) => String(id) === String(cfg.logChannelId || ''))
+        ? t(lang, 's2LogExcluded')
+        : valid.length
+          ? t(lang, 'setupSaved')
+          : t(lang, 's2NeedChannel');
+      return interaction.update(renderStep(ctx, guild, next, 2, { note }));
     }
 
     if (action === 'roles') {
-      const next = ctx.store.updateGuild(guild.id, { immuneRoles: values.map(String) });
+      const requestedRoles = [...new Set(values.map(String))];
+      const roles = requestedRoles.filter((id) => {
+        if (id === String(guild.id)) return false;
+        const role = guild.roles?.cache?.get(id);
+        return Boolean(role && !role.managed);
+      });
+      const next = updateConfiguredStep(ctx, guild, { immuneRoles: roles }, 3);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 3));
+      const note = requestedRoles.length !== roles.length ? t(lang, 'rolesExcluded') : t(lang, 'setupSaved');
+      return interaction.update(renderStep(ctx, guild, next, 3, { note }));
     }
 
     if (action === 'log') {
-      const channelId = String(values[0]);
+      const channelId = String(values[0] || '');
+      const channel = guild.channels?.cache?.get(channelId)
+        || (await guild.channels?.fetch?.(channelId).catch(() => null));
+      if (!channel || channel.type !== ChannelType.GuildText) {
+        return interaction.update(renderStep(ctx, guild, cfg, 6, { note: t(lang, 's6NeedChannel') }));
+      }
       const channels = (cfg.channels || []).filter((id) => String(id) !== channelId);
-      const next = ctx.store.updateGuild(guild.id, { logChannelId: channelId, logAuto: false, channels });
-      const channel = guild.channels.cache.get(channelId);
-      if (channel) await applyLogPermissions(ctx, guild, channel, next);
+      const next = updateConfiguredStep(ctx, guild, { logChannelId: channelId, logAuto: false, channels }, 6);
+      await applyLogPermissions(ctx, guild, channel, next);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 6));
+      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 6, { note: t(lang, 'setupSaved') }));
     }
 
     if (action === 'import') {
-      const channelId = String(values[0]);
-      const channel = guild.channels.cache.get(channelId) || (await guild.channels.fetch(channelId).catch(() => null));
+      const channelId = String(values[0] || '');
+      const channel = guild.channels?.cache?.get(channelId)
+        || (await guild.channels?.fetch?.(channelId).catch(() => null));
       if (!channel) {
-        return interaction.update(renderStep(ctx, guild, cfg, 4, { note: t(lang, 'rulesNotFound') }));
+        return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: 'choose', note: t(lang, 'rulesNotFound') }));
       }
-      const messages = await channel.messages.fetch({ limit: 10 }).catch(() => null);
-      if (!messages || messages.size > 1) {
-        return interaction.update(renderStep(ctx, guild, cfg, 4, { note: t(lang, 'rulesNotFound') }));
+      const messages = await channel.messages?.fetch?.({ limit: 10 }).catch(() => null);
+      const recentMessages = messages?.values ? [...messages.values()] : Array.isArray(messages) ? messages : [];
+      if (!recentMessages.length || recentMessages.length > 1) {
+        return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: 'choose', note: t(lang, 'rulesNotFound') }));
       }
-      const message = [...messages.values()][0];
+      const message = recentMessages[0];
       const text = extractTextFromMessage(message);
-      if (!text) return interaction.update(renderStep(ctx, guild, cfg, 4, { note: t(lang, 'rulesNotFound') }));
+      if (!text) {
+        return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: 'choose', note: t(lang, 'rulesNotFound') }));
+      }
 
       const clamped = clampRules(text);
-      ctx.setupDraft.set(guild.id, { text: clamped.text, truncated: clamped.truncated, channelId, channelName: channel.name, messageId: message.id });
-      return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: ctx.setupDraft.get(guild.id) }));
+      const pending = {
+        text: clamped.text,
+        truncated: clamped.truncated,
+        channelId,
+        channelName: channel.name,
+        messageId: message.id,
+      };
+      ctx.setupDraft.set(guild.id, pending);
+      return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: pending }));
     }
   }
 
   if (kind === 'btn') {
-    if (action === 'all_channels') {
-      const all = [...guild.channels.cache.values()]
-        .filter((c) => [ChannelType.GuildText, ChannelType.GuildAnnouncement, ChannelType.GuildForum].includes(c.type))
-        .filter((c) => String(c.id) !== String(cfg.logChannelId || ''))
-        .map((c) => c.id)
-        .slice(0, 100);
-      const next = ctx.store.updateGuild(guild.id, { channels: all });
-      await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 2));
-    }
-    if (action === 'none_channels') {
-      const next = ctx.store.updateGuild(guild.id, { channels: [] });
-      await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 2));
-    }
-    if (action === 'all_roles') {
-      const roles = [...guild.roles.cache.values()].filter((r) => r.id !== guild.id && !r.managed).map((r) => r.id).slice(0, 100);
-      const next = ctx.store.updateGuild(guild.id, { immuneRoles: roles });
-      await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 3));
-    }
     if (action === 'none_roles') {
-      const next = ctx.store.updateGuild(guild.id, { immuneRoles: [] });
+      const next = updateConfiguredStep(ctx, guild, { immuneRoles: [] }, 3);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 3));
+      return interaction.update(renderStep(ctx, guild, next, 3, { note: t(lang, 'setupSaved') }));
     }
 
     if (action === 'rules_manual') {
@@ -415,29 +542,33 @@ async function handleComponent(ctx, interaction) {
               required: false,
               maxLength: MAX_RULES_CHARS,
               value: cfg.rules || '',
-              placeholder: '1. Keine Beleidigungen\n2. Kein Spam\n3. …',
+              placeholder: t(lang, 'rulesExample'),
             }),
           ],
         })
       );
     }
     if (action === 'rules_skip') {
-      const next = ctx.store.updateGuild(guild.id, { rulesMode: 'skip', rules: '' });
-      await setStep(ctx, guild, 5);
+      ctx.setupDraft.delete(guild.id);
+      const next = updateConfiguredStep(ctx, guild, { rulesMode: 'skip', rules: '' }, 4);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 5));
+      return interaction.update(renderStep(ctx, guild, next, 4, { note: t(lang, 'rulesSkipped') }));
     }
     if (action === 'rules_import') {
+      ctx.setupDraft.delete(guild.id);
       return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: 'choose' }));
     }
     if (action === 'import_use') {
       const pending = ctx.setupDraft.get(guild.id);
-      if (!pending) return interaction.update(renderStep(ctx, guild, cfg, 4, { note: t(lang, 'rulesNotFound') }));
+      if (!pending || typeof pending.text !== 'string') {
+        return interaction.update(renderStep(ctx, guild, cfg, 4, { draft: 'choose', note: t(lang, 'rulesNotFound') }));
+      }
       ctx.setupDraft.delete(guild.id);
-      ctx.store.updateGuild(guild.id, { rulesMode: 'import', rules: pending.text });
-      await setStep(ctx, guild, 5);
+      const next = updateConfiguredStep(ctx, guild, { rulesMode: 'import', rules: pending.text }, 4);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 5, { note: pending.truncated ? t(lang, 'rulesTooLong', { max: MAX_RULES_CHARS }) : null }));
+      return interaction.update(renderStep(ctx, guild, next, 4, {
+        note: pending.truncated ? t(lang, 'rulesTooLong', { max: MAX_RULES_CHARS }) : t(lang, 'rulesSaved'),
+      }));
     }
     if (action === 'import_edit') {
       const pending = ctx.setupDraft.get(guild.id);
@@ -469,7 +600,7 @@ async function handleComponent(ctx, interaction) {
               required: false,
               maxLength: MAX_INSTRUCTIONS_CHARS,
               value: cfg.instructions || '',
-              placeholder: 'z. B. „Bei Werbung sofort 1 Tag Timeout. Trash-Talk unter Freunden nie bestrafen."',
+              placeholder: t(lang, 's5Example'),
             }),
           ],
         })
@@ -477,7 +608,7 @@ async function handleComponent(ctx, interaction) {
     }
     if (['allow_timeout', 'allow_kick', 'allow_ban'].includes(action)) {
       const field = action.replace('allow_', '');
-      const next = ctx.store.updateGuild(guild.id, { allow: { ...cfg.allow, [field]: !cfg.allow[field] } });
+      const next = updateConfiguredStep(ctx, guild, { allow: { ...cfg.allow, [field]: !cfg.allow[field] } }, 5);
       await ctx.store.commit();
       return interaction.update(renderStep(ctx, guild, next, 5));
     }
@@ -488,14 +619,18 @@ async function handleComponent(ctx, interaction) {
         return interaction.update(renderStep(ctx, guild, cfg, 6, { note: t(lang, 'logNeedPermission') }));
       }
       const channels = (cfg.channels || []).filter((id) => String(id) !== String(created.channel.id));
-      const next = ctx.store.updateGuild(guild.id, { logChannelId: created.channel.id, logAuto: true, channels });
+      const next = updateConfiguredStep(ctx, guild, {
+        logChannelId: created.channel.id,
+        logAuto: true,
+        channels,
+      }, 6);
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 6, { note: `✅ <#${created.channel.id}>` }));
+      return interaction.update(renderStep(ctx, guild, next, 6, { note: t(lang, 's6ChannelCreated', { channel: `<#${created.channel.id}>` }) }));
     }
     if (action === 'log_clear') {
       const next = ctx.store.updateGuild(guild.id, { logChannelId: null, logAuto: false });
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 6));
+      return interaction.update(renderStep(ctx, guild, next, 6, { note: t(lang, 's6NeedChannel') }));
     }
 
     if (action === 'key') {
@@ -503,18 +638,19 @@ async function handleComponent(ctx, interaction) {
         ui.modal({
           id: 'setup:modal:key',
           title: t(lang, 'keyEnter'),
-          components: [ui.textInput({ id: 'key', label: 'Groq API Key', style: 1, required: true, maxLength: 200, placeholder: 'gsk_…' })],
+          components: [ui.textInput({ id: 'key', label: t(lang, 'keyInputLabel'), style: 1, required: true, maxLength: 200, placeholder: 'gsk_…' })],
         })
       );
     }
     if (action === 'key_clear') {
       const next = ctx.store.updateGuild(guild.id, { groqKey: null });
       await ctx.store.commit();
-      return interaction.update(renderStep(ctx, guild, next, 7));
+      const note = String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim() ? t(lang, 'keyEnvStillSet') : t(lang, 'keyCleared');
+      return interaction.update(renderStep(ctx, guild, next, 7, { note }));
     }
   }
 
-  return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), cfg.setup.step || 1, { note, draft }));
+  return interaction.update(renderStep(ctx, guild, ctx.store.getGuild(guild.id), currentStep));
 }
 
 // ------------------------------ Modals ------------------------------
@@ -529,35 +665,40 @@ async function handleModal(ctx, interaction) {
     const raw = interaction.fields.getTextInputValue('rules') || '';
     const clamped = clampRules(raw);
     ctx.setupDraft.delete(guild.id);
-    ctx.store.updateGuild(guild.id, { rules: clamped.text, rulesMode: clamped.text.trim() ? 'manual' : 'skip' });
-    await setStep(ctx, guild, 5);
+    const next = updateConfiguredStep(ctx, guild, {
+      rules: clamped.text,
+      rulesMode: clamped.text.trim() ? 'manual' : 'skip',
+    }, 4);
     await ctx.store.commit();
     return interaction.update(
-      renderStep(ctx, guild, ctx.store.getGuild(guild.id), 5, { note: clamped.truncated ? t(lang, 'rulesTooLong', { max: MAX_RULES_CHARS }) : null })
+      renderStep(ctx, guild, next, 4, {
+        note: clamped.truncated ? t(lang, 'rulesTooLong', { max: MAX_RULES_CHARS }) : t(lang, 'rulesSaved'),
+      })
     );
   }
 
   if (action === 'instr') {
     const clamped = clampInstructions(interaction.fields.getTextInputValue('instructions') || '');
-    const next = ctx.store.updateGuild(guild.id, { instructions: clamped.text });
+    const next = updateConfiguredStep(ctx, guild, { instructions: clamped.text }, 5);
     await ctx.store.commit();
     return interaction.update(
-      renderStep(ctx, guild, next, 5, { note: clamped.truncated ? `Auf ${MAX_INSTRUCTIONS_CHARS} Zeichen gekürzt.` : null })
+      renderStep(ctx, guild, next, 5, { note: clamped.truncated ? t(lang, 'instructionsTooLong', { max: MAX_INSTRUCTIONS_CHARS }) : t(lang, 'setupSaved') })
     );
   }
 
   if (action === 'key') {
     const key = String(interaction.fields.getTextInputValue('key') || '').trim();
     await interaction.deferUpdate().catch(() => {});
+    await interaction.editReply(renderStep(ctx, guild, ctx.store.getGuild(guild.id), 7, { note: t(lang, 'keyChecking') })).catch(() => {});
     const test = await validateGroqKey({ apiKey: key, fetchFn: ctx.fetchFn });
     if (!test.ok) {
       const next = ctx.store.getGuild(guild.id);
       await ctx.store.commit();
       return interaction.editReply(
-        renderStep(ctx, guild, next, 7, { note: t(lang, 'keyBad', { err: test.error || 'unbekannt' }) })
+        renderStep(ctx, guild, next, 7, { note: t(lang, 'keyBad', { err: keyErrorDescription(lang, test) }) })
       );
     }
-    const next = ctx.store.updateGuild(guild.id, { groqKey: key });
+    const next = updateConfiguredStep(ctx, guild, { groqKey: key }, 7);
     await ctx.store.commit();
     return interaction.editReply(
       renderStep(ctx, guild, next, 7, { note: t(lang, 'keyOk', { ms: test.ms }) })
@@ -574,7 +715,13 @@ async function finish(ctx, guild) {
   let cfg = store.getGuild(guild.id);
 
   store.updateGuild(guild.id, {
-    setup: { step: 1, furthest: STEPS, done: true, completedAt: Date.now() },
+    setup: {
+      step: 1,
+      furthest: STEPS,
+      configuredSteps: Array.from({ length: STEPS }, (_, index) => index + 1),
+      done: true,
+      completedAt: Date.now(),
+    },
   });
   cfg = store.getGuild(guild.id);
 
