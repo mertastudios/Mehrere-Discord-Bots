@@ -115,7 +115,7 @@ function payload(components, { ephemeral = false, allowedMentions } = {}) {
     flags: FLAG_V2 | (ephemeral ? FLAG_EPHEMERAL : 0),
     components: (Array.isArray(components) ? components : [components]).filter(Boolean),
   };
-  if (allowedMentions) body.allowed_mentions = allowedMentions;
+  if (allowedMentions) body.allowedMentions = allowedMentions;
   return body;
 }
 

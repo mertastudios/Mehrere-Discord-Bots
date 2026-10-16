@@ -14,7 +14,7 @@
 
 const ui = require('./ui');
 const { t } = require('./languages');
-const { logNotice, ACCENT } = require('./logging');
+const { logNotice, ACCENT, withOrderButton } = require('./logging');
 
 async function dmGuildOwner(ctx, guild) {
   const lang = ctx.store.getGuild(guild.id).lang || 'de';
@@ -38,7 +38,9 @@ async function dmGuildOwner(ctx, guild) {
 
   if (channel?.send) {
     try {
-      await channel.send(ui.payload([ui.container([ui.text(t(lang, 'joinDmNoDm'))], { accentColor: 0x5865f2 })]));
+      let body = ui.payload([ui.container([ui.text(t(lang, 'joinDmNoDm'))], { accentColor: 0x5865f2 })]);
+      if (String(channel.id) === String(ctx.store.getGuild(guild.id).logChannelId)) body = withOrderButton(body, lang);
+      await channel.send(body);
       return { ok: true, via: 'channel' };
     } catch {
       /* ignorieren */
