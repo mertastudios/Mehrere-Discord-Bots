@@ -73,13 +73,36 @@ function measureText(action, durationSeconds, lang = 'de') {
  * Fertige Nutzer-Nachricht im Ton eines echten Moderators – Rückfall, wenn die
  * KI keine geschrieben hat.
  */
-function fallbackUserMessage({ lang = 'de', userName = 'du', action = 'warn', ruleText = '', durationSeconds = 0 }) {
+function fallbackUserMessage({ lang = 'de', userName = 'du', action = 'warn', ruleText = '', durationSeconds = 0, previousPenalties = 0 }) {
   const measure = measureText(action, durationSeconds, lang);
   if (lang === 'en') {
-    return `That's enough, ${userName}. ${ruleText ? `This breaks the rule ${ruleText}. ` : ''}You get a ${measure}.`;
+    const actionText = action === 'ban'
+      ? 'Because of the severity of this violation and your previous warnings, you are being banned from this server.'
+      : action === 'kick'
+        ? 'You are being kicked from the server for this behavior.'
+        : action === 'timeout'
+          ? `You have been given a ${measure} to cool off.`
+          : previousPenalties > 0
+            ? `This is another official warning – further violations will result in stricter action.`
+            : 'This is an official warning.';
+    return `${userName}, your recent message violates our server rules${ruleText ? ` (${ruleText})` : ''}. Behavior like this harms the chat environment and makes other members feel uncomfortable. ${actionText} Please make sure to follow our community guidelines going forward.`;
   }
-  const reis = action === 'ban' ? 'Dafür gibt’s einen Ban.' : action === 'kick' ? 'Dafür fliegst du raus.' : action === 'timeout' ? `Dafür gibt’s ${measure === t(lang, 'timeoutLabel') ? 'einen Timeout' : `einen ${measure}`}.` : 'Das ist eine Verwarnung – beim nächsten Mal wird es ernster.';
-  return `Jetzt reichts, ${userName}. ${ruleText ? `Das verstößt gegen die Regel ${ruleText}. ` : ''}${reis}`;
+  const actionText = action === 'ban'
+    ? 'Aufgrund der Schwere dieses Verstoßes und deiner vorherigen Einträge wirst du dauerhaft von diesem Server gebannt.'
+    : action === 'kick'
+      ? 'Wegen dieses Verstoßes wirst du vorübergehend vom Server entfernt.'
+      : action === 'timeout'
+        ? `Um dich und den Chat zu beruhigen, bekommst du ${measure === t(lang, 'timeoutLabel') ? 'einen Timeout' : `einen ${measure}`} Pause vom Schreiben.`
+        : previousPenalties > 0
+          ? `Das ist eine weitere offizielle Verwarnung – bei einem weiteren Verstoß werden wir härtere Maßnahmen ergreifen müssen.`
+          : 'Das ist eine offizielle Verwarnung.';
+  const whyText = ruleText
+    ? `Deine Nachricht verstößt gegen die Regel **${ruleText}**. Solche Inhalte schaden der Gesprächsatmosphäre und machen anderen Mitgliedern das Chatten unangenehm, deshalb tolerieren wir das nicht.`
+    : 'Deine Nachricht verstößt gegen unsere Serverregeln. Solche Inhalte schaden der Gesprächsatmosphäre, deshalb tolerieren wir das nicht.';
+  const futureText = action === 'ban' || action === 'kick'
+    ? ''
+    : ' Bitte achte zukünftig darauf, dich an die Regeln zu halten und respektvoll mit anderen Mitgliedern umzugehen.';
+  return `${userName}, ${whyText} ${actionText}${futureText}`;
 }
 
 // ------------------------------ Maßnahmen ausführen ------------------------------
@@ -219,11 +242,12 @@ async function applyModerations({
         action: measure,
         ruleText,
         durationSeconds: seconds,
+        previousPenalties: previous,
       });
     const measureLabel = measureText(measure, seconds, lang);
 
-    // 3) Öffentliche Antwort mit Ping auf die Verstoß-Nachricht
-    const publicText = `<@${record.authorId}> ${ui.clip(userText, 1200)}`;
+    // 3) Öffentliche Antwort mit Ping auf die Verstoß-Nachricht – volle Länge der KI-Antwort (max 1900 Zeichen, Discord-Limit ist 2000)
+    const publicText = `<@${record.authorId}> ${ui.clip(userText, 1900)}`;
     const publicMessage = await sendPublicNotice({ ctx, guild, record, text: publicText, accentColor: 0xed4245 });
 
     // 4) DM an den Nutzer
