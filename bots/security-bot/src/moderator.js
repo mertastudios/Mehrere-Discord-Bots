@@ -154,11 +154,37 @@ async function sendPublicNotice({ ctx, guild, record, text, accentColor }) {
   }
 }
 
-async function sendDirectMessage({ ctx, userId, text, accentColor }) {
+function buildModerationDm({ guild, lang = 'de', measureLabel, publicMessage = null, record = null }) {
+  const title = t(lang, 'modDmTitle', { guild: guild.name });
+  const lines = [
+    ui.text(`## ${title}`),
+    ui.text(`**${t(lang, 'modAction')}:** ${measureLabel}`),
+  ];
+  const messageUrl =
+    publicMessage?.url ||
+    (publicMessage?.id && record?.channelId
+      ? `https://discord.com/channels/${guild.id}/${record.channelId}/${publicMessage.id}`
+      : null);
+  if (messageUrl) lines.push(ui.text(`[${t(lang, 'modDmMoreInfo')}](${messageUrl})`));
+
+  let iconUrl = null;
+  try {
+    iconUrl = guild.iconURL?.({ extension: 'png', size: 256 }) || null;
+  } catch {
+    /* Ohne Server-Icon bleibt nur der Text übrig. */
+  }
+
+  const content = iconUrl
+    ? [{ type: 9, components: lines, accessory: { type: 11, media: { url: iconUrl } } }]
+    : lines;
+  return ui.payload([ui.container(content, { accentColor: 0xed4245 })]);
+}
+
+async function sendDirectMessage({ ctx, userId, text, accentColor, payload = null }) {
   const user = await ctx.client.users.fetch(userId).catch(() => null);
   if (!user?.send) return null;
   try {
-    return await user.send(ui.payload([ui.container([ui.text(text)], { accentColor })]));
+    return await user.send(payload || ui.payload([ui.container([ui.text(text)], { accentColor })]));
   } catch {
     return null;
   }
@@ -214,6 +240,7 @@ async function applyModerations({
     const ruleText = ruleLabel(decision.regel_id, cfg.rules) || String(decision.regel_id || 'Regel');
     const reason = String(decision.begruendung || '').slice(0, 300) || 'Regelverstoß';
     const confidence = Number(decision.konfidenz) || 0;
+    const previous = store.listPenalties(guild.id, { userId: record.authorId }).length;
 
     // 2) Maßnahme ausführen (warn braucht keine Aktion)
     let execution = { ok: true, skipped: true };
@@ -250,12 +277,11 @@ async function applyModerations({
     const publicText = `<@${record.authorId}> ${ui.clip(userText, 1900)}`;
     const publicMessage = await sendPublicNotice({ ctx, guild, record, text: publicText, accentColor: 0xed4245 });
 
-    // 4) DM an den Nutzer
+    // 4) Rote DM mit Server-Icon, Maßnahme und Link zur öffentlichen Begründung
     await sendDirectMessage({
       ctx,
       userId: record.authorId,
-      text: `${userText}\n\n${t(lang, 'modAction')}: **${measureLabel}**${ruleText ? ` · ${t(lang, 'modRule')}: ${ruleText}` : ''}`,
-      accentColor: 0xed4245,
+      payload: buildModerationDm({ guild, lang, measureLabel, publicMessage, record }),
     });
 
     // 5) Strafregister
@@ -274,8 +300,6 @@ async function applyModerations({
       source,
       forcedBy,
     });
-
-    const previous = store.listPenalties(guild.id, { userId: record.authorId }).length - 1;
 
     // 6) Log
     const logMessage = await logModeration(ctx, guild, {
@@ -311,6 +335,7 @@ module.exports = {
   fallbackUserMessage,
   executeMeasure,
   sendPublicNotice,
+  buildModerationDm,
   sendDirectMessage,
   applyModerations,
 };

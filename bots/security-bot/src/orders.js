@@ -11,21 +11,25 @@
  *   4. Im Log steht die Maßnahme inkl. „Auftrag von <Moderator>“.
  *   5. Ergibt die Anweisung keine klare Maßnahme → Log: „Keine klare Anweisung
  *      verstanden“ (ebenfalls mit Moderator).
+ *   6. Groq-Limit oder Groq-Fehler → der vorbereitete Auftrag bleibt in einer
+ *      Warteschlange, wird automatisch erneut versucht und kann entfernt werden.
  * ============================================================================
  */
 
+const { randomUUID } = require('node:crypto');
 const ui = require('./ui');
 const { t } = require('./languages');
 const { buildTranscript, estimateTokens, isImmune } = require('./transcript');
 const { toRecord } = require('./collector');
 const { buildSystemPrompt, buildOrderPrompt, verdictSchema } = require('./prompts');
-const { callGroqWithFallback, modelFromEnv } = require('./groq');
+const { callGroqWithFallback, modelFromEnv, nextBackoffMs } = require('./groq');
 const { applyModerations } = require('./moderator');
-const { logNotice, logError, ACCENT } = require('./logging');
+const { logNotice, sendToLog, ACCENT } = require('./logging');
 const { isTeamMember } = require('./guard');
 
 const CONTEXT_RADIUS = 15;
 const MAX_CHANNEL_SEARCH = 60;
+const KEY_RETRY_MS = 60_000;
 
 // ------------------------------ Panel ------------------------------
 
@@ -44,6 +48,100 @@ function orderPanel(lang) {
     ],
     { ephemeral: true }
   );
+}
+
+// ------------------------------ Warteschlange ------------------------------
+
+function orderQueueFor(ctx, guildId, { create = true } = {}) {
+  if (!ctx.orderQueue) ctx.orderQueue = new Map();
+  const key = String(guildId);
+  if (!ctx.orderQueue.has(key) && create) ctx.orderQueue.set(key, new Map());
+  return ctx.orderQueue.get(key) || null;
+}
+
+function orderFailureReason(lang, result) {
+  const detail = [result.error, result.status, result.reason].filter(Boolean).join(' · ');
+  if (result.error === 'rate_limited' || result.error === 'pacing') {
+    return t(lang, 'orderQueueLimitReason', { detail });
+  }
+  return t(lang, 'orderQueueErrorReason', { detail: detail || 'unknown' });
+}
+
+function queuedOrderPayload(lang, order, result, { ephemeral = false } = {}) {
+  const retry = `<t:${Math.floor(order.retryAt / 1000)}:R>`;
+  return ui.payload(
+    [
+      ui.container(
+        [
+          ui.text(t(lang, 'orderQueuedTitle')),
+          ui.text(
+            t(lang, 'orderQueuedBody', {
+              reason: orderFailureReason(lang, result),
+              retry,
+            })
+          ),
+          ui.text(
+            `📋 ${t(lang, 'modOrderBy')}: **${ui.clip(order.moderatorName, 80)}** (<@${order.moderatorId}>)\n` +
+              `💬 ${ui.clip(order.instruction, 200)}\n🔍 ${order.ids.map((id) => `\`${id}\``).join(', ')}`
+          ),
+          ui.separator(),
+          ui.row([
+            ui.button({ id: `ord:cancel:${order.id}`, label: t(lang, 'orderRemove'), style: ui.STYLE.danger, emoji: '🗑️' }),
+            ui.button({ id: 'ord:new:none', label: t(lang, 'orderButton'), style: ui.STYLE.secondary }),
+          ]),
+        ],
+        { accentColor: ACCENT.warn }
+      ),
+    ],
+    { ephemeral }
+  );
+}
+
+function queueStatusPayload(lang, text, { ephemeral = false, accentColor = ACCENT.neutral } = {}) {
+  return ui.payload(
+    [
+      ui.container(
+        [
+          ui.text(text),
+          ui.separator(),
+          ui.row([ui.button({ id: 'ord:new:none', label: t(lang, 'orderButton'), style: ui.STYLE.secondary })]),
+        ],
+        { accentColor }
+      ),
+    ],
+    { ephemeral }
+  );
+}
+
+async function closeQueuedOrderLog(order, lang, text, accentColor) {
+  if (!order.logMessage?.edit) return;
+  await order.logMessage.edit(queueStatusPayload(lang, text, { accentColor })).catch(() => null);
+}
+
+async function cancelQueuedOrder(ctx, interaction) {
+  const guild = interaction.guild;
+  const lang = ctx.store.getGuild(guild.id).lang || 'de';
+  const orderId = String(interaction.customId || '').split(':').slice(2).join(':');
+  const queue = orderQueueFor(ctx, guild.id, { create: false });
+  const order = queue?.get(orderId);
+
+  if (!order) {
+    return interaction.reply(
+      queueStatusPayload(lang, t(lang, 'orderNotQueued'), { ephemeral: true, accentColor: ACCENT.warn })
+    );
+  }
+
+  queue.delete(orderId);
+  const clickedQueueLog = interaction.message?.id && String(interaction.message.id) === String(order.logMessage?.id);
+  if (!clickedQueueLog) {
+    await closeQueuedOrderLog(order, lang, t(lang, 'orderRemoved'), ACCENT.neutral);
+  }
+
+  const payload = queueStatusPayload(lang, t(lang, 'orderRemoved'), {
+    ephemeral: !clickedQueueLog,
+    accentColor: ACCENT.neutral,
+  });
+  return interaction.update ? interaction.update(payload) : interaction.reply(payload);
 }
 
 async function handleOrderButton(ctx, interaction, action) {
@@ -76,6 +174,10 @@ async function handleOrderButton(ctx, interaction, action) {
         ],
       })
     );
+  }
+
+  if (action === 'cancel') {
+    return cancelQueuedOrder(ctx, interaction);
   }
 }
 
@@ -122,6 +224,129 @@ async function fetchContext(message) {
 
 // ------------------------------ Ausführung ------------------------------
 
+function retryFailure(order, details) {
+  const error = details.error || 'unknown';
+  const isMissingKey = error === 'missing_api_key' || error === 'invalid_api_key';
+  const suggested = Number(details.retryInMs || details.resetInMs || details.waitMs) || 0;
+  const retryInMs = Math.max(
+    1000,
+    suggested || (isMissingKey ? KEY_RETRY_MS : nextBackoffMs(Math.max(0, order.attempts - 1)))
+  );
+  return {
+    ok: false,
+    retryable: true,
+    error,
+    reason: details.reason || null,
+    status: details.status || null,
+    message: details.message || null,
+    retryInMs,
+  };
+}
+
+/** Führt einen bereits vorbereiteten Auftrag aus. Fehler verwerfen ihn nicht. */
+async function executeOrder(ctx, guild, order, { fromQueue = false } = {}) {
+  const cfg = ctx.store.getGuild(guild.id);
+  order.attempts += 1;
+
+  const apiKey = cfg.groqKey || String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
+  if (!apiKey) return retryFailure(order, { error: 'missing_api_key' });
+
+  const check = ctx.budget.smart.canSpend(order.estimate, { priority: true });
+  if (!check.ok || check.waitMs) {
+    return retryFailure(order, {
+      error: 'rate_limited',
+      reason: check.reason,
+      resetInMs: check.resetInMs,
+      waitMs: check.waitMs,
+    });
+  }
+
+  const result = await callGroqWithFallback({
+    apiKey,
+    model: modelFromEnv(ctx.env, 'smart'),
+    system: order.system,
+    user: order.user,
+    schema: verdictSchema({ allow: cfg.allow, withOrder: true }),
+    schemaName: 'auftrag',
+    maxTokens: 1400,
+    temperature: 0.3,
+    reasoningEffort: 'medium',
+    fetchFn: ctx.fetchFn,
+  });
+
+  if (!result.ok) {
+    return retryFailure(order, {
+      error: result.error,
+      status: result.status,
+      message: result.message,
+      resetInMs: result.retryAfterMs,
+    });
+  }
+  ctx.budget.smart.spend(result.usage.totalTokens || order.estimate, { priority: true });
+
+  // Ein Klick auf „Entfernen“ während des API-Aufrufs verhindert noch die Maßnahme.
+  if (fromQueue && orderQueueFor(ctx, guild.id, { create: false })?.get(order.id) !== order) {
+    return { ok: false, cancelled: true };
+  }
+
+  const verdicts = Array.isArray(result.json?.verstoesse) ? result.json.verstoesse : [];
+  const understood = result.json?.verstanden !== false;
+
+  if (!understood || !verdicts.length) {
+    await logNotice(ctx, guild, {
+      lang: cfg.lang || 'de',
+      title: `${t(cfg.lang || 'de', 'modTitleOrder')} · ${t(cfg.lang || 'de', 'orderUnclear')}`,
+      lines: [
+        `📋 ${t(cfg.lang || 'de', 'modOrderBy')}: **${order.moderatorName}** (<@${order.moderatorId}>)`,
+        `💬 Anweisung: „${ui.clip(order.instruction, 200)}“`,
+        `🔍 Nachrichten: ${order.ids.map((id) => `\`${id}\``).join(', ')}`,
+        result.json?.hinweis ? `🧠 ${ui.clip(result.json.hinweis, 300)}` : t(cfg.lang || 'de', 'orderUnclearBody'),
+      ],
+      accentColor: ACCENT.warn,
+    });
+    return { ok: true, understood: false };
+  }
+
+  const outcome = await applyModerations({
+    ctx,
+    guild,
+    idMap: order.recordMap,
+    decisions: verdicts,
+    source: 'order',
+    forcedBy: order.moderatorId,
+    moderatorName: order.moderatorName,
+    orderInstruction: order.instruction,
+  });
+  return { ok: true, understood: true, outcome };
+}
+
+/** Versucht fällige Aufträge erneut; nicht fällige bleiben unangetastet. */
+async function processOrderQueue(ctx, guild, { now = Date.now() } = {}) {
+  const queue = orderQueueFor(ctx, guild.id, { create: false });
+  if (!queue?.size) return { ok: true, processed: 0, pending: 0 };
+  let processed = 0;
+
+  for (const order of [...queue.values()].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (order.running || order.retryAt > now || queue.get(order.id) !== order) continue;
+    order.running = true;
+    try {
+      const result = await executeOrder(ctx, guild, order, { fromQueue: true });
+      if (result.cancelled) continue;
+      if (result.ok) {
+        if (queue.get(order.id) === order) queue.delete(order.id);
+        await closeQueuedOrderLog(order, ctx.store.getGuild(guild.id).lang || 'de', t(ctx.store.getGuild(guild.id).lang || 'de', 'orderQueueDone'), ACCENT.ok);
+        processed += 1;
+      } else {
+        order.retryAt = Date.now() + result.retryInMs;
+        order.lastError = result;
+      }
+    } finally {
+      order.running = false;
+    }
+  }
+  return { ok: true, processed, pending: queue.size };
+}
+
 async function handleOrderModal(ctx, interaction) {
   const guild = interaction.guild;
   const cfg = ctx.store.getGuild(guild.id);
@@ -140,7 +365,7 @@ async function handleOrderModal(ctx, interaction) {
   const reply = (payload) => interaction.editReply(payload);
 
   if (!ids.length) {
-    return reply(ui.payload([ui.container([ui.text(t(lang, 'orderNoMsg'))])]));
+    return reply(ui.payload([ui.container([ui.text(t(lang, 'orderNoMsg'))])], { ephemeral: true }));
   }
 
   // 1) Nachrichten + Kontext sammeln
@@ -150,7 +375,7 @@ async function handleOrderModal(ctx, interaction) {
     if (message) messages.push(message);
   }
   if (!messages.length) {
-    return reply(ui.payload([ui.container([ui.text(t(lang, 'orderNoMsg'))], { accentColor: ACCENT.error })]));
+    return reply(ui.payload([ui.container([ui.text(t(lang, 'orderNoMsg'))], { accentColor: ACCENT.error })], { ephemeral: true }));
   }
 
   const contextList = await fetchContext(messages[0]);
@@ -179,13 +404,6 @@ async function handleOrderModal(ctx, interaction) {
     );
   }
 
-  const apiKey = cfg.groqKey || String(ctx.env('SECURITY_GROQ_API_KEY', '') || '').trim();
-  if (!apiKey) {
-    await logError(ctx, guild, { lang, detail: '🔑 Kein Groq-Key hinterlegt – Auftrag kann nicht ausgeführt werden (`/setup` Schritt 7).' });
-    return reply(ui.payload([ui.container([ui.text(t(lang, 'keyMissing'))], { accentColor: ACCENT.error })]));
-  }
-
-  // 2) KI entscheiden lassen
   const system = buildSystemPrompt({
     botName: ctx.client.user?.username || 'Sentinel',
     guildName: guild.name,
@@ -206,81 +424,75 @@ async function handleOrderModal(ctx, interaction) {
     moderator: member.displayName || member.user?.username || 'Moderator',
   });
 
-  const estimate = estimateTokens(system) + estimateTokens(user) + 1200;
-  const check = ctx.budget.smart.canSpend(estimate, { priority: true });
-  if (!check.ok) {
-    await logError(ctx, guild, { lang, detail: `Auftrag pausiert – Groq-Limit (${check.reason}).` });
-    return reply(ui.payload([ui.container([ui.text(t(lang, 'rateLimitTitle'))])]));
-  }
-
-  const result = await callGroqWithFallback({
-    apiKey,
-    model: modelFromEnv(ctx.env, 'smart'),
+  const order = {
+    id: randomUUID(),
+    guildId: guild.id,
+    ids,
+    instruction,
+    moderatorId: member.id,
+    moderatorName: member.displayName || member.user?.username || 'Moderator',
+    recordMap,
     system,
     user,
-    schema: verdictSchema({ allow: cfg.allow, withOrder: true }),
-    schemaName: 'auftrag',
-    maxTokens: 1400,
-    temperature: 0.3,
-    reasoningEffort: 'medium',
-    fetchFn: ctx.fetchFn,
-  });
+    estimate: estimateTokens(system) + estimateTokens(user) + 1200,
+    createdAt: Date.now(),
+    retryAt: 0,
+    attempts: 0,
+    running: false,
+    logMessage: null,
+  };
 
+  // 2) KI entscheiden lassen; bei Limit/Fehler bleibt genau dieser Auftrag erhalten.
+  const result = await executeOrder(ctx, guild, order);
   if (!result.ok) {
-    await logError(ctx, guild, {
-      lang,
-      detail: `Auftrag fehlgeschlagen (${result.error}${result.status ? ` ${result.status}` : ''}).`,
-    });
-    return reply(ui.payload([ui.container([ui.text(t(lang, 'errorTitle'))], { accentColor: ACCENT.error })]));
-  }
-  ctx.budget.smart.spend(result.usage.totalTokens || estimate);
-
-  const verdicts = Array.isArray(result.json?.verstoesse) ? result.json.verstoesse : [];
-  const understood = result.json?.verstanden !== false;
-
-  // 3) Keine klare Anweisung → Log, nichts tun
-  if (!understood || !verdicts.length) {
-    await logNotice(ctx, guild, {
-      lang,
-      title: `${t(lang, 'modTitleOrder')} · ${t(lang, 'orderUnclear')}`,
-      lines: [
-        `📋 ${t(lang, 'modOrderBy')}: **${member.displayName || member.user?.username}** (<@${member.id}>)`,
-        `💬 Anweisung: „${ui.clip(instruction, 200)}“`,
-        `🔍 Nachrichten: ${ids.map((id) => `\`${id}\``).join(', ')}`,
-        result.json?.hinweis ? `🧠 ${ui.clip(result.json.hinweis, 300)}` : t(lang, 'orderUnclearBody'),
-      ],
-      accentColor: ACCENT.warn,
-    });
-    return reply(ui.payload([ui.container([ui.text(`${t(lang, 'orderUnclear')}\n\n${t(lang, 'orderUnclearBody')}`)], { accentColor: ACCENT.warn })]));
+    order.retryAt = Date.now() + result.retryInMs;
+    order.lastError = result;
+    orderQueueFor(ctx, guild.id).set(order.id, order);
+    const payload = queuedOrderPayload(lang, order, result, { ephemeral: true });
+    order.logMessage = await sendToLog(ctx, guild, queuedOrderPayload(lang, order, result));
+    return reply(payload);
   }
 
-  // 4) Ausführen (als hätte die KI es selbst bemerkt)
-  const outcome = await applyModerations({
-    ctx,
-    guild,
-    idMap: recordMap,
-    decisions: verdicts,
-    source: 'order',
-    forcedBy: member.id,
-    moderatorName: member.displayName || member.user?.username || 'Moderator',
-    orderInstruction: instruction,
-  });
+  if (!result.understood) {
+    return reply(
+      ui.payload(
+        [ui.container([ui.text(`${t(lang, 'orderUnclear')}\n\n${t(lang, 'orderUnclearBody')}`)], { accentColor: ACCENT.warn })],
+        { ephemeral: true }
+      )
+    );
+  }
 
+  // 3) Ausführen (als hätte die KI es selbst bemerkt)
+  const outcome = result.outcome;
   return reply(
-    ui.payload([
-      ui.container(
-        [
-          ui.text(`✅ ${t(lang, 'orderStarted')}`),
-          ui.text(
-            outcome.applied
-              .map((a) => `· **${a.record.authorName}** → ${a.measure}${a.seconds ? ` (${a.penalty.duration})` : ''} · ${a.penalty.ruleLabel || a.decision.regel_id}`)
-              .join('\n') || t(lang, 'orderUnclearBody')
-          ),
-        ],
-        { accentColor: ACCENT.ok }
-      ),
-    ])
+    ui.payload(
+      [
+        ui.container(
+          [
+            ui.text(`✅ ${t(lang, 'orderStarted')}`),
+            ui.text(
+              outcome.applied
+                .map((a) => `· **${a.record.authorName}** → ${a.measure}${a.seconds ? ` (${a.penalty.duration})` : ''} · ${a.penalty.ruleLabel || a.decision.regel_id}`)
+                .join('\n') || t(lang, 'orderUnclearBody')
+            ),
+          ],
+          { accentColor: ACCENT.ok }
+        ),
+      ],
+      { ephemeral: true }
+    )
   );
 }
 
-module.exports = { orderPanel, handleOrderButton, handleOrderModal, findMessage, fetchContext, CONTEXT_RADIUS };
+module.exports = {
+  orderPanel,
+  handleOrderButton,
+  handleOrderModal,
+  findMessage,
+  fetchContext,
+  executeOrder,
+  processOrderQueue,
+  orderQueueFor,
+  queuedOrderPayload,
+  CONTEXT_RADIUS,
+};

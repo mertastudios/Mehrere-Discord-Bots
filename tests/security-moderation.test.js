@@ -27,7 +27,7 @@ const {
   allComponentsOf,
 } = require('./security-fakes');
 
-function scenario({ allow = { timeout: true, kick: false, ban: false }, logChannelId = null, content = 'Du bist ein Idiot' } = {}) {
+function scenario({ allow = { timeout: true, kick: false, ban: false }, logChannelId = 'log1', content = 'Du bist ein Idiot' } = {}) {
   const channel = makeChannel({ id: 'c1', name: 'chat' });
   const log = makeChannel({ id: 'log1', name: 'mod-log' });
   const guild = makeGuild({ id: 'g1', name: 'Testserver', ownerId: 'owner1', channels: [channel, log] });
@@ -42,7 +42,7 @@ function scenario({ allow = { timeout: true, kick: false, ban: false }, logChann
 
   const ctx = makeCtx({ guilds: [guild], env: { SECURITY_BOT_OWNER_ID: 'owner1' } });
   ctx.budget = createBudgetSet((k, d) => d);
-  ctx.store.updateGuild('g1', { allow, logChannelId, lang: 'de' });
+  ctx.store.updateGuild('g1', { allow, logChannelId, lang: 'de', setup: { done: true } });
 
   const record = {
     key: 'g1:c1:m1',
@@ -71,6 +71,7 @@ function logChannelOf(guild, ctx) {
 
 test('Verwarnung: Ping-Antwort im Kanal, DM, Eintrag im Strafregister, Log', async () => {
   const { ctx, guild, target, message, idMap } = scenario();
+  guild.iconURL = () => 'https://cdn.discordapp.com/icons/g1/server.png';
 
   const result = await applyModerations({
     ctx,
@@ -85,6 +86,14 @@ test('Verwarnung: Ping-Antwort im Kanal, DM, Eintrag im Strafregister, Log', asy
   assert.equal(target.timeouts.length, 0, 'Warnen greift nicht in den Account ein');
   assert.match(message.replies[0].components[0].components[0].content, /^<@u2> Jetzt reichts, Ben/);
   assert.equal(ctx.dms.filter((d) => d.id === 'u2').length, 1, 'Nutzer bekommt eine DM');
+  const dm = ctx.dms.find((d) => d.id === 'u2').payload;
+  const dmText = textsOf(dm);
+  assert.equal(dm.components[0].accent_color, 0xed4245, 'roter DM-Container');
+  assert.match(dmText, /Du hast auf „Testserver“ gegen die Regeln verstoßen\./);
+  assert.match(dmText, /\*\*Maßnahme:\*\* Verwarnung/);
+  assert.match(dmText, /Siehe hier für weitere Informationen/);
+  assert.ok(dmText.includes(`https://discord.com/channels/g1/c1/${result.applied[0].publicMessage.id}`));
+  assert.ok(allComponentsOf(dm).some((c) => c.type === 11 && c.media?.url === 'https://cdn.discordapp.com/icons/g1/server.png'));
 
   const penalties = ctx.store.listPenalties('g1', { userId: 'u2' });
   assert.equal(penalties.length, 1);
@@ -429,6 +438,84 @@ test('Auftrag wird ausgeführt – im Log steht der Moderator', async () => {
   assert.match(logText, /Admin/);
   assert.match(logText, /Banne ihn/);
   assert.ok(!/Banne ihn/.test(textsOf(channel.sent.at(-1))), 'Im Kanal steht nichts vom Auftrag');
+});
+
+test('Auftrag bei Groq-Limit: klare Warteschlange und Entfernen-Button', async () => {
+  const { ctx, guild, admin, channel, log } = scenario();
+  ctx.store.updateGuild('g1', { groqKey: 'gsk_test' });
+  const targetId = '123456789012345680';
+  channel.messages.cache.set(
+    targetId,
+    makeMessage({ id: targetId, content: 'Du Dummkopf', channel, guild, author: { id: 'u2', username: 'Ben' }, member: guild.memberCache.get('u2') })
+  );
+  ctx.budget.smart.canSpend = () => ({ ok: false, reason: 'tpd', resetInMs: 60_000 });
+
+  const modal = makeInteraction({
+    guild,
+    member: admin,
+    customId: 'ord:modal:create',
+    kind: 'modal',
+    fields: { ids: targetId, instruction: 'Verwarne ihn' },
+  });
+  await handleInteraction(ctx, modal);
+
+  const queued = modal.edits.at(-1);
+  assert.match(textsOf(queued), /Warteschlange/);
+  assert.match(textsOf(queued), /nicht verworfen/);
+  assert.match(textsOf(queued), /Groq-Limit/);
+  assert.match(textsOf(log.sent.at(-1)), /Warteschlange/);
+  const remove = allComponentsOf(queued).find((c) => c.custom_id?.startsWith('ord:cancel:'));
+  assert.ok(remove, 'Entfernen-Button ist sichtbar');
+  assert.equal(remove.style, 4);
+
+  const queue = orders.orderQueueFor(ctx, guild.id);
+  assert.equal(queue.size, 1);
+  assert.equal([...queue.values()][0].instruction, 'Verwarne ihn');
+
+  const cancel = makeInteraction({ guild, member: admin, customId: remove.custom_id, kind: 'button' });
+  await handleInteraction(ctx, cancel);
+  assert.equal(queue.size, 0);
+  assert.match(textsOf(cancel.updates.at(-1)), /aus der Warteschlange entfernt/);
+  assert.equal(ctx.store.listPenalties('g1').length, 0);
+});
+
+test('Auftrag nach Groq-Fehler: automatischer Retry aus der Warteschlange', async () => {
+  const { ctx, guild, admin, channel } = scenario();
+  ctx.store.updateGuild('g1', { groqKey: 'gsk_test' });
+  const targetId = '123456789012345681';
+  channel.messages.cache.set(
+    targetId,
+    makeMessage({ id: targetId, content: 'Du Dummkopf', channel, guild, author: { id: 'u2', username: 'Ben' }, member: guild.memberCache.get('u2') })
+  );
+  ctx.fetchFn = async () => {
+    throw new Error('offline');
+  };
+
+  const modal = makeInteraction({
+    guild,
+    member: admin,
+    customId: 'ord:modal:create',
+    kind: 'modal',
+    fields: { ids: targetId, instruction: 'Verwarne ihn' },
+  });
+  await handleInteraction(ctx, modal);
+  assert.match(textsOf(modal.edits.at(-1)), /Warteschlange/);
+  assert.match(textsOf(modal.edits.at(-1)), /Groq-Fehler/);
+
+  const queue = orders.orderQueueFor(ctx, guild.id);
+  const order = [...queue.values()][0];
+  assert.ok(order.retryAt > Date.now());
+  ctx.fetchFn = orderFetch({
+    verstanden: true,
+    verstoesse: [
+      { nachricht_id: 1, regel_id: 'S1', massnahme: 'warn', dauer: 'keine', begruendung: 'Beleidigung', nutzer_nachricht: 'Das war eine Beleidigung.', konfidenz: 95 },
+    ],
+  });
+
+  const retried = await orders.processOrderQueue(ctx, guild, { now: order.retryAt });
+  assert.equal(retried.processed, 1);
+  assert.equal(retried.pending, 0);
+  assert.equal(ctx.store.listPenalties('g1', { userId: 'u2' }).length, 1);
 });
 
 test('Unklare Anweisung landet als „Keine klare Anweisung verstanden“ im Log', async () => {

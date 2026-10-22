@@ -245,6 +245,7 @@ function makeCtx({ guilds = [], env = {}, logChannel = null } = {}) {
     budget: null,
     rest: { put: async () => [], get: async () => [] },
     pipeline: new Map(),
+    orderQueue: new Map(),
     setupDraft: new Map(),
     adminWarnAt: new Map(),
     fetchFn: async () => {

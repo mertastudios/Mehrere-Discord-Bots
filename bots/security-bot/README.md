@@ -50,9 +50,11 @@ mit `# Setup · Schritt n/7`, direkt darunter dem Fortschritt (`⬜️⬛️`), 
 im Menü; zusätzliche Speicher-/Weiter-Hinweise entfallen.
 
 Auch alle anderen Nachrichten des Sicherheits-Bots (Moderation im Chat, DMs,
-Fehler und Team-Panels) verwenden Components-V2-Container. Jede vom Bot gesendete
-Nachricht im Log-Kanal hat einen grauen „Neuer Auftrag“-Button, einschließlich
-Hinweisen, Fehlern, Limits und der Ankündigung eines neu angelegten Log-Kanals.
+Fehler und Team-Panels) verwenden Components-V2-Container. Die DM bei einem
+Regelverstoß ist rot, zeigt das Server-Icon, die Maßnahme und einen Link direkt
+zur öffentlichen Moderationsnachricht des Bots. Jede vom Bot gesendete Nachricht
+im Log-Kanal hat einen grauen „Neuer Auftrag“-Button, einschließlich Hinweisen,
+Fehlern, Limits und der Ankündigung eines neu angelegten Log-Kanals.
 
 ---
 
@@ -61,8 +63,10 @@ Hinweisen, Fehlern, Limits und der Ankündigung eines neu angelegten Log-Kanals.
 * **Ohne Administrator-Rechte tut der Bot nichts** – kein Setup, keine Moderation,
   kein Log. Er erklärt freundlich, warum (und meldet es höchstens alle 12 h).
 * **`/setup` nur für Owner und Admins.**
-* **Log-Kanal heilt sich selbst:** wird er gelöscht, legt der Bot ihn neu an und
-  sagt Bescheid. Er ist nie gleichzeitig ein überwachter Kanal.
+* **Log-Kanal heilt sich selbst:** nach abgeschlossenem Setup wird ein zuvor
+  eingestellter, inzwischen gelöschter Kanal neu angelegt und angekündigt. Vor
+  dem Setup oder ohne vorherige Kanal-Auswahl wird nichts automatisch erstellt.
+  Er ist nie gleichzeitig ein überwachter Kanal.
 * **Gelöschte Rollen/Kanäle** verschwinden aus dem Speicher – kein Müll.
 * **Server verlassen** = alle Daten dieses Servers werden gelöscht.
 * **Fehler und Groq-Limits** landen im Log – inklusive Angabe, wann sich das
@@ -109,6 +113,12 @@ Nachrichten-IDs** + **Anweisung**. Der Bot holt jeweils ±15 Nachrichten Kontext
 lässt die KI den Auftrag ausführen (sie verhält sich, als hätte sie den Verstoß
 selbst bemerkt) und schreibt ins Log, **wer** den Auftrag gegeben hat. Ergibt die
 Anweisung keine klare Maßnahme, steht im Log: *„Keine klare Anweisung verstanden“*.
+
+Bei einem Groq-Limit oder einem anderen Groq-Fehler geht der Auftrag nicht
+verloren: Eine deutlich gekennzeichnete Warteschlangen-Nachricht nennt den Grund
+und den nächsten automatischen Versuch. Der Bot wiederholt den vorbereiteten
+Auftrag selbstständig; über **„Aus Warteschlange entfernen“** kann das Team ihn
+vorher abbrechen.
 
 ---
 

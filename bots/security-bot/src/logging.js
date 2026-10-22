@@ -122,59 +122,56 @@ async function createLogChannel(ctx, guild, cfg) {
 }
 
 /**
- * Stellt sicher, dass ein nutzbarer Log-Kanal existiert (und legt ihn neu an,
- * wenn er gelöscht wurde). Aktualisiert die Konfiguration.
+ * Stellt einen bereits konfigurierten Log-Kanal sicher. Einen fehlenden Kanal
+ * legt der Bot nur nach abgeschlossenem Setup neu an. Der erstmalige Kanal wird
+ * weiterhin ausschließlich bewusst in Schritt 6 des Setups erstellt/ausgewählt.
  */
 async function ensureLogChannel(ctx, guild, { createIfMissing = true } = {}) {
   const store = ctx.store;
   let cfg = store.getGuild(guild.id);
-  const botId = guild.members?.me?.id;
 
-  if (cfg.logChannelId) {
-    let channel = guild.channels?.cache?.get(cfg.logChannelId);
-    if (!channel) {
-      channel = await guild.channels.fetch(cfg.logChannelId).catch(() => null);
+  // Ohne zuvor eingestellten Kanal gibt es nichts selbstheilend wiederherzustellen.
+  if (!cfg.logChannelId) return { ok: false, error: 'no_log_channel', cfg };
+
+  let channel = guild.channels?.cache?.get(cfg.logChannelId);
+  if (!channel) {
+    channel = await guild.channels.fetch(cfg.logChannelId).catch(() => null);
+  }
+  if (channel) {
+    // Log-Kanal darf nie gleichzeitig überwacht werden
+    if ((cfg.channels || []).includes(String(channel.id))) {
+      cfg = store.updateGuild(guild.id, { channels: cfg.channels.filter((id) => String(id) !== String(channel.id)) });
     }
-    if (channel) {
-      // Log-Kanal darf nie gleichzeitig überwacht werden
-      if ((cfg.channels || []).includes(String(channel.id))) {
-        cfg = store.updateGuild(guild.id, { channels: cfg.channels.filter((id) => String(id) !== String(channel.id)) });
-      }
-      return { ok: true, channel, recreated: false, cfg };
-    }
-    // Kanal ist weg → neu anlegen und das auch ankündigen
-    if (createIfMissing) {
-      const created = await createLogChannel(ctx, guild, cfg);
-      if (created.ok) {
-        cfg = store.updateGuild(guild.id, { logChannelId: created.channel.id, logAuto: true });
-        try {
-          await created.channel.send(
-            buildNoticeLog({
-              lang: cfg.lang || 'de',
-              lines: [t(cfg.lang || 'de', 'logRecreated', { channel: created.channel.name })],
-              accentColor: ACCENT.warn,
-            })
-          );
-        } catch {
-          /* Ankündigung ist optional */
-        }
-        return { ok: true, channel: created.channel, recreated: true, cfg };
-      }
-      ctx.logger?.warn?.('[security-bot] Log-Kanal konnte nicht neu angelegt werden:', created.error);
-      return { ok: false, error: created.error, recreated: false, cfg };
-    }
-    return { ok: false, error: 'log_channel_missing', cfg };
+    return { ok: true, channel, recreated: false, cfg };
   }
 
+  // Ein unvollständiges Setup darf niemals automatisch einen Kanal erzeugen.
+  if (!cfg.setup.done) {
+    return { ok: false, error: 'setup_incomplete', recreated: false, cfg };
+  }
+
+  // Der zuvor eingestellte Kanal ist weg → neu anlegen und ankündigen.
   if (createIfMissing) {
     const created = await createLogChannel(ctx, guild, cfg);
     if (created.ok) {
-      const next = store.updateGuild(guild.id, { logChannelId: created.channel.id, logAuto: true });
-      return { ok: true, channel: created.channel, recreated: true, cfg: next };
+      cfg = store.updateGuild(guild.id, { logChannelId: created.channel.id, logAuto: true });
+      try {
+        await created.channel.send(
+          buildNoticeLog({
+            lang: cfg.lang || 'de',
+            lines: [t(cfg.lang || 'de', 'logRecreated', { channel: created.channel.name })],
+            accentColor: ACCENT.warn,
+          })
+        );
+      } catch {
+        /* Ankündigung ist optional */
+      }
+      return { ok: true, channel: created.channel, recreated: true, cfg };
     }
-    return { ok: false, error: created.error };
+    ctx.logger?.warn?.('[security-bot] Log-Kanal konnte nicht neu angelegt werden:', created.error);
+    return { ok: false, error: created.error, recreated: false, cfg };
   }
-  return { ok: false, error: 'no_log_channel', cfg };
+  return { ok: false, error: 'log_channel_missing', cfg };
 }
 
 // ------------------------------ Bausteine ------------------------------
