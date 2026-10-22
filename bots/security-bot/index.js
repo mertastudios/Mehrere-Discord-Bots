@@ -12,9 +12,9 @@
  *  Harte Regeln:
  *   - Ohne Administrator-Rechte macht der Bot NICHTS (mit Begründung).
  *   - `/setup` nur für Owner/Admins.
- *   - Log-Kanal wird immer wieder hergestellt; gelöschte Rollen/Kanäle werden
- *     aus dem Speicher entfernt; verlässt der Bot den Server, wird alles
- *     gelöscht.
+ *   - Nach abgeschlossenem Setup wird ein zuvor konfigurierter Log-Kanal bei
+ *     Löschung wiederhergestellt; gelöschte Rollen/Kanäle werden aus dem
+ *     Speicher entfernt; verlässt der Bot den Server, wird alles gelöscht.
  * ============================================================================
  */
 
@@ -65,6 +65,7 @@ module.exports = {
       budget,
       rest: rest || new REST({ version: '10' }).setToken(token),
       pipeline: new Map(),
+      orderQueue: new Map(),
       setupDraft: new Map(),
       adminWarnAt: new Map(),
       fetchFn: globalThis.fetch,
@@ -129,7 +130,7 @@ module.exports = {
           void notifyMissingAdmin(ctx, guild);
           continue;
         }
-        if (cfg.setup.done) await ensureLogChannel(ctx, guild).catch(() => {});
+        if (cfg.setup.done && cfg.logChannelId) await ensureLogChannel(ctx, guild).catch(() => {});
       }
 
       repairTimer = setInterval(() => {
@@ -141,7 +142,7 @@ module.exports = {
               await notifyMissingAdmin(ctx, guild);
               continue;
             }
-            if (cfg.setup.done) await ensureLogChannel(ctx, guild).catch(() => {});
+            if (cfg.setup.done && cfg.logChannelId) await ensureLogChannel(ctx, guild).catch(() => {});
           }
         })();
       }, REPAIR_INTERVAL_MS);

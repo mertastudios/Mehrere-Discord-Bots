@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const setup = require('../bots/security-bot/src/setup');
 const { FLAG_V2 } = require('../bots/security-bot/src/ui');
 const { dmGuildOwner, notifyMissingAdmin } = require('../bots/security-bot/src/notices');
+const { ensureLogChannel } = require('../bots/security-bot/src/logging');
 const maintenance = require('../bots/security-bot/src/maintenance');
 const { handleInteraction } = require('../bots/security-bot/src/interactions');
 const { handleIncoming } = require('../bots/security-bot/src/pipeline');
@@ -473,7 +474,7 @@ test('Gelöschter Log-Kanal wird neu angelegt und angekündigt', async () => {
   const { guild, ctx } = baseSetup();
   const old = makeChannel({ id: 'oldlog', name: 'mod-log', guild });
   guild.channelCache.set(old.id, old);
-  ctx.store.updateGuild('g1', { logChannelId: 'oldlog', logAuto: true });
+  ctx.store.updateGuild('g1', { logChannelId: 'oldlog', logAuto: true, setup: { done: true } });
   guild.channelCache.delete('oldlog');
 
   const result = await maintenance.handleChannelDelete(ctx, old);
@@ -484,6 +485,29 @@ test('Gelöschter Log-Kanal wird neu angelegt und angekündigt', async () => {
   const newChannel = guild.channelCache.get(cfg.logChannelId);
   assert.ok(newChannel);
   assert.equal(newChannel.sent.some((p) => /neu angelegt|recreated|recréé|creado/i.test(textsOf(p))), true);
+});
+
+test('Ohne zuvor eingestellten Log-Kanal wird auch nach dem Setup keiner automatisch erstellt', async () => {
+  const { guild, ctx } = baseSetup();
+  ctx.store.updateGuild('g1', { logChannelId: null, setup: { done: true } });
+
+  const result = await ensureLogChannel(ctx, guild);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'no_log_channel');
+  assert.equal(guild.created.length, 0);
+});
+
+test('Während des Setups wird ein gelöschter Log-Kanal nicht automatisch neu angelegt', async () => {
+  const { guild, ctx } = baseSetup();
+  const old = makeChannel({ id: 'oldlog', name: 'mod-log', guild });
+  guild.channelCache.set(old.id, old);
+  ctx.store.updateGuild('g1', { logChannelId: 'oldlog', logAuto: true, setup: { done: false } });
+  guild.channelCache.delete('oldlog');
+
+  const result = await maintenance.handleChannelDelete(ctx, old);
+  assert.equal(result.recreated, false);
+  assert.equal(guild.created.length, 0);
+  assert.equal(ctx.store.getGuild('g1').logChannelId, 'oldlog');
 });
 
 test('Gelöschte Rollen und Kanäle hinterlassen keine Reste im Speicher', async () => {

@@ -17,7 +17,9 @@ async function handleChannelDelete(ctx, channel) {
   const cfg = ctx.store.getGuild(guild.id);
   let recreated = false;
 
-  if (cfg.logChannelId && String(cfg.logChannelId) === String(channel.id)) {
+  // Nur ein vollständig eingerichtetes System darf seinen früher konfigurierten
+  // Log-Kanal selbstheilend neu anlegen – niemals schon während des Setups.
+  if (cfg.setup.done && cfg.logChannelId && String(cfg.logChannelId) === String(channel.id)) {
     const result = await ensureLogChannel(ctx, guild).catch(() => ({ ok: false }));
     recreated = Boolean(result?.ok);
   }
@@ -46,6 +48,7 @@ async function handleGuildDelete(ctx, guild) {
   if (!guild) return { ok: false };
   ctx.store.deleteGuild(guild.id);
   ctx.pipeline?.delete?.(guild.id);
+  ctx.orderQueue?.delete?.(guild.id);
   ctx.setupDraft?.delete?.(guild.id);
   ctx.adminWarnAt?.delete?.(guild.id);
   await ctx.store.flush({ force: true });

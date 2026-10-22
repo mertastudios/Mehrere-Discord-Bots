@@ -38,7 +38,7 @@ function scenario() {
   const channel = makeChannel({ id: 'chat1' });
   const guild = makeGuild({ id: 'g1', channels: [log, channel] });
   const ctx = makeCtx({ guilds: [guild] });
-  ctx.store.updateGuild(guild.id, { lang: 'en', logChannelId: log.id });
+  ctx.store.updateGuild(guild.id, { lang: 'en', logChannelId: log.id, setup: { done: true } });
   return { ctx, guild, log, channel };
 }
 

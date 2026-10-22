@@ -23,6 +23,7 @@ const { bufferRisk, shouldAnalyse, isMonitored, isCollectable, toRecord, localSi
 const { buildSystemPrompt, buildUserPrompt, buildScreenPrompt, screenSchema, verdictSchema } = require('./prompts');
 const { callGroqWithFallback, modelFromEnv, nextBackoffMs } = require('./groq');
 const { applyModerations } = require('./moderator');
+const { processOrderQueue } = require('./orders');
 const { logError, logRateLimit, ensureLogChannel } = require('./logging');
 const { botHasAdmin } = require('./guard');
 const { t } = require('./languages');
@@ -362,12 +363,14 @@ function startPipeline(ctx) {
           ctx.logger?.warn?.(`[security-bot] Pipeline-Fehler (${guildId}):`, err.message);
         }
       }
-      // Log-Kanäle prüfen (und ggf. neu anlegen) – nur für eingerichtete Server
+      // Wartende Aufträge und Log-Kanäle prüfen – Log-Reparatur nur nach dem
+      // Setup und nur für einen zuvor ausdrücklich konfigurierten Kanal.
       for (const guild of ctx.client.guilds.cache.values()) {
         try {
-          const cfg = ctx.store.getGuild(guild.id);
-          if (!cfg.setup.done && !cfg.logChannelId) continue;
           if (!botHasAdmin(guild)) continue;
+          await processOrderQueue(ctx, guild);
+          const cfg = ctx.store.getGuild(guild.id);
+          if (!cfg.setup.done || !cfg.logChannelId) continue;
           await ensureLogChannel(ctx, guild);
         } catch {
           /* beim nächsten Tick erneut */
